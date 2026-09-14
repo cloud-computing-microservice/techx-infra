@@ -67,6 +67,19 @@ module "eks" {
   tags                = local.tags
 }
 
+module "order_persistence" {
+  source                    = "../../modules/order-persistence"
+  name                      = local.name
+  region                    = var.region
+  vpc_id                    = module.vpc.vpc_id
+  route_table_ids           = module.vpc.public_route_table_ids
+  oidc_provider_arn         = module.eks.oidc_provider_arn
+  oidc_provider_url         = module.eks.oidc_provider_url
+  service_account_namespace = local.name
+  service_account_name      = "order-api"
+  tags                      = local.tags
+}
+
 module "aws_load_balancer_controller" {
   source            = "../../modules/aws-load-balancer-controller"
   cluster_name      = module.eks.cluster_name

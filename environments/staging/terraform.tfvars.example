@@ -1,0 +1,18 @@
+public_access_cidrs = ["203.0.113.10/32"]
+availability_zones  = ["us-east-1a", "us-east-1b"]
+vpc_cidr            = "10.52.0.0/16"
+
+# Store the real address only in ignored terraform.tfvars.
+budget_alert_email = "owner@example.com"
+
+# Phase A: set true only after an ISSUED public ACM certificate is available.
+enable_domain_vpn_foundation = false
+domain_name                  = "shop.dinhminhkhoa.id.vn"
+public_certificate_arn       = ""
+
+# Phase B: enable only after the internal ALB ARN is known.
+enable_domain_vpn_edge                = false
+internal_alb_arn                      = ""
+client_vpn_cidr                       = "172.24.0.0/22"
+client_vpn_server_certificate_arn     = ""
+client_vpn_root_certificate_arn       = ""

@@ -10,13 +10,19 @@ $ErrorActionPreference = 'Stop'
 # design must reach EKS add-ons and ECR while avoiding NAT Gateway cost.
 $root = Split-Path -Parent $PSScriptRoot
 $targets = @(
-  $root,
+  (Join-Path $root 'environments/demo'),
+  (Join-Path $root 'environments/staging'),
   (Join-Path $root 'modules/client-vpn'),
   (Join-Path $root 'modules/cloudfront'),
   (Join-Path $root 'modules/private-dns'),
-  (Join-Path $root 'modules/argocd')
+  (Join-Path $root 'modules/order-persistence'),
+  (Join-Path $root 'modules/argocd'),
+  (Join-Path $root 'modules/aws-load-balancer-controller'),
+  (Join-Path $root 'modules/ecr'),
+  (Join-Path $root 'modules/eks'),
+  (Join-Path $root 'modules/vpc')
 )
 foreach ($target in $targets) {
-  trivy config --severity HIGH,CRITICAL --exit-code 1 --ignorefile (Join-Path $root '.trivyignore') --skip-dirs '.terraform,.terraform-helm,.plans' --skip-version-check $target
+  trivy config --severity HIGH,CRITICAL --exit-code 1 --ignorefile (Join-Path $root '.trivyignore') --skip-dirs '.terraform,.terraform-helm,.plans,.claude,.codex' --skip-version-check $target
   if ($LASTEXITCODE -ne 0) { throw "Trivy configuration scan failed for $target." }
 }

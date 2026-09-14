@@ -1,4 +1,5 @@
 param(
+  [ValidateSet('demo', 'staging')][string]$Environment = 'staging',
   [string]$Region = 'us-east-1',
   [string]$KubernetesVersion = '1.35',
   [ValidateCount(0, 4)][string[]]$PublicAccessCidrs = @(),
@@ -9,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 if (@($PublicAccessCidrs | Where-Object { $_ -notmatch '^([0-9]{1,3}\.){3}[0-9]{1,3}/(24|32)$' }).Count -gt 0) {
   throw 'PublicAccessCidrs must contain only IPv4 /24 or /32 CIDRs.'
 }
+$resourcePrefix = "techx-$Environment"
 $identity = aws sts get-caller-identity --output json | ConvertFrom-Json
 if (-not $identity.Account) { throw 'Unable to resolve AWS caller identity.' }
 $ip = (Invoke-RestMethod -Uri 'https://checkip.amazonaws.com').Trim()
@@ -39,23 +41,25 @@ $budgets = aws budgets describe-budgets --account-id $identity.Account --output 
 $conflicts = @()
 $internalAlbArn = ''
 $clusters = @(aws eks list-clusters --region $Region --query 'clusters' --output json | ConvertFrom-Json)
-if ($Stage -eq 'foundation' -and $clusters -contains 'techx-demo') { $conflicts += 'EKS cluster techx-demo' }
-if ($Stage -eq 'recovery' -and $clusters -notcontains 'techx-demo') { throw 'Recovery stage requires the partially created techx-demo foundation.' }
-if ($Stage -eq 'edge' -and $clusters -notcontains 'techx-demo') { throw 'Edge stage requires the techx-demo foundation.' }
-if ($Stage -eq 'hardening' -and $clusters -notcontains 'techx-demo') { throw 'Hardening stage requires the deployed techx-demo environment.' }
+if ($Stage -eq 'foundation' -and $clusters -contains $resourcePrefix) { $conflicts += "EKS cluster $resourcePrefix" }
+if ($Stage -eq 'recovery' -and $clusters -notcontains $resourcePrefix) { throw "Recovery stage requires the partially created $resourcePrefix foundation." }
+if ($Stage -eq 'edge' -and $clusters -notcontains $resourcePrefix) { throw "Edge stage requires the $resourcePrefix foundation." }
+if ($Stage -eq 'hardening' -and $clusters -notcontains $resourcePrefix) { throw "Hardening stage requires the deployed $resourcePrefix environment." }
 $repositories = @(aws ecr describe-repositories --region $Region --query 'repositories[].repositoryName' --output json | ConvertFrom-Json)
 foreach ($name in @('techx/frontend', 'techx/catalog', 'techx/order')) {
   if ($Stage -eq 'foundation' -and $repositories -contains $name) { $conflicts += "ECR repository $name" }
 }
 $roles = @(aws iam list-roles --query 'Roles[].RoleName' --output json | ConvertFrom-Json)
-foreach ($name in @('techx-demo-cluster', 'techx-demo-node', 'techx-demo-aws-load-balancer-controller')) {
+foreach ($name in @("$resourcePrefix-cluster", "$resourcePrefix-node", "$resourcePrefix-aws-load-balancer-controller")) {
   if ($Stage -eq 'foundation' -and $roles -contains $name) { $conflicts += "IAM role $name" }
 }
-$logGroups = @(aws logs describe-log-groups --region $Region --log-group-name-prefix '/aws/eks/techx-demo/cluster' --query 'logGroups[].logGroupName' --output json | ConvertFrom-Json)
-if ($Stage -eq 'foundation' -and $logGroups -contains '/aws/eks/techx-demo/cluster') { $conflicts += 'CloudWatch log group /aws/eks/techx-demo/cluster' }
-if ($Stage -eq 'foundation' -and @($budgets.Budgets.BudgetName) -contains 'techx-demo-hard-cap') { $conflicts += 'AWS Budget techx-demo-hard-cap' }
+$logGroups = @(aws logs describe-log-groups --region $Region --log-group-name-prefix "/aws/eks/$resourcePrefix/cluster" --query 'logGroups[].logGroupName' --output json | ConvertFrom-Json)
+if ($Stage -eq 'foundation' -and $logGroups -contains "/aws/eks/$resourcePrefix/cluster") { $conflicts += "CloudWatch log group /aws/eks/$resourcePrefix/cluster" }
+if ($Stage -eq 'foundation' -and @($budgets.Budgets.BudgetName) -contains "$resourcePrefix-hard-cap") { $conflicts += "AWS Budget $resourcePrefix-hard-cap" }
 if ($Stage -in @('edge', 'hardening')) {
-  $clientVpn = @(aws ec2 describe-client-vpn-endpoints --region $Region --query 'ClientVpnEndpoints[].ClientVpnEndpointId' --output json | ConvertFrom-Json)
+  $clientVpn = @(aws ec2 describe-client-vpn-endpoints --region $Region `
+      --filters Name=tag:Project,Values=techx "Name=tag:Environment,Values=$Environment" `
+      --query 'ClientVpnEndpoints[].ClientVpnEndpointId' --output json | ConvertFrom-Json)
   $privateZones = @(aws route53 list-hosted-zones --query 'HostedZones[?Config.PrivateZone==`true`].Name' --output json | ConvertFrom-Json)
   $distributions = aws cloudfront list-distributions --output json | ConvertFrom-Json
   $domainDistributions = @($distributions.DistributionList.Items | Where-Object { $_.Aliases.Items -contains 'shop.dinhminhkhoa.id.vn' })
@@ -69,8 +73,11 @@ if ($Stage -in @('edge', 'hardening')) {
     if (@($privateZones | Where-Object { $_ -eq 'shop.dinhminhkhoa.id.vn.' }).Count -ne 1) { throw 'Hardening stage requires the private hosted zone.' }
     if ($domainDistributions.Count -ne 1) { throw "Hardening stage requires one domain CloudFront distribution; found $($domainDistributions.Count)." }
   }
-  $internalAlbs = @(aws elbv2 describe-load-balancers --region $Region --query 'LoadBalancers[?Scheme==`internal`].LoadBalancerArn' --output json | ConvertFrom-Json)
-  if ($internalAlbs.Count -ne 1) { throw "Edge stage requires exactly one internal ALB; found $($internalAlbs.Count)." }
+  $taggedAlbs = aws resourcegroupstaggingapi get-resources --region $Region `
+    --tag-filters Key=Project,Values=techx "Key=Environment,Values=$Environment" `
+    --resource-type-filters elasticloadbalancing:loadbalancer --output json | ConvertFrom-Json
+  $internalAlbs = @($taggedAlbs.ResourceTagMappingList.ResourceARN)
+  if ($internalAlbs.Count -ne 1) { throw "Edge stage requires exactly one environment-scoped internal ALB; found $($internalAlbs.Count)." }
   $internalAlbArn = $internalAlbs[0]
 }
 if ($conflicts.Count -gt 0) { throw "Pre-existing resource name conflicts found: $($conflicts -join ', ')" }
@@ -89,7 +96,7 @@ $denied = @($simulation.EvaluationResults | Where-Object { $_.EvalDecision -ne '
 if ($denied.Count -gt 0) { throw "Permission simulation did not allow: $($denied.EvalActionName -join ', ')" }
 
 [pscustomobject]@{
-  accountId = $identity.Account; callerArn = $identity.Arn; region = $Region; stage = $Stage
+  accountId = $identity.Account; callerArn = $identity.Arn; region = $Region; environment = $Environment; stage = $Stage
   callerPublicIp = $ip; callerPublicCidrs = $effectivePublicAccessCidrs; kubernetesVersion = $selected.clusterVersion
   kubernetesStatus = $selected.status; standardSupportEnds = $selected.endOfStandardSupportDate
   availableZones = @($zones.AvailabilityZones.ZoneName); t3MediumZones = @($offerings.InstanceTypeOfferings.Location)

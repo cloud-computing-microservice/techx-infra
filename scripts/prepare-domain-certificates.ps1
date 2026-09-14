@@ -1,14 +1,16 @@
 param(
+  [ValidateSet('demo', 'staging')][string]$Environment = 'staging',
   [Parameter(Mandatory)][ValidateSet('RequestPublic', 'ImportVpn', 'Status')][string]$Action,
   [Parameter(Mandatory)][ValidatePattern('^[0-9]{12}$')][string]$ExpectedAccountId,
   [string]$Region = 'us-east-1',
   [string]$DomainName = 'shop.dinhminhkhoa.id.vn',
-  [string]$PkiDirectory = (Join-Path $env:LOCALAPPDATA 'TechX/client-vpn-pki')
+  [string]$PkiDirectory = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$statePath = Join-Path $root 'certificate-state.private.json'
+if (-not $PkiDirectory) { $PkiDirectory = Join-Path $env:LOCALAPPDATA "TechX/client-vpn-pki-$Environment" }
+$statePath = Join-Path $root "certificate-state-$Environment.private.json"
 
 function Invoke-AwsJson([string[]]$Arguments) {
   $raw = & aws @Arguments --output json
@@ -23,7 +25,9 @@ function Get-PublicCertificate {
   $list = Invoke-AwsJson @('acm', 'list-certificates', '--region', $Region)
   foreach ($certificate in @($list.CertificateSummaryList | Where-Object { $_.DomainName -eq $DomainName })) {
     $tags = Invoke-AwsJson @('acm', 'list-tags-for-certificate', '--region', $Region, '--certificate-arn', $certificate.CertificateArn)
-    if (@($tags.Tags | Where-Object { $_.Key -eq 'Project' -and $_.Value -eq 'techx' }).Count -eq 1) {
+    $projectTag = @($tags.Tags | Where-Object { $_.Key -eq 'Project' -and $_.Value -eq 'techx' }).Count -eq 1
+    $environmentTag = @($tags.Tags | Where-Object { $_.Key -eq 'Environment' -and $_.Value -eq $Environment }).Count -eq 1
+    if ($projectTag -and $environmentTag) {
       return $certificate
     }
   }
@@ -56,7 +60,7 @@ if ($Action -eq 'RequestPublic') {
       '--validation-method', 'DNS',
       '--key-algorithm', 'RSA_2048',
       '--idempotency-token', $idempotencyToken,
-      '--tags', 'Key=Project,Value=techx', 'Key=Environment,Value=demo'
+      '--tags', 'Key=Project,Value=techx', "Key=Environment,Value=$Environment"
     ) | Out-Null
     Start-Sleep -Seconds 5
   }
@@ -90,7 +94,7 @@ $server = Invoke-AwsJson @(
   '--certificate', "fileb://$($paths.serverCertificate)",
   '--private-key', "fileb://$($paths.serverPrivateKey)",
   '--certificate-chain', "fileb://$($paths.chain)",
-  '--tags', 'Key=Project,Value=techx', 'Key=Environment,Value=demo', 'Key=Role,Value=client-vpn-server'
+  '--tags', 'Key=Project,Value=techx', "Key=Environment,Value=$Environment", 'Key=Role,Value=client-vpn-server'
 )
 try {
   $reference = Invoke-AwsJson @(
@@ -98,7 +102,7 @@ try {
     '--certificate', "fileb://$($paths.operatorCertificate)",
     '--private-key', "fileb://$($paths.operatorPrivateKey)",
     '--certificate-chain', "fileb://$($paths.chain)",
-    '--tags', 'Key=Project,Value=techx', 'Key=Environment,Value=demo', 'Key=Role,Value=client-vpn-reference'
+    '--tags', 'Key=Project,Value=techx', "Key=Environment,Value=$Environment", 'Key=Role,Value=client-vpn-reference'
   )
 }
 catch {
@@ -107,6 +111,7 @@ catch {
 }
 $state = [ordered]@{
   createdAt = [datetimeoffset]::Now.ToString('o')
+  environment = $Environment
   accountId = $identity.Account
   region = $Region
   domainName = $DomainName

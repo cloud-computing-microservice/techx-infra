@@ -1,4 +1,5 @@
 param(
+  [ValidateSet('demo', 'staging')][string]$Environment = 'staging',
   [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{64}$')][string]$ApprovedChecksum,
   [Parameter(Mandatory)][datetimeoffset]$ApprovedDestroyDeadline,
   [ValidateSet('foundation', 'recovery', 'edge', 'hardening')][string]$Stage = 'foundation'
@@ -6,9 +7,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$demo = Join-Path $root 'environments/demo'
-$planPath = Join-Path $root ".plans/demo-$Stage.tfplan"
-$summaryPath = Join-Path $root "approval-summary-$Stage.private.txt"
+$environmentRoot = Join-Path $root "environments/$Environment"
+$planPath = Join-Path $root ".plans/$Environment-$Stage.tfplan"
+$summaryPath = Join-Path $root "approval-summary-$Environment-$Stage.private.txt"
 $helmHome = Join-Path $root '.terraform-helm'
 
 if (-not (Test-Path -LiteralPath $planPath) -or -not (Test-Path -LiteralPath $summaryPath)) {
@@ -20,6 +21,7 @@ $summaryChecksum = [regex]::Match($summary, 'SHA256:\s*([0-9a-f]{64})').Groups[1
 $summaryAccount = [regex]::Match($summary, 'Account ID:\s*(\d{12})').Groups[1].Value
 $summaryDeadlineText = [regex]::Match($summary, 'Destroy deadline:\s*(.+)').Groups[1].Value.Trim()
 $summaryDeadline = [datetimeoffset]::Parse($summaryDeadlineText)
+$summaryEnvironment = [regex]::Match($summary, 'Environment:\s*(\w+)').Groups[1].Value
 $summaryStage = [regex]::Match($summary, 'Stage:\s*(\w+)').Groups[1].Value
 $actualChecksum = (Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant()
 
@@ -28,6 +30,9 @@ if ($ApprovedChecksum -ne $summaryChecksum -or $ApprovedChecksum -ne $actualChec
 }
 if ($ApprovedDestroyDeadline -ne $summaryDeadline) {
   throw 'Approved destroy deadline does not match the reviewed summary.'
+}
+if ($summaryEnvironment -ne $Environment) {
+  throw 'Requested environment does not match the reviewed summary.'
 }
 if ($summaryStage -ne $Stage) {
   throw 'Requested stage does not match the reviewed summary.'
@@ -53,8 +58,8 @@ try {
   helm repo update eks argo | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Unable to refresh the isolated Helm repository cache.' }
 
-  $applyLog = Join-Path $root "apply-$Stage.private.log"
-  terraform "-chdir=$demo" apply -input=false -no-color $planPath 2>&1 | Tee-Object -LiteralPath $applyLog
+  $applyLog = Join-Path $root "apply-$Environment-$Stage.private.log"
+  terraform "-chdir=$environmentRoot" apply -input=false -no-color $planPath 2>&1 | Tee-Object -LiteralPath $applyLog
   if ($LASTEXITCODE -ne 0) { throw 'Reviewed Terraform apply failed.' }
 }
 finally {

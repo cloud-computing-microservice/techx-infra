@@ -1,10 +1,12 @@
 param(
-  [string]$OutputDirectory = (Join-Path $env:LOCALAPPDATA 'TechX/client-vpn-pki'),
+  [ValidateSet('demo', 'staging')][string]$Environment = 'staging',
+  [string]$OutputDirectory = '',
   [string]$OperatorName = 'dinh-minh-khoa'
 )
 
 $ErrorActionPreference = 'Stop'
 $root = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $env:LOCALAPPDATA "TechX/client-vpn-pki-$Environment" }
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 if ($output.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw 'PKI output must be outside the Git workspace.'
@@ -58,6 +60,7 @@ finally {
 }
 
 [ordered]@{
+  environment = $Environment
   directory = $output
   serverCertificate = (Join-Path $output 'server.crt')
   serverPrivateKey = (Join-Path $output 'server.key')

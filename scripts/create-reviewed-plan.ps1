@@ -1,4 +1,5 @@
 param(
+  [ValidateSet('demo', 'staging')][string]$Environment = 'staging',
   [Parameter(Mandatory)][string]$BudgetAlertEmail,
   [Parameter(Mandatory)][datetimeoffset]$DestroyDeadline,
   [ValidateRange(1, 24)][int]$MaximumHours = 12,
@@ -17,17 +18,17 @@ if ($DestroyDeadline -le $now -or $DestroyDeadline -gt $now.AddHours(24)) {
 }
 
 $root = Split-Path -Parent $PSScriptRoot
-$demo = Join-Path $root 'environments/demo'
+$environmentRoot = Join-Path $root "environments/$Environment"
 $planDirectory = Join-Path $root '.plans'
-$planPath = Join-Path $planDirectory "demo-$Stage.tfplan"
+$planPath = Join-Path $planDirectory "$Environment-$Stage.tfplan"
 $helmHome = Join-Path $root '.terraform-helm'
-$privateVars = if ($PrivateVarFile) { $PrivateVarFile } else { Join-Path $demo 'domain-vpn.private.tfvars' }
+$privateVars = if ($PrivateVarFile) { $PrivateVarFile } else { Join-Path $environmentRoot 'domain-vpn.private.tfvars' }
 if (-not (Test-Path -LiteralPath $privateVars)) {
   throw "Private variable file is required: $privateVars"
 }
 New-Item -ItemType Directory -Force -Path $planDirectory, (Join-Path $helmHome 'repository') | Out-Null
 
-$preflight = & (Join-Path $PSScriptRoot 'preflight.ps1') -Stage $Stage -PublicAccessCidrs $PublicAccessCidrs | ConvertFrom-Json
+$preflight = & (Join-Path $PSScriptRoot 'preflight.ps1') -Environment $Environment -Stage $Stage -PublicAccessCidrs $PublicAccessCidrs | ConvertFrom-Json
 $cost = & (Join-Path $PSScriptRoot 'cost-estimate.ps1') -Hours $MaximumHours -Profile domainVpn | ConvertFrom-Json
 if ($cost.upperBoundUsd -gt 60) { throw 'Cost gate failed.' }
 
@@ -42,7 +43,7 @@ try {
   helm repo add argo https://argoproj.github.io/argo-helm --force-update | Out-Null
   helm repo update eks argo | Out-Null
 
-  terraform "-chdir=$demo" init -backend=false | Out-Null
+  terraform "-chdir=$environmentRoot" init -backend=false | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'terraform init failed.' }
   $planArgs = @(
     '-input=false', '-no-color', "-out=$planPath",
@@ -54,12 +55,12 @@ try {
   )
   if ($Stage -in @('edge', 'hardening')) { $planArgs += "-var=internal_alb_arn=$($preflight.internalAlbArn)" }
   if ($Stage -in @('foundation', 'edge')) { $planArgs += '-refresh=false' }
-  terraform "-chdir=$demo" plan @planArgs | Out-Null
+  terraform "-chdir=$environmentRoot" plan @planArgs | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'terraform plan failed.' }
 
-  $review = terraform "-chdir=$demo" show -json $planPath | python (Join-Path $PSScriptRoot 'review-plan.py') $Stage | ConvertFrom-Json
+  $review = terraform "-chdir=$environmentRoot" show -json $planPath | python (Join-Path $PSScriptRoot 'review-plan.py') $Stage | ConvertFrom-Json
   if ($LASTEXITCODE -ne 0) { throw 'Saved-plan review failed.' }
-  $planned = terraform "-chdir=$demo" show -json $planPath | ConvertFrom-Json
+  $planned = terraform "-chdir=$environmentRoot" show -json $planPath | ConvertFrom-Json
   $plannedCidrs = @($planned.variables.public_access_cidrs.value)
   $expectedCidrs = @($preflight.callerPublicCidrs)
   if ($plannedCidrs.Count -ne $expectedCidrs.Count -or (Compare-Object $plannedCidrs $expectedCidrs)) {
@@ -69,12 +70,13 @@ try {
 
   $summary = @"
 STATUS: WAITING_FOR_USER_APPROVAL
+Environment: $Environment
 Stage: $Stage
 Account ID: $($preflight.accountId)
 Caller: $($preflight.callerArn)
 Region: $($preflight.region)
 EKS API CIDRs: $($expectedCidrs -join ', ')
-Saved plan: .plans/demo-$Stage.tfplan
+Saved plan: .plans/$Environment-$Stage.tfplan
 SHA256: $hash
 Resources: $($review.actions.create ?? 0) add, $($review.actions.update ?? 0) change, 0 destroy
 Estimated upper bound: $($cost.upperBoundUsd) USD for <= $MaximumHours hours
@@ -85,8 +87,8 @@ Destroy deadline: $($DestroyDeadline.ToString('yyyy-MM-dd HH:mm:ss zzz'))
 Required confirmation (do not run yet):
 Tôi xác nhận apply AWS plan này, ngân sách tối đa 80 USD và destroy trước $($DestroyDeadline.ToString('yyyy-MM-dd HH:mm:ss zzz')).
 "@
-  $summary | Set-Content -LiteralPath (Join-Path $root "approval-summary-$Stage.private.txt") -Encoding utf8
-  $preflight | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $root 'preflight.private.json') -Encoding utf8
+  $summary | Set-Content -LiteralPath (Join-Path $root "approval-summary-$Environment-$Stage.private.txt") -Encoding utf8
+  $preflight | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $root "preflight-$Environment.private.json") -Encoding utf8
   Write-Output $summary
 }
 finally {

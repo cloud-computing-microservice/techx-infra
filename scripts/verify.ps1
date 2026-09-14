@@ -15,13 +15,16 @@ foreach ($path in @(
   }
 }
 
-$demo = Join-Path (Split-Path -Parent $PSScriptRoot) 'environments/demo'
-terraform "-chdir=$demo" fmt -check -recursive
+$root = Split-Path -Parent $PSScriptRoot
+terraform "-chdir=$root" fmt -check -recursive
 if ($LASTEXITCODE -ne 0) { throw 'terraform fmt -check failed.' }
-terraform "-chdir=$demo" init -backend=false
-if ($LASTEXITCODE -ne 0) { throw 'terraform init failed.' }
-terraform "-chdir=$demo" validate
-if ($LASTEXITCODE -ne 0) { throw 'terraform validate failed.' }
+foreach ($environment in @('demo', 'staging')) {
+  $environmentRoot = Join-Path $root "environments/$environment"
+  terraform "-chdir=$environmentRoot" init -backend=false
+  if ($LASTEXITCODE -ne 0) { throw "terraform init failed for $environment." }
+  terraform "-chdir=$environmentRoot" validate
+  if ($LASTEXITCODE -ne 0) { throw "terraform validate failed for $environment." }
+}
 python (Join-Path $PSScriptRoot 'static-test.py')
 if ($LASTEXITCODE -ne 0) { throw 'Terraform static assertions failed.' }
 & (Join-Path $PSScriptRoot 'cost-estimate.ps1') -Hours 12 | Out-Null
@@ -40,6 +43,23 @@ foreach ($script in @(
     (Join-Path $PSScriptRoot $script), [ref]$tokens, [ref]$parseErrors
   ) | Out-Null
   if ($parseErrors) { throw "$script has syntax errors: $($parseErrors.Message -join '; ')" }
+}
+
+$readmePaths = @(
+  (Join-Path (Split-Path -Parent $root) 'techx-platform/README.md'),
+  (Join-Path (Split-Path -Parent $root) 'techx-chart/README.md'),
+  (Join-Path $root 'README.md')
+)
+$contractTables = foreach ($readmePath in $readmePaths) {
+  if (-not (Test-Path -LiteralPath $readmePath)) { throw "Shared contract README is missing: $readmePath" }
+  $match = [regex]::Match((Get-Content -LiteralPath $readmePath -Raw), '(?ms)^\| Contract item.*?(?=\r?\n\r?\n)')
+  if (-not $match.Success) { throw "Shared deployment contract table is missing: $readmePath" }
+  (($match.Value -split '\r?\n') | ForEach-Object {
+      ($_ -replace '\s*\|\s*$', '|') -replace '\|\s+', '| '
+    }) -join "`n"
+}
+if (($contractTables | Sort-Object -Unique).Count -ne 1) {
+  throw 'Shared deployment contract tables differ across techx-platform, techx-chart, and techx-infra.'
 }
 
 $forbidden = git ls-files | Select-String -Pattern '(^|/)(\.env$|\.terraform/)|\.(tfstate|tfplan|ovpn|key|crt|pem|p12|pfx)$|terraform\.tfvars$|\.private\.tfvars$'

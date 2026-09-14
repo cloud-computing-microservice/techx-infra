@@ -1,15 +1,23 @@
 param(
+  [ValidateSet('demo', 'staging')][string]$Environment = 'staging',
   [string]$Region = 'us-east-1',
-  [string]$ClusterName = 'techx-demo',
-  [string]$NodeGroupName = 'demo',
+  [string]$ClusterName = '',
+  [string]$NodeGroupName = '',
   [ValidateRange(120, 1800)][int]$TimeoutSeconds = 900
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$statePath = Join-Path $root 'environment-state.private.json'
+if (-not $ClusterName) { $ClusterName = "techx-$Environment" }
+if (-not $NodeGroupName) { $NodeGroupName = $Environment }
+$namespace = "techx-$Environment"
+$secretName = "techx-$Environment-secrets"
+$statePath = Join-Path $root "environment-state-$Environment.private.json"
 if (-not (Test-Path -LiteralPath $statePath)) { throw 'The private environment state file is missing.' }
 $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+if ($state.environment -ne $Environment -or $state.clusterName -ne $ClusterName -or $state.nodeGroupName -ne $NodeGroupName) {
+  throw 'The private environment state does not match the selected environment.'
+}
 if ($state.state -ne 'IDLE') { throw 'The environment is not recorded as IDLE.' }
 if ([datetimeoffset]::Parse($state.retentionDeadline) -le [datetimeoffset]::Now) { throw 'The retention deadline has expired; do not resume before reviewing cost and teardown.' }
 
@@ -22,9 +30,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Unable to configure kubectl.' }
 kubectl wait --for=condition=Ready nodes --all --timeout="${TimeoutSeconds}s"
 if ($LASTEXITCODE -ne 0) { throw 'The worker node did not become Ready.' }
 
-$secret = kubectl -n techx-demo get secret techx-demo-secrets --ignore-not-found -o name
-if ($LASTEXITCODE -ne 0 -or -not $secret) { throw 'Required Secret techx-demo-secrets is missing; restore it before applying the Argo CD Application.' }
-$applicationPath = Join-Path (Split-Path -Parent $root) 'techx-chart/gitops/clusters/demo/application.yaml'
+$secret = kubectl -n $namespace get secret $secretName --ignore-not-found -o name
+if ($LASTEXITCODE -ne 0 -or -not $secret) { throw "Required Secret $secretName is missing; restore it before applying the Argo CD Application." }
+$applicationPath = Join-Path (Split-Path -Parent $root) "techx-chart/gitops/clusters/$Environment/application.yaml"
 kubectl apply -f $applicationPath | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Unable to apply the Argo CD Application.' }
 

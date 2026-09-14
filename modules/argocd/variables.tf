@@ -1,5 +1,13 @@
 variable "chart_version" { type = string }
 
+variable "environment" {
+  type = string
+  validation {
+    condition     = contains(["demo", "staging"], var.environment)
+    error_message = "environment must be demo or staging."
+  }
+}
+
 variable "private_ingress_enabled" {
   type    = bool
   default = false

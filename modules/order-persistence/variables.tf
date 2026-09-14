@@ -1,0 +1,9 @@
+variable "name" { type = string }
+variable "region" { type = string }
+variable "vpc_id" { type = string }
+variable "route_table_ids" { type = list(string) }
+variable "oidc_provider_arn" { type = string }
+variable "oidc_provider_url" { type = string }
+variable "service_account_namespace" { type = string }
+variable "service_account_name" { type = string }
+variable "tags" { type = map(string) }

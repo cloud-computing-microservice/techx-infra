@@ -127,7 +127,7 @@ resource "aws_eks_addon" "bootstrap" {
 
 resource "aws_eks_node_group" "this" {
   cluster_name    = aws_eks_cluster.this.name
-  node_group_name = "demo"
+  node_group_name = var.node_group_name
   node_role_arn   = aws_iam_role.node.arn
   subnet_ids      = var.subnet_ids
   ami_type        = "AL2023_x86_64_STANDARD"

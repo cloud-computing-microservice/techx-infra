@@ -50,7 +50,7 @@ resource "helm_release" "this" {
           "alb.ingress.kubernetes.io/healthcheck-path"                    = "${var.server_rootpath}/healthz"
           "alb.ingress.kubernetes.io/success-codes"                       = "200"
           "alb.ingress.kubernetes.io/load-balancer-attributes"            = "deletion_protection.enabled=false"
-          "alb.ingress.kubernetes.io/tags"                                = "Project=techx,Environment=demo,ManagedBy=kubernetes"
+          "alb.ingress.kubernetes.io/tags"                                = "Project=techx,Environment=${var.environment},ManagedBy=kubernetes"
         } : {}
       }
     }

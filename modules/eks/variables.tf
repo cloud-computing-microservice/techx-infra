@@ -1,4 +1,5 @@
 variable "cluster_name" { type = string }
+variable "node_group_name" { type = string }
 variable "kubernetes_version" { type = string }
 variable "subnet_ids" { type = list(string) }
 variable "public_access_cidrs" { type = list(string) }

@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $hourly = [ordered]@{ eksControlPlane = 0.10; t3Medium = 0.0416; publicIpv4Node = 0.005; alb = 0.0225; albLcu = 0.008 }
-$fixed = [ordered]@{ ebs20GiBProrated = 20 * 0.08 * ($Hours / 730); ecrAndScanning = 0.25; cloudWatchLogs = 0.50; dataTransfer = 1.00 }
+$fixed = [ordered]@{ ebs20GiBProrated = 20 * 0.08 * ($Hours / 730); ecrAndScanning = 0.25; cloudWatchLogs = 0.50; dynamodbOnDemandRequestsAndStorage = 1.00; dynamodbGatewayEndpointHourly = 0.00; dataTransfer = 1.00 }
 if ($Profile -eq 'domainVpn') {
   $hourly.clientVpnAssociation = 0.10
   $hourly.oneClientVpnConnection = 0.05

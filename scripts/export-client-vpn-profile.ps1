@@ -1,13 +1,16 @@
 param(
+  [ValidateSet('demo', 'staging')][string]$Environment = 'staging',
   [Parameter(Mandatory)][ValidatePattern('^cvpn-endpoint-[0-9a-f]+$')][string]$ClientVpnEndpointId,
   [Parameter(Mandatory)][ValidatePattern('^[0-9]{12}$')][string]$ExpectedAccountId,
   [string]$Region = 'us-east-1',
-  [string]$PkiDirectory = (Join-Path $env:LOCALAPPDATA 'TechX/client-vpn-pki'),
-  [string]$OutputPath = (Join-Path $env:LOCALAPPDATA 'TechX/client-vpn/techx-demo.private.ovpn')
+  [string]$PkiDirectory = '',
+  [string]$OutputPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+if (-not $PkiDirectory) { $PkiDirectory = Join-Path $env:LOCALAPPDATA "TechX/client-vpn-pki-$Environment" }
+if (-not $OutputPath) { $OutputPath = Join-Path $env:LOCALAPPDATA "TechX/client-vpn/techx-$Environment.private.ovpn" }
 $output = [IO.Path]::GetFullPath($OutputPath)
 if ($output.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
   throw 'The completed VPN profile must be outside the Git workspace.'
@@ -54,6 +57,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Unable to restrict VPN profile directory ACL.'
 $completed | Set-Content -LiteralPath $output -Encoding ascii -NoNewline
 
 [ordered]@{
+  environment = $Environment
   endpointId = $ClientVpnEndpointId
   profilePath = $output
   warning = 'This file contains a client private key. Do not copy it into Git, chat, logs, screenshots, or report evidence.'

@@ -2,7 +2,7 @@ param(
   [ValidateSet('demo', 'staging')][string]$Environment = 'staging',
   [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{64}$')][string]$ApprovedChecksum,
   [Parameter(Mandatory)][datetimeoffset]$ApprovedDestroyDeadline,
-  [ValidateSet('foundation', 'recovery', 'edge', 'hardening')][string]$Stage = 'foundation'
+  [ValidateSet('foundation', 'recovery', 'edge', 'hardening', 'maintenance')][string]$Stage = 'foundation'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,7 +59,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Unable to refresh the isolated Helm repository cache.' }
 
   $applyLog = Join-Path $root "apply-$Environment-$Stage.private.log"
-  terraform "-chdir=$environmentRoot" apply -input=false -no-color $planPath 2>&1 | Tee-Object -LiteralPath $applyLog
+  terraform "-chdir=$environmentRoot" apply -input=false -lock-timeout=60s -no-color $planPath 2>&1 | Tee-Object -LiteralPath $applyLog
   if ($LASTEXITCODE -ne 0) { throw 'Reviewed Terraform apply failed.' }
 }
 finally {

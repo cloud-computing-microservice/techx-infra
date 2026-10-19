@@ -3,7 +3,7 @@ param(
   [string]$Region = 'us-east-1',
   [string]$KubernetesVersion = '1.35',
   [ValidateCount(0, 4)][string[]]$PublicAccessCidrs = @(),
-  [ValidateSet('foundation', 'recovery', 'edge', 'hardening')][string]$Stage = 'foundation'
+  [ValidateSet('foundation', 'recovery', 'edge', 'hardening', 'maintenance')][string]$Stage = 'foundation'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,6 +45,12 @@ if ($Stage -eq 'foundation' -and $clusters -contains $resourcePrefix) { $conflic
 if ($Stage -eq 'recovery' -and $clusters -notcontains $resourcePrefix) { throw "Recovery stage requires the partially created $resourcePrefix foundation." }
 if ($Stage -eq 'edge' -and $clusters -notcontains $resourcePrefix) { throw "Edge stage requires the $resourcePrefix foundation." }
 if ($Stage -eq 'hardening' -and $clusters -notcontains $resourcePrefix) { throw "Hardening stage requires the deployed $resourcePrefix environment." }
+if ($Stage -eq 'maintenance' -and $clusters -notcontains $resourcePrefix) { throw "Maintenance requires the deployed $resourcePrefix environment." }
+if ($Stage -eq 'maintenance' -and $PublicAccessCidrs.Count -eq 0) {
+  $clusterConfig = aws eks describe-cluster --region $Region --name $resourcePrefix --output json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect existing EKS API access restrictions.' }
+  $effectivePublicAccessCidrs = @($clusterConfig.cluster.resourcesVpcConfig.publicAccessCidrs)
+}
 $repositories = @(aws ecr describe-repositories --region $Region --query 'repositories[].repositoryName' --output json | ConvertFrom-Json)
 foreach ($name in @('techx/frontend', 'techx/catalog', 'techx/order')) {
   if ($Stage -eq 'foundation' -and $repositories -contains $name) { $conflicts += "ECR repository $name" }
@@ -56,7 +62,7 @@ foreach ($name in @("$resourcePrefix-cluster", "$resourcePrefix-node", "$resourc
 $logGroups = @(aws logs describe-log-groups --region $Region --log-group-name-prefix "/aws/eks/$resourcePrefix/cluster" --query 'logGroups[].logGroupName' --output json | ConvertFrom-Json)
 if ($Stage -eq 'foundation' -and $logGroups -contains "/aws/eks/$resourcePrefix/cluster") { $conflicts += "CloudWatch log group /aws/eks/$resourcePrefix/cluster" }
 if ($Stage -eq 'foundation' -and @($budgets.Budgets.BudgetName) -contains "$resourcePrefix-hard-cap") { $conflicts += "AWS Budget $resourcePrefix-hard-cap" }
-if ($Stage -in @('edge', 'hardening')) {
+if ($Stage -in @('edge', 'hardening', 'maintenance')) {
   $clientVpn = @(aws ec2 describe-client-vpn-endpoints --region $Region `
       --filters Name=tag:Project,Values=techx "Name=tag:Environment,Values=$Environment" `
       --query 'ClientVpnEndpoints[].ClientVpnEndpointId' --output json | ConvertFrom-Json)
@@ -83,11 +89,13 @@ if ($Stage -in @('edge', 'hardening')) {
 if ($conflicts.Count -gt 0) { throw "Pre-existing resource name conflicts found: $($conflicts -join ', ')" }
 
 $requiredActions = if ($Stage -eq 'foundation') {
-  @('eks:CreateCluster', 'eks:DeleteCluster', 'ec2:CreateVpc', 'ec2:RunInstances', 'iam:CreateRole', 'iam:CreatePolicy', 'ecr:CreateRepository', 'budgets:ModifyBudget', 'elasticloadbalancing:CreateLoadBalancer')
+  @('eks:CreateCluster', 'eks:DeleteCluster', 'ec2:CreateVpc', 'ec2:RunInstances', 'ec2:CreateVpcEndpoint', 'ec2:DeleteVpcEndpoints', 'iam:CreateRole', 'iam:CreatePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'ecr:CreateRepository', 'dynamodb:CreateTable', 'dynamodb:DeleteTable', 'budgets:ModifyBudget', 'elasticloadbalancing:CreateLoadBalancer')
 } elseif ($Stage -eq 'recovery') {
   @('eks:UpdateClusterConfig', 'elasticloadbalancing:CreateLoadBalancer')
 } elseif ($Stage -eq 'edge') {
   @('cloudfront:CreateDistribution', 'cloudfront:CreateVpcOrigin', 'ec2:CreateClientVpnEndpoint', 'ec2:AssociateClientVpnTargetNetwork', 'route53:CreateHostedZone', 'route53:ChangeResourceRecordSets')
+} elseif ($Stage -eq 'maintenance') {
+  @('cloudfront:UpdateDistribution', 'eks:UpdateClusterConfig', 'iam:PutRolePolicy', 'ec2:ModifyVpcEndpoint')
 } else {
   @('cloudfront:UpdateDistribution', 'cloudfront:UpdateFunction', 'cloudfront:PublishFunction', 'eks:UpdateClusterConfig', 'iam:UpdateOpenIDConnectProviderThumbprint')
 }

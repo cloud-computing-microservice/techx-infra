@@ -1,0 +1,51 @@
+"""Exercise plan review against unsafe real-world action combinations offline."""
+import json
+import pathlib
+import subprocess
+import sys
+import unittest
+
+REVIEWER = pathlib.Path(__file__).with_name("review-plan.py")
+
+
+def change(address, actions, resource_type="aws_iam_role_policy"):
+    return {"address": address, "type": resource_type, "mode": "managed", "change": {"actions": actions}}
+
+
+class MaintenanceReviewTests(unittest.TestCase):
+    def review(self, changes):
+        return subprocess.run(
+            [sys.executable, str(REVIEWER), "maintenance"],
+            input=json.dumps({"resource_changes": changes}),
+            text=True, capture_output=True,
+        )
+
+    def test_noop_is_repeatable(self):
+        result = self.review([])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["resourceCount"], 0)
+
+    def test_permits_only_expected_in_place_updates(self):
+        changes = [
+            change("module.order_persistence.aws_iam_role_policy.order_api", ["update"]),
+            change("module.order_persistence.aws_vpc_endpoint.dynamodb", ["update"], "aws_vpc_endpoint"),
+            change("module.cloudfront.aws_cloudfront_distribution.this[0]", ["update"], "aws_cloudfront_distribution"),
+        ]
+        result = self.review(changes)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejects_creation_deletion_replacement_and_scope_expansion(self):
+        for actions in (["create"], ["delete"], ["delete", "create"], ["create", "delete"]):
+            with self.subTest(actions=actions):
+                self.assertNotEqual(self.review([change("module.order_persistence.aws_iam_role_policy.order_api", actions)]).returncode, 0)
+        for address, resource_type in (
+            ("module.eks.aws_eks_node_group.this", "aws_eks_node_group"),
+            ("aws_iam_role_policy.unrelated", "aws_iam_role_policy"),
+            ("aws_nat_gateway.new", "aws_nat_gateway"),
+        ):
+            with self.subTest(address=address):
+                self.assertNotEqual(self.review([change(address, ["update"], resource_type)]).returncode, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

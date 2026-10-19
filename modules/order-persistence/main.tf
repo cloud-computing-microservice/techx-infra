@@ -30,7 +30,6 @@ locals {
   data_actions = [
     "dynamodb:GetItem",
     "dynamodb:PutItem",
-    "dynamodb:TransactWriteItems",
   ]
 }
 

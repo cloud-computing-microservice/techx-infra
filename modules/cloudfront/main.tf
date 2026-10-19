@@ -21,6 +21,13 @@ data "aws_cloudfront_cache_policy" "caching_disabled" {
   name  = "Managed-CachingDisabled"
 }
 
+# Next.js fingerprints these filenames. HTML, API responses and mutable public
+# images continue through the uncached default behavior.
+data "aws_cloudfront_cache_policy" "static_assets" {
+  count = var.enabled ? 1 : 0
+  name  = "Managed-CachingOptimized"
+}
+
 data "aws_cloudfront_origin_request_policy" "all_viewer_and_cloudfront_headers" {
   count = var.enabled ? 1 : 0
   name  = "Managed-AllViewerAndCloudFrontHeaders-2022-06"
@@ -97,6 +104,17 @@ resource "aws_cloudfront_distribution" "this" {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.block_argocd[0].arn
     }
+  }
+
+  ordered_cache_behavior {
+    path_pattern               = "/_next/static/*"
+    target_origin_id           = local.origin_id
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    cached_methods             = ["GET", "HEAD"]
+    compress                   = true
+    cache_policy_id            = data.aws_cloudfront_cache_policy.static_assets[0].id
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security_headers[0].id
   }
 
   restrictions {

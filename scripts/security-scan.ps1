@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 # AWS-0164: public subnets/public node IPv4 are intentional because this no-NAT
 # design must reach EKS add-ons and ECR while avoiding NAT Gateway cost.
 $root = Split-Path -Parent $PSScriptRoot
+$scanner = & (Join-Path $PSScriptRoot 'resolve-trivy.ps1')
 $targets = @(
   (Join-Path $root 'environments/demo'),
   (Join-Path $root 'environments/staging'),
@@ -23,6 +24,9 @@ $targets = @(
   (Join-Path $root 'modules/vpc')
 )
 foreach ($target in $targets) {
-  trivy config --severity HIGH,CRITICAL --exit-code 1 --ignorefile (Join-Path $root '.trivyignore') --skip-dirs '.terraform,.terraform-helm,.plans,.claude,.codex' --skip-version-check $target
-  if ($LASTEXITCODE -ne 0) { throw "Trivy configuration scan failed for $target." }
+  $scanOutput = & $scanner config --severity HIGH,CRITICAL --exit-code 1 --ignorefile (Join-Path $root '.trivyignore') --skip-dirs '.terraform,.terraform-helm,.plans,.claude,.codex' --skip-version-check $target 2>&1
+  $scanExit = $LASTEXITCODE
+  $scanOutput | Out-Host
+  if (($scanOutput -join "`n") -match 'Module will be skipped|older than minimum trivy version') { throw 'Security scan skipped policy coverage; update the pinned scanner.' }
+  if ($scanExit -ne 0) { throw "Trivy configuration scan failed for $target." }
 }

@@ -27,6 +27,8 @@ foreach ($environment in @('demo', 'staging')) {
 }
 python (Join-Path $PSScriptRoot 'static-test.py')
 if ($LASTEXITCODE -ne 0) { throw 'Terraform static assertions failed.' }
+python (Join-Path $PSScriptRoot 'test-review-plan.py')
+if ($LASTEXITCODE -ne 0) { throw 'Saved-plan review regression tests failed.' }
 & (Join-Path $PSScriptRoot 'cost-estimate.ps1') -Hours 12 | Out-Null
 & (Join-Path $PSScriptRoot 'security-scan.ps1')
 
@@ -35,7 +37,7 @@ foreach ($script in @(
     'domain-vpn-inventory.ps1', 'destroy-domain-vpn-environment.ps1',
     'new-client-vpn-pki.ps1', 'prepare-domain-certificates.ps1',
     'export-client-vpn-profile.ps1', 'suspend-environment.ps1',
-    'resume-environment.ps1'
+    'resume-environment.ps1', 'deploy-reviewed-environment.ps1'
   )) {
   $tokens = $null
   $parseErrors = $null

@@ -1,8 +1,28 @@
 # TechX Infrastructure
 
 Minimal Terraform foundation for the TechX internship staging environment.
-Configuration and offline/read-only preflight are implemented; no AWS mutation
-is allowed until the checksum-bound approval checkpoint.
+Saved-plan review binds execution to the account, checksum, cost gate and destroy
+deadline. An explicit deployment command runs these checks without a repeated
+confirmation sentence.
+
+## One-command maintenance
+
+For an existing staging environment, use the normal AWS credential chain and
+the existing ignored private variable file:
+
+```powershell
+./scripts/deploy-reviewed-environment.ps1 `
+  -ExpectedAccountId '058114477594' -Stage maintenance `
+  -BudgetAlertEmail 'owner@example.com' `
+  -DestroyDeadline '<YYYY-MM-DDTHH:mm:ss+07:00>'
+```
+
+This creates and reviews a saved plan, then applies its exact checksum. The
+maintenance stage permits only in-place updates to the CloudFront distribution,
+Order table IAM policy and DynamoDB endpoint policy; no-op is supported. Creation,
+replacement, deletion, worker scaling and unrelated resources are rejected.
+The default maintenance flow preserves existing EKS API CIDRs. Cost estimation
+covers at least the remaining time until the destroy deadline.
 
 ## Offline and read-only workflow
 
@@ -35,8 +55,8 @@ Copy-Item ./environments/staging/terraform.tfvars.example ./environments/staging
 
 The script isolates the Helm repository cache, refreshes the caller `/32`,
 creates `.plans/staging-foundation.tfplan`, verifies every managed resource is in scope,
-checks `add/change/destroy`, writes a SHA-256 checksum, and ends at
-`WAITING_FOR_USER_APPROVAL`. The private plan and summary are ignored by Git.
+checks `add/change/destroy`, writes a SHA-256 checksum, and records a reviewed
+summary. The private plan and summary are ignored by Git.
 After Plan A is applied and the shared internal ALB ARN is copied into the
 private variable file, create Plan B with `-Stage edge`. Plan B is independently
 reviewed and creates only CloudFront, private Route 53, and Client VPN resources.
@@ -48,8 +68,7 @@ rotates across known egress ranges, create a reviewed `recovery` stage with
 ranges until Client VPN acceptance; a later hardening plan removes them.
 
 Do not run `terraform apply` directly from configuration. Phase 7 may apply
-only the exact saved plan after the user repeats the confirmation sentence in
-the private approval summary. Apply through the checksum/deadline guard so the
+only the exact saved plan. Apply through the checksum/deadline guard so the
 same isolated Helm repository cache is used during planning and execution:
 
 ```powershell

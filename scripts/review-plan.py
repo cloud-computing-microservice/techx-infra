@@ -5,8 +5,8 @@ import json
 import sys
 
 stage = sys.argv[1] if len(sys.argv) > 1 else "foundation"
-if stage not in {"foundation", "recovery", "edge", "hardening"}:
-    raise AssertionError("stage must be foundation, recovery, edge, or hardening")
+if stage not in {"foundation", "recovery", "edge", "hardening", "maintenance"}:
+    raise AssertionError("unknown plan stage")
 
 plan = json.load(sys.stdin)
 changes = plan.get("resource_changes", [])
@@ -16,7 +16,8 @@ allowed = {
     "aws_iam_openid_connect_provider", "aws_iam_policy", "aws_iam_role",
     "aws_iam_role_policy_attachment", "aws_internet_gateway", "aws_launch_template",
     "aws_route", "aws_route_table", "aws_route_table_association", "aws_subnet",
-    "aws_vpc", "helm_release", "terraform_data", "aws_cloudfront_distribution",
+    "aws_vpc", "aws_dynamodb_table", "aws_iam_role_policy", "aws_vpc_endpoint",
+    "helm_release", "terraform_data", "aws_cloudfront_distribution",
     "aws_cloudfront_function", "aws_cloudfront_vpc_origin", "aws_cloudwatch_log_stream",
     "aws_ec2_client_vpn_authorization_rule", "aws_ec2_client_vpn_endpoint",
     "aws_ec2_client_vpn_network_association", "aws_route53_record", "aws_route53_zone",
@@ -42,7 +43,7 @@ for change in changes:
     if change["type"] not in allowed:
         raise AssertionError(f"out-of-scope resource type: {change['type']}")
     allowed_actions = [["create"]]
-    if stage in {"recovery", "hardening"}:
+    if stage in {"recovery", "hardening", "maintenance"}:
         allowed_actions.append(["update"])
     if actions not in allowed_actions:
         raise AssertionError(f"unexpected actions for {change['address']}: {actions}")
@@ -87,6 +88,18 @@ elif stage == "edge":
             raise AssertionError(f"edge plan requires {expected} {resource_type}")
     if type_counts["aws_eks_cluster"] or type_counts["aws_eks_node_group"] or type_counts["helm_release"]:
         raise AssertionError("edge plan must not recreate EKS or Helm releases")
+elif stage == "maintenance":
+    # Existing-environment optimizations only: no creation, replacement, deletion,
+    # node expansion, new paid service, or broad resource-type-only authorization.
+    allowed_maintenance = {
+        "module.cloudfront.aws_cloudfront_distribution.this[0]",
+        "module.order_persistence.aws_iam_role_policy.order_api",
+        "module.order_persistence.aws_vpc_endpoint.dynamodb",
+    }
+    if not changed_addresses.issubset(allowed_maintenance):
+        raise AssertionError(f"unexpected maintenance resources: {sorted(changed_addresses)}")
+    if any(actions != ["update"] for actions in address_actions.values()):
+        raise AssertionError("maintenance permits in-place updates only")
 else:
     allowed_hardening = {
         "module.cloudfront.aws_cloudfront_distribution.this[0]",

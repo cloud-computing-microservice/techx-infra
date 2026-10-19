@@ -31,7 +31,8 @@ required = [
     'billing_mode = "PAY_PER_REQUEST"',
     'attribute_name = "ttlEpochSeconds"',
     'deletion_protection_enabled = false',
-    '"dynamodb:TransactWriteItems"',
+    '"dynamodb:PutItem"',
+    '"dynamodb:GetItem"',
     'system:serviceaccount:${var.service_account_namespace}:${var.service_account_name}',
     'resource "aws_vpc_endpoint" "dynamodb"',
     'node_group_name = var.node_group_name',
@@ -39,6 +40,10 @@ required = [
 for token in required:
     if token not in text:
         raise AssertionError(f"missing guardrail: {token}")
+order_policy = (root / "modules/order-persistence/main.tf").read_text(encoding="utf-8")
+actions = re.search(r"data_actions\s*=\s*\[(.*?)\]", order_policy, re.S)
+if not actions or set(re.findall(r'"([^"]+)"', actions.group(1))) != {"dynamodb:GetItem", "dynamodb:PutItem"}:
+    raise AssertionError("Order data actions must be limited to GetItem and PutItem (including transactional Put)")
 for forbidden in ("aws_nat_gateway", "aws_db_", "aws_wafv2_", "aws_route53_resolver_endpoint"):
     if re.search(rf'(?m)^resource\s+"{forbidden}', text):
         raise AssertionError(f"forbidden out-of-scope resource found: {forbidden}")

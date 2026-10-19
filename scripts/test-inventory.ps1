@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$previousAws = Get-Item Function:aws -ErrorAction SilentlyContinue
+$previousAwsBlock = (Get-Item Function:\aws -ErrorAction SilentlyContinue).ScriptBlock
 $previousExitCode = $global:LASTEXITCODE
 $testState = @{ hasRepository = $false; awsFailure = $false }
 
@@ -49,10 +49,16 @@ try {
   try { & (Join-Path $PSScriptRoot 'domain-vpn-inventory.ps1') | Out-Null }
   catch { $failedClosed = $_.Exception.Message -like 'aws failed:*' }
   if (-not $failedClosed) { throw 'AWS API failures must not become an empty successful inventory.' }
-  Write-Host 'Inventory empty/nonempty/API-failure regression tests passed.'
 }
 finally {
-  if ($previousAws) { Set-Item Function:global:aws $previousAws.ScriptBlock }
-  else { Remove-Item Function:global:aws -ErrorAction SilentlyContinue }
+  if ($previousAwsBlock) { Set-Item Function:global:aws $previousAwsBlock }
+  else { Remove-Item Function:\aws -ErrorAction SilentlyContinue }
   $global:LASTEXITCODE = $previousExitCode
 }
+
+$restoredAws = Get-Item Function:\aws -ErrorAction SilentlyContinue
+if (($previousAwsBlock -and $restoredAws.ScriptBlock.ToString() -ne $previousAwsBlock.ToString()) -or
+    (-not $previousAwsBlock -and $restoredAws)) {
+  throw 'Inventory tests must restore the original AWS command.'
+}
+Write-Host 'Inventory empty/nonempty/API-failure and command-restoration regression tests passed.'

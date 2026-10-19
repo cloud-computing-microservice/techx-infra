@@ -87,7 +87,9 @@ $taggedRepositories = Invoke-AwsJson @(
   '--tag-filters', 'Key=Project,Values=techx', "Key=Environment,Values=$Environment",
   '--resource-type-filters', 'ecr:repository'
 )
-$repositories = @($taggedRepositories.ResourceTagMappingList.ResourceARN | ForEach-Object { ($_ -split ':repository/')[1] })
+$repositories = @($taggedRepositories.ResourceTagMappingList | ForEach-Object {
+    if ($_.ResourceARN) { ($_.ResourceARN -split ':repository/')[1] }
+  } | Where-Object { $_ })
 $taggedTables = Invoke-AwsJson @(
   'resourcegroupstaggingapi', 'get-resources', '--region', $Region,
   '--tag-filters', 'Key=Project,Values=techx', "Key=Environment,Values=$Environment",

@@ -29,6 +29,7 @@ python (Join-Path $PSScriptRoot 'static-test.py')
 if ($LASTEXITCODE -ne 0) { throw 'Terraform static assertions failed.' }
 python (Join-Path $PSScriptRoot 'test-review-plan.py')
 if ($LASTEXITCODE -ne 0) { throw 'Saved-plan review regression tests failed.' }
+& (Join-Path $PSScriptRoot 'test-inventory.ps1')
 & (Join-Path $PSScriptRoot 'cost-estimate.ps1') -Hours 12 | Out-Null
 & (Join-Path $PSScriptRoot 'security-scan.ps1')
 

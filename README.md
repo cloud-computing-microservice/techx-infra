@@ -171,7 +171,10 @@ acceptance window, disconnect AWS VPN Client, remove the public Cloudflare
 
 The teardown removes edge resources first, then workload/Ingress resources,
 waits for the internal ALB to disappear, destroys the foundation, and fails if
-the final TechX inventory is not empty. Private keys, VPN profiles, private
+the final TechX inventory (including ECR repositories) is not empty. Each phase
+applies a saved plan reviewed to permit only deletion/no-op; edge deletion is
+restricted to the edge modules. It preserves the live EKS API CIDRs and uses an
+isolated kubeconfig with an explicit account/cluster context. Private keys, VPN profiles, private
 Terraform variables, saved plans, and approval summaries remain Git-ignored.
 
 ## Deliberate security exceptions

@@ -5,7 +5,7 @@ import json
 import sys
 
 stage = sys.argv[1] if len(sys.argv) > 1 else "foundation"
-if stage not in {"foundation", "recovery", "edge", "hardening", "maintenance"}:
+if stage not in {"foundation", "recovery", "edge", "hardening", "maintenance", "teardown-edge", "teardown-foundation"}:
     raise AssertionError("unknown plan stage")
 
 plan = json.load(sys.stdin)
@@ -43,12 +43,18 @@ for change in changes:
     if change["type"] not in allowed:
         raise AssertionError(f"out-of-scope resource type: {change['type']}")
     allowed_actions = [["create"]]
+    if stage.startswith("teardown-"):
+        allowed_actions = [["delete"]]
     if stage in {"recovery", "hardening", "maintenance"}:
         allowed_actions.append(["update"])
     if actions not in allowed_actions:
         raise AssertionError(f"unexpected actions for {change['address']}: {actions}")
 
-if stage == "foundation":
+if stage.startswith("teardown-"):
+    prefixes = ("module.cloudfront.", "module.private_dns.", "module.client_vpn.")
+    if stage == "teardown-edge" and any(not address.startswith(prefixes) for address in changed_addresses):
+        raise AssertionError(f"edge teardown touches foundation resources: {sorted(changed_addresses)}")
+elif stage == "foundation":
     if type_counts["helm_release"] != 2:
         raise AssertionError("foundation plan must contain controller and Argo CD Helm releases")
     if type_counts["aws_eks_cluster"] != 1 or type_counts["aws_eks_node_group"] != 1:

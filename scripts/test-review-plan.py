@@ -47,5 +47,30 @@ class MaintenanceReviewTests(unittest.TestCase):
                 self.assertNotEqual(self.review([change(address, ["update"], resource_type)]).returncode, 0)
 
 
+class TeardownReviewTests(unittest.TestCase):
+    def review(self, stage, changes):
+        return subprocess.run(
+            [sys.executable, str(REVIEWER), stage],
+            input=json.dumps({"resource_changes": changes}),
+            text=True, capture_output=True,
+        )
+
+    def test_edge_deletes_only_edge_modules(self):
+        allowed = change("module.cloudfront.aws_cloudfront_distribution.this[0]", ["delete"], "aws_cloudfront_distribution")
+        self.assertEqual(self.review("teardown-edge", [allowed]).returncode, 0)
+        forbidden = change("module.eks.aws_eks_cluster.this", ["delete"], "aws_eks_cluster")
+        self.assertNotEqual(self.review("teardown-edge", [forbidden]).returncode, 0)
+
+    def test_teardown_never_creates_updates_or_replaces(self):
+        for stage in ("teardown-edge", "teardown-foundation"):
+            self.assertEqual(self.review(stage, []).returncode, 0)
+            for actions in (["create"], ["update"], ["delete", "create"], ["create", "delete"]):
+                with self.subTest(stage=stage, actions=actions):
+                    item = change("module.cloudfront.aws_cloudfront_distribution.this[0]", actions, "aws_cloudfront_distribution")
+                    self.assertNotEqual(self.review(stage, [item]).returncode, 0)
+        self.assertEqual(self.review("teardown-foundation", [change("module.eks.aws_eks_cluster.this", ["delete"], "aws_eks_cluster")]).returncode, 0)
+        self.assertNotEqual(self.review("teardown-foundation", [change("unrelated.bucket", ["delete"], "aws_s3_bucket")]).returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

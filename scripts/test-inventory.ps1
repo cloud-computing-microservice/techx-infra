@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $previousAwsBlock = (Get-Item Function:\aws -ErrorAction SilentlyContinue).ScriptBlock
 $previousExitCode = $global:LASTEXITCODE
-$testState = @{ hasRepository = $false; awsFailure = $false }
+$testState = @{ hasRepository = $false; hasVolume = $false; awsFailure = $false }
 
 # Every request is intercepted; unexpected requests fail instead of using AWS.
 Set-Item Function:global:aws -Value ({
@@ -23,22 +23,37 @@ Set-Item Function:global:aws -Value ({
     }
     'ec2 describe-client-vpn-endpoints' { return '{"ClientVpnEndpoints":[]}' }
     'ec2 describe-vpc-endpoints' { return '{"VpcEndpoints":[]}' }
+    'ec2 describe-instances' { return '{"Reservations":[]}' }
+    'ec2 describe-volumes' {
+      if ($testState.hasVolume) { return '{"Volumes":[{"VolumeId":"vol-leftover"}]}' }
+      return '{"Volumes":[]}'
+    }
+    'ec2 describe-vpcs' { return '{"Vpcs":[]}' }
+    'ec2 describe-addresses' { return '{"Addresses":[]}' }
+    'secretsmanager list-secrets' { return '{"SecretList":[]}' }
     'cloudfront list-distributions' { return '{"DistributionList":{"Items":[]}}' }
     'route53 list-hosted-zones-by-name' { return '{"HostedZones":[]}' }
     'iam list-roles' { return '[]' }
+    'iam list-policies' { return '[]' }
     default { throw "Unexpected mocked AWS operation: $operation" }
   }
 }.GetNewClosure())
 
 try {
   $inventory = & (Join-Path $PSScriptRoot 'domain-vpn-inventory.ps1') | ConvertFrom-Json
-  foreach ($field in @('clusters', 'nodeGroups', 'loadBalancerArns', 'clientVpn', 'cloudFront',
-      'privateHostedZones', 'ecrRepositories', 'dynamodbTables', 'dynamodbVpcEndpoints',
-      'orderApiIamRoles', 'acmCertificates')) {
+  foreach ($field in (Get-Content -Raw (Join-Path $PSScriptRoot '../contracts/inventory-fields.json') | ConvertFrom-Json)) {
     if ($null -eq $inventory.$field -or $inventory.$field.Count -ne 0) {
       throw "Empty inventory must produce [] for $field, not null or [null]."
     }
   }
+  . (Join-Path $PSScriptRoot 'inventory-contract.ps1')
+  Assert-TechxInventoryEmpty $inventory '000000000000' 'staging' 'us-east-1'
+  $testState.hasVolume = $true
+  $diskInventory = & (Join-Path $PSScriptRoot 'domain-vpn-inventory.ps1') | ConvertFrom-Json
+  $rejected = $false
+  try { Assert-TechxInventoryEmpty $diskInventory '000000000000' 'staging' 'us-east-1' } catch { $rejected = $true }
+  if (-not $rejected -or $diskInventory.ebsVolumes.Count -ne 1) { throw 'A remaining EBS volume must prevent zero-inventory success.' }
+  $testState.hasVolume = $false
   $testState.hasRepository = $true
   $inventory = & (Join-Path $PSScriptRoot 'domain-vpn-inventory.ps1') | ConvertFrom-Json
   if ($inventory.ecrRepositories.Count -ne 1 -or $inventory.ecrRepositories[0] -ne 'techx/order') {

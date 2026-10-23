@@ -14,6 +14,24 @@ function Invoke-AwsJson([string[]]$Arguments) {
 
 $identity = Invoke-AwsJson @('sts', 'get-caller-identity')
 $resourcePrefix = "techx-$Environment"
+$tagFilters = @('Name=tag:Project,Values=techx', "Name=tag:Environment,Values=$Environment")
+$instances = @((Invoke-AwsJson (@('ec2', 'describe-instances', '--region', $Region, '--filters') +
+      $tagFilters + @('Name=instance-state-name,Values=pending,running,stopping,stopped,shutting-down'))).Reservations.Instances |
+    Where-Object { $_.InstanceId } | ForEach-Object { @{ id = $_.InstanceId; state = $_.State.Name } })
+$volumes = @((Invoke-AwsJson (@('ec2', 'describe-volumes', '--region', $Region, '--filters') + $tagFilters)).Volumes |
+    Where-Object { $_.VolumeId } | ForEach-Object { $_.VolumeId })
+$vpcs = @((Invoke-AwsJson (@('ec2', 'describe-vpcs', '--region', $Region, '--filters') + $tagFilters)).Vpcs |
+    Where-Object { $_.VpcId } | ForEach-Object { $_.VpcId })
+$addresses = @((Invoke-AwsJson (@('ec2', 'describe-addresses', '--region', $Region, '--filters') + $tagFilters)).Addresses |
+    Where-Object { $_.AllocationId } | ForEach-Object { $_.AllocationId })
+$allEndpoints = @((Invoke-AwsJson (@('ec2', 'describe-vpc-endpoints', '--region', $Region, '--filters') + $tagFilters)).VpcEndpoints |
+    Where-Object { $_.VpcEndpointId } | ForEach-Object { $_.VpcEndpointId })
+$iamRoles = @((Invoke-AwsJson @('iam', 'list-roles', '--query', "Roles[?starts_with(RoleName, '$resourcePrefix-')].RoleName")))
+$iamPolicies = @((Invoke-AwsJson @('iam', 'list-policies', '--scope', 'Local', '--query', "Policies[?starts_with(PolicyName, '$resourcePrefix-')].Arn")))
+$secrets = @((Invoke-AwsJson @('secretsmanager', 'list-secrets', '--region', $Region, '--include-planned-deletion',
+      '--filters', "Key=name,Values=techx/$Environment/")).SecretList |
+    Where-Object { $_.Name -like "techx/$Environment/*" } |
+    ForEach-Object { @{ arn = $_.ARN; name = $_.Name; deletionDate = $_.DeletedDate } })
 $clusters = @(@(Invoke-AwsJson @('eks', 'list-clusters', '--region', $Region)).clusters |
     Where-Object { $_ -eq $resourcePrefix })
 
@@ -122,6 +140,14 @@ foreach ($mapping in @($certificateTags.ResourceTagMappingList)) {
   accountId = $identity.Account
   region = $Region
   environment = $Environment
+  ec2Instances = $instances
+  ebsVolumes = $volumes
+  vpcs = $vpcs
+  publicAddresses = $addresses
+  iamRoles = $iamRoles
+  iamPolicies = $iamPolicies
+  vpcEndpoints = $allEndpoints
+  secrets = $secrets
   clusters = $clusters
   nodeGroups = $nodeGroups
   loadBalancerArns = $loadBalancers

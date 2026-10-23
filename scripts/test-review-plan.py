@@ -61,6 +61,16 @@ class TeardownReviewTests(unittest.TestCase):
         forbidden = change("module.eks.aws_eks_cluster.this", ["delete"], "aws_eks_cluster")
         self.assertNotEqual(self.review("teardown-edge", [forbidden]).returncode, 0)
 
+    def test_cleanup_access_is_exact_role_and_cluster_only(self):
+        entry = change("aws_eks_access_entry.cleanup[0]", ["delete"], "aws_eks_access_entry")
+        entry["change"]["before"] = dict(principal_arn="arn:aws:iam::058114477594:role/techx-automation-cleanup-executor",
+                                         cluster_name="techx-staging", type="STANDARD")
+        self.assertEqual(self.review("teardown-foundation", [entry]).returncode, 0)
+        for field, value in (("principal_arn", "arn:aws:iam::058114477594:role/other"), ("cluster_name", "production"), ("type", "EC2_LINUX")):
+            changed = json.loads(json.dumps(entry))
+            changed["change"]["before"][field] = value
+            self.assertNotEqual(self.review("teardown-foundation", [changed]).returncode, 0)
+
     def test_teardown_never_creates_updates_or_replaces(self):
         for stage in ("teardown-edge", "teardown-foundation"):
             self.assertEqual(self.review(stage, []).returncode, 0)

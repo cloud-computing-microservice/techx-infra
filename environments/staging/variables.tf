@@ -104,6 +104,16 @@ variable "addon_versions" {
   }
 }
 
+variable "budget_limit_usd" {
+  description = "Approved budget for this staging session; alerts do not stop spending."
+  type        = number
+  default     = 80
+  validation {
+    condition     = var.budget_limit_usd >= 1 && var.budget_limit_usd <= 80
+    error_message = "budget_limit_usd must be between 1 and 80 USD."
+  }
+}
+
 variable "budget_alert_email" {
   type      = string
   default   = null

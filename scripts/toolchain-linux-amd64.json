@@ -1,0 +1,22 @@
+{
+  "terraform": {
+    "version": "1.15.5",
+    "url": "https://releases.hashicorp.com/terraform/1.15.5/terraform_1.15.5_linux_amd64.zip",
+    "sha256": "702b2136af6728c8ff037f843dd2dbce2b7ad88786b7381d1d72aefa250f601c",
+    "format": "zip",
+    "member": "terraform"
+  },
+  "helm": {
+    "version": "4.1.4",
+    "url": "https://get.helm.sh/helm-v4.1.4-linux-amd64.tar.gz",
+    "sha256": "70b2c30a19da4db264dfd68c8a3664e05093a361cefd89572ffb36f8abfa3d09",
+    "format": "tar",
+    "member": "linux-amd64/helm"
+  },
+  "kubectl": {
+    "version": "1.35.0",
+    "url": "https://dl.k8s.io/release/v1.35.0/bin/linux/amd64/kubectl",
+    "sha256": "a2e984a18a0c063279d692533031c1eff93a262afcc0afdc517375432d060989",
+    "format": "binary"
+  }
+}

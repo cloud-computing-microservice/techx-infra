@@ -30,4 +30,7 @@ jobs:
           terraform_wrapper: false
       - shell: pwsh
         working-directory: techx-infra
+        run: python -m pip install -r scripts/requirements-automation.txt
+      - shell: pwsh
+        working-directory: techx-infra
         run: ./scripts/verify.ps1

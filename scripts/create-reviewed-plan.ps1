@@ -47,7 +47,7 @@ try {
   helm repo update eks argo | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Unable to update Helm repositories.' }
 
-  terraform "-chdir=$environmentRoot" init -backend=false | Out-Null
+  & (Join-Path $PSScriptRoot 'init-backend.ps1') -Environment $Environment
   if ($LASTEXITCODE -ne 0) { throw 'terraform init failed.' }
   $planArgs = @(
     '-input=false', '-no-color', '-lock-timeout=60s', "-out=$planPath",
@@ -65,6 +65,9 @@ try {
   $review = terraform "-chdir=$environmentRoot" show -json $planPath | python (Join-Path $PSScriptRoot 'review-plan.py') $Stage | ConvertFrom-Json
   if ($LASTEXITCODE -ne 0) { throw 'Saved-plan review failed.' }
   $planned = terraform "-chdir=$environmentRoot" show -json $planPath | ConvertFrom-Json
+  $approvedBudget = if ($planned.variables.budget_limit_usd) { [double]$planned.variables.budget_limit_usd.value } else { 80 }
+  if ($cost.upperBoundUsd -gt $approvedBudget) { throw 'Cost estimate exceeds the approved session budget.' }
+  $alertAmounts = @(0.5, 0.75, 0.9 | ForEach-Object { $approvedBudget * $_ }) -join ', '
   $plannedCidrs = @($planned.variables.public_access_cidrs.value)
   $expectedCidrs = @($preflight.callerPublicCidrs)
   if ($plannedCidrs.Count -ne $expectedCidrs.Count -or (Compare-Object $plannedCidrs $expectedCidrs)) {
@@ -84,8 +87,8 @@ Saved plan: .plans/$Environment-$Stage.tfplan
 SHA256: $hash
 Resources: $($review.actions.create ?? 0) add, $($review.actions.update ?? 0) change, 0 destroy
 Estimated upper bound: $($cost.upperBoundUsd) USD for <= $costHours hours
-Apply gate: 60 USD; hard cap: 80 USD
-Budget alerts in plan: 40, 60, 72 USD
+Apply gate: $([Math]::Min(60, $approvedBudget)) USD; approved budget: $approvedBudget USD
+Budget alerts in plan: $alertAmounts USD (alerts do not stop spending)
 Destroy deadline: $($DestroyDeadline.ToString('yyyy-MM-dd HH:mm:ss zzz'))
 
 Execution: apply-reviewed-plan.ps1 with the checksum and deadline above,

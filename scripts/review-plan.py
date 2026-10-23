@@ -23,6 +23,7 @@ allowed = {
     "aws_ec2_client_vpn_network_association", "aws_route53_record", "aws_route53_zone",
     "aws_security_group", "aws_vpc_security_group_egress_rule",
     "aws_vpc_security_group_ingress_rule",
+    "aws_eks_access_entry", "aws_eks_access_policy_association",
 }
 action_counts: collections.Counter[str] = collections.Counter()
 type_counts: collections.Counter[str] = collections.Counter()
@@ -42,6 +43,18 @@ for change in changes:
     address_actions[change["address"]] = actions
     if change["type"] not in allowed:
         raise AssertionError(f"out-of-scope resource type: {change['type']}")
+    if change["type"] in {"aws_eks_access_entry", "aws_eks_access_policy_association"}:
+        if change["address"] not in {"aws_eks_access_entry.cleanup[0]", "aws_eks_access_policy_association.cleanup[0]"}:
+            raise AssertionError("unexpected cluster-access resource")
+        values = change["change"].get("before" if actions == ["delete"] else "after", {})
+        if values.get("principal_arn") != "arn:aws:iam::058114477594:role/techx-automation-cleanup-executor":
+            raise AssertionError("cluster access must target only the dedicated cleanup executor")
+        if values.get("cluster_name") != "techx-staging":
+            raise AssertionError("cleanup cluster access must stay in staging")
+        if change["type"] == "aws_eks_access_entry" and values.get("type") != "STANDARD":
+            raise AssertionError("cleanup executor must use a standard access entry")
+        if change["type"] == "aws_eks_access_policy_association" and values.get("policy_arn") != "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy":
+            raise AssertionError("unexpected cleanup access policy")
     allowed_actions = [["create"]]
     if stage.startswith("teardown-"):
         allowed_actions = [["delete"]]
@@ -60,7 +73,7 @@ elif stage == "foundation":
     if type_counts["aws_eks_cluster"] != 1 or type_counts["aws_eks_node_group"] != 1:
         raise AssertionError("foundation plan must contain one EKS cluster and one node group")
     if type_counts["aws_budgets_budget"] != 1:
-        raise AssertionError("foundation plan must include the 40/60/72 USD project budget")
+        raise AssertionError("foundation plan must include the approved project budget")
     if any(type_counts[name] for name in (
         "aws_cloudfront_distribution", "aws_ec2_client_vpn_endpoint", "aws_route53_zone"
     )):

@@ -27,12 +27,19 @@ if ($LASTEXITCODE -ne 0 -or $identity.Account -ne $ExpectedAccountId) {
   throw 'Current AWS identity does not match ExpectedAccountId.'
 }
 
-# The private tfvars may contain a bootstrap placeholder; never lock ourselves
-# out of the live cluster while removing its edge resources.
-$cluster = aws eks describe-cluster --region $Region --name $resourcePrefix --output json | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0) { throw 'Unable to read the live EKS endpoint configuration.' }
-$context = $cluster.cluster.arn
-$cidrs = @($cluster.cluster.resourcesVpcConfig.publicAccessCidrs) | ConvertTo-Json -Compress -AsArray
+# Absence must be established by a successful list call, never a swallowed error.
+$clusterNames = @(aws eks list-clusters --region $Region --query clusters --output json | ConvertFrom-Json)
+if ($LASTEXITCODE -ne 0) { throw 'Unable to determine whether the staging cluster exists.' }
+$cluster = $null
+$context = ''
+$cidrValues = @('203.0.113.254/32') # Valid placeholder only for deletion when no cluster exists.
+if ($clusterNames -contains $resourcePrefix) {
+  $cluster = aws eks describe-cluster --region $Region --name $resourcePrefix --output json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw 'Unable to read the live EKS endpoint configuration.' }
+  $context = $cluster.cluster.arn
+  $cidrValues = @($cluster.cluster.resourcesVpcConfig.publicAccessCidrs)
+}
+$cidrs = $cidrValues | ConvertTo-Json -Compress -AsArray
 $planVariables = @("-var-file=$privateVars", '-var=enable_domain_vpn_foundation=true',
   '-var=enable_domain_vpn_edge=false', "-var=public_access_cidrs=$cidrs")
 New-Item -ItemType Directory -Force -Path $planRoot | Out-Null
@@ -52,10 +59,8 @@ function Invoke-ReviewedTeardown([string]$Stage, [switch]$Destroy) {
   if ($LASTEXITCODE -ne 0) { throw "$Stage apply failed." }
 }
 
-$publicDns = @(Resolve-DnsName -Name 'shop.dinhminhkhoa.id.vn' -Type CNAME -ErrorAction SilentlyContinue)
-if (@($publicDns | Where-Object { $_.NameHost -like '*.cloudfront.net' }).Count -gt 0) {
-  throw 'Remove the Cloudflare shop CNAME first to avoid dangling DNS, then rerun teardown.'
-}
+python (Join-Path $PSScriptRoot 'public-dns.py')
+if ($LASTEXITCODE -ne 0) { throw 'Public DNS is live or could not be verified; teardown refused.' }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $helmHome 'repository') | Out-Null
 $env:HELM_REPOSITORY_CONFIG = Join-Path $helmHome 'repositories.yaml'
@@ -68,20 +73,48 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Unable to configure the Argo Helm repository.' }
   helm repo update eks argo | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Unable to update Helm repositories.' }
-  terraform "-chdir=$environmentRoot" init -backend=false | Out-Null
+  & (Join-Path $PSScriptRoot 'init-backend.ps1') -Environment $Environment
   if ($LASTEXITCODE -ne 0) { throw 'terraform init failed.' }
 
-  # Edge resources are removed first while their internal ALB origin still exists.
-  Invoke-ReviewedTeardown -Stage 'teardown-edge'
+  . (Join-Path $PSScriptRoot 'teardown-contract.ps1')
+  $presence = python (Join-Path $PSScriptRoot 'state-presence.py') --bucket $env:TECHX_STATE_BUCKET | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw 'Remote state presence is unknown; cleanup refused.' }
+  $stateAddresses = @()
+  if ($presence.exists) {
+    $stateAddresses = @(terraform "-chdir=$environmentRoot" state list)
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect remote state before cleanup.' }
+  }
+  $strategy = Get-TechxTeardownStrategy ($null -ne $cluster) $stateAddresses ([string]$cluster.cluster.status)
+  if ($strategy.OrphanedHelm.Count -gt 0) {
+    # The control plane is confirmed absent; these releases no longer have a server.
+    # Preserve the old state privately and remove only the two known orphan addresses.
+    $confirmed = @(aws eks list-clusters --region $Region --query clusters --output json | ConvertFrom-Json)
+    if ($LASTEXITCODE -ne 0 -or $confirmed -contains $resourcePrefix) { throw 'Cluster absence could not be reconfirmed; state was not changed.' }
+    $snapshot = terraform "-chdir=$environmentRoot" state pull
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to back up orphaned Helm state.' }
+    $snapshot | Set-Content -LiteralPath (Join-Path $planRoot "state-before-orphan-removal-$([guid]::NewGuid()).private.json") -Encoding utf8
+    foreach ($address in $strategy.OrphanedHelm) {
+      terraform "-chdir=$environmentRoot" state rm -lock-timeout=60s $address
+      if ($LASTEXITCODE -ne 0) { throw 'Unable to remove a confirmed orphaned Helm address.' }
+    }
+  }
+  if ($strategy.EdgePresent) { Invoke-ReviewedTeardown -Stage 'teardown-edge' }
 
-  aws eks update-kubeconfig --region $Region --name $resourcePrefix --kubeconfig $kubeconfigPath | Out-Null
-  if ($LASTEXITCODE -eq 0) {
+  if ($strategy.ConfigureKubernetes) {
+    aws eks update-kubeconfig --region $Region --name $resourcePrefix --kubeconfig $kubeconfigPath | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to configure the selected cluster for workload cleanup.' }
+    $authorized = $false
+    foreach ($attempt in 1..12) {
+      kubectl --kubeconfig $kubeconfigPath --context $context --request-timeout=10s auth can-i delete deployments.apps --namespace argocd --quiet
+      if ($LASTEXITCODE -eq 0) { $authorized = $true; break }
+      Start-Sleep -Seconds 5
+    }
+    if (-not $authorized) { throw 'Cleanup Kubernetes access did not become effective.' }
     kubectl --kubeconfig $kubeconfigPath --context $context -n argocd delete application $resourcePrefix --cascade=foreground --ignore-not-found --wait=true --timeout="${TimeoutSeconds}s"
     if ($LASTEXITCODE -ne 0) { throw 'Unable to remove the workload Application.' }
     kubectl --kubeconfig $kubeconfigPath --context $context -n argocd delete ingress --all --ignore-not-found --wait=true --timeout="${TimeoutSeconds}s"
     if ($LASTEXITCODE -ne 0) { throw 'Unable to remove the Argo CD Ingress.' }
   }
-  else { throw 'Unable to configure the selected cluster for workload cleanup.' }
 
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   do {
@@ -95,7 +128,16 @@ try {
   } while ((Get-Date) -lt $deadline)
   if ($loadBalancers.Count -gt 0) { throw "A $Environment TechX ALB still exists; foundation destroy was not started." }
 
-  Invoke-ReviewedTeardown -Stage 'teardown-foundation' -Destroy
+  # Remove Helm releases while cleanup EKS access still exists. Otherwise a
+  # destroy graph could revoke this role before the Helm provider finishes.
+  if ($strategy.ConfigureKubernetes) {
+    helm uninstall argocd --namespace argocd --kubeconfig $kubeconfigPath --kube-context $context --ignore-not-found --wait --timeout "${TimeoutSeconds}s"
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to uninstall Argo CD before removing cleanup access.' }
+    helm uninstall aws-load-balancer-controller --namespace kube-system --kubeconfig $kubeconfigPath --kube-context $context --ignore-not-found --wait --timeout "${TimeoutSeconds}s"
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to uninstall the ALB controller before removing cleanup access.' }
+  }
+
+  if ($presence.managedCount -gt 0) { Invoke-ReviewedTeardown -Stage 'teardown-foundation' -Destroy }
 
   $certificateArns = @()
   if (Test-Path -LiteralPath $certificateStatePath) {
@@ -118,10 +160,12 @@ try {
     $environmentTag = @($certificateTags.Tags | Where-Object { $_.Key -eq 'Environment' -and $_.Value -eq $Environment }).Count -eq 1
     if ($projectTag -and $environmentTag) { $certificateArns += $certificate.CertificateArn }
   }
+  $existingCertificateArns = @($publicCertificates.CertificateSummaryList.CertificateArn)
   foreach ($certificateArn in @($certificateArns | Sort-Object -Unique)) {
     if ($certificateArn -notmatch "^arn:aws:acm:${Region}:$ExpectedAccountId`:certificate/") {
       throw "Refusing to delete an ACM certificate outside the approved account/region: $certificateArn"
     }
+    if ($existingCertificateArns -notcontains $certificateArn) { continue } # Retry after an earlier successful deletion.
     $certificateTags = aws acm list-tags-for-certificate --region $Region --certificate-arn $certificateArn --output json | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect ACM certificate tags for $certificateArn." }
     $projectTag = @($certificateTags.Tags | Where-Object { $_.Key -eq 'Project' -and $_.Value -eq 'techx' }).Count -eq 1
@@ -134,17 +178,23 @@ try {
   }
   if (Test-Path -LiteralPath $certificateStatePath) { [IO.File]::Delete($certificateStatePath) }
 
-  $inventory = & (Join-Path $PSScriptRoot 'domain-vpn-inventory.ps1') -Environment $Environment -Region $Region | ConvertFrom-Json
-  if ($inventory.environment -ne $Environment -or $inventory.accountId -ne $ExpectedAccountId) {
-    throw 'Final inventory does not match the selected environment and account.'
+  if ($presence.exists) {
+    $remainingState = @(terraform "-chdir=$environmentRoot" state list)
+    if ($LASTEXITCODE -ne 0 -or $remainingState.Count -gt 0) { throw 'Terraform workload state is not confirmed empty.' }
   }
-  if ($inventory.clusters.Count -gt 0 -or $inventory.loadBalancerArns.Count -gt 0 -or
-      $inventory.clientVpn.Count -gt 0 -or $inventory.cloudFront.Count -gt 0 -or
-      $inventory.privateHostedZones.Count -gt 0 -or $inventory.acmCertificates.Count -gt 0 -or
-      $inventory.dynamodbTables.Count -gt 0 -or $inventory.dynamodbVpcEndpoints.Count -gt 0 -or
-      $inventory.orderApiIamRoles.Count -gt 0 -or $inventory.ecrRepositories.Count -gt 0) {
-    throw "Final inventory is not empty: $($inventory | ConvertTo-Json -Depth 8 -Compress)"
-  }
+  . (Join-Path $PSScriptRoot 'inventory-contract.ps1')
+  $inventoryDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    $inventory = & (Join-Path $PSScriptRoot 'domain-vpn-inventory.ps1') -Environment $Environment -Region $Region | ConvertFrom-Json
+    try {
+      Assert-TechxInventoryEmpty $inventory $ExpectedAccountId $Environment $Region
+      break
+    } catch {
+      if ($_.Exception.Message -notlike 'Inventory is not empty:*' -or (Get-Date) -ge $inventoryDeadline) { throw }
+      Start-Sleep -Seconds 10
+    }
+  } while ($true)
+
   $inventory | ConvertTo-Json -Depth 8
 }
 finally {

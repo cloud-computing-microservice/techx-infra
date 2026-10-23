@@ -18,13 +18,55 @@ foreach ($path in @(
 $root = Split-Path -Parent $PSScriptRoot
 terraform "-chdir=$root" fmt -check -recursive
 if ($LASTEXITCODE -ne 0) { throw 'terraform fmt -check failed.' }
-foreach ($environment in @('demo', 'staging')) {
-  $environmentRoot = Join-Path $root "environments/$environment"
-  terraform "-chdir=$environmentRoot" init -backend=false
-  if ($LASTEXITCODE -ne 0) { throw "terraform init failed for $environment." }
-  terraform "-chdir=$environmentRoot" validate
-  if ($LASTEXITCODE -ne 0) { throw "terraform validate failed for $environment." }
+foreach ($environment in @('environments/demo', 'environments/staging', 'bootstrap/automation')) {
+  $environmentRoot = Join-Path $root $environment
+  $previousDataDirectory = $env:TF_DATA_DIR
+  try {
+    $env:TF_DATA_DIR = Join-Path $root ".terraform-offline/$environment"
+    terraform "-chdir=$environmentRoot" init -backend=false -input=false
+    if ($LASTEXITCODE -ne 0) { throw "terraform init failed for $environment." }
+    terraform "-chdir=$environmentRoot" validate
+    if ($LASTEXITCODE -ne 0) { throw "terraform validate failed for $environment." }
+    if ($environment -eq 'bootstrap/automation') {
+      terraform "-chdir=$environmentRoot" test -no-color
+      if ($LASTEXITCODE -ne 0) { throw 'Automation control-plane Terraform mock plans failed.' }
+    }
+  } finally {
+    if ($null -eq $previousDataDirectory) { Remove-Item Env:TF_DATA_DIR -ErrorAction SilentlyContinue }
+    else { $env:TF_DATA_DIR = $previousDataDirectory }
+  }
 }
+python (Join-Path $PSScriptRoot 'test-public-dns.py')
+if ($LASTEXITCODE -ne 0) { throw 'Public DNS guard regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-automation-session.py')
+if ($LASTEXITCODE -ne 0) { throw 'Automation session lease regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-leased-command.py')
+if ($LASTEXITCODE -ne 0) { throw 'Leased command heartbeat/termination regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-cleanup-launcher.py')
+if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup launcher regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-cleanup-loader.py')
+if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup bundle loader regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-cleanup-execution.py')
+if ($LASTEXITCODE -ne 0) { throw 'Cleanup fencing, ownership, network and inventory regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-run-cleanup.py')
+if ($LASTEXITCODE -ne 0) { throw 'Cleanup worker ordering and credential-isolation regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-automation-inputs.py')
+if ($LASTEXITCODE -ne 0) { throw 'Automation deployment input contract regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-lifecycle-coordinator.py')
+if ($LASTEXITCODE -ne 0) { throw 'Lifecycle startup, cleanup-arming and uncertain-response regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-cleanup-schedule.py')
+if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup schedule regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-state-presence.py')
+if ($LASTEXITCODE -ne 0) { throw 'Remote-state absence/failure regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-automation-bundle.py')
+if ($LASTEXITCODE -ne 0) { throw 'Immutable source bundle regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-automation-tools.py')
+if ($LASTEXITCODE -ne 0) { throw 'Pinned automation toolchain regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-cloudflare-dns.py')
+if ($LASTEXITCODE -ne 0) { throw 'Cloudflare DNS ownership regression tests failed.' }
+& (Join-Path $PSScriptRoot 'test-init-backend.ps1')
+& (Join-Path $PSScriptRoot 'test-iam-contract.ps1')
+& (Join-Path $PSScriptRoot 'test-teardown-contract.ps1')
 python (Join-Path $PSScriptRoot 'static-test.py')
 if ($LASTEXITCODE -ne 0) { throw 'Terraform static assertions failed.' }
 python (Join-Path $PSScriptRoot 'test-review-plan.py')

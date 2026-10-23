@@ -1,6 +1,12 @@
 # TechX Infrastructure
 
 Minimal Terraform foundation for the TechX internship staging environment.
+Staging mutations now require the separate S3 backend, `TECHX_STATE_BUCKET`
+and `TECHX_STATE_KMS_KEY_ARN`.
+Bootstrap the private state bucket before planning/applying; never delete local
+state to bypass migration. Offline verification uses isolated Terraform data
+directories. CI/CD bootstrap and lifecycle automation are in progress; see
+`../docs/CICD_AUTOMATION_DESIGN.md` for verified and pending deliverables.
 Saved-plan review binds execution to the account, checksum, cost gate and destroy
 deadline. An explicit deployment command runs these checks without a repeated
 confirmation sentence.

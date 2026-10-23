@@ -164,7 +164,7 @@ resource "aws_budgets_budget" "project" {
   count        = var.budget_alert_email == null ? 0 : 1
   name         = "${local.name}-hard-cap"
   budget_type  = "COST"
-  limit_amount = "80"
+  limit_amount = tostring(var.budget_limit_usd)
   limit_unit   = "USD"
   time_unit    = "MONTHLY"
 
@@ -174,7 +174,7 @@ resource "aws_budgets_budget" "project" {
   }
 
   dynamic "notification" {
-    for_each = toset([40, 60, 72])
+    for_each = toset([for fraction in [0.5, 0.75, 0.9] : var.budget_limit_usd * fraction])
     content {
       comparison_operator        = "GREATER_THAN"
       threshold                  = notification.value

@@ -46,6 +46,8 @@ if ($LASTEXITCODE -ne 0 -or $identity.Account -ne $summaryAccount) {
   throw 'Current AWS identity does not match the reviewed plan.'
 }
 
+& (Join-Path $PSScriptRoot 'init-backend.ps1') -Environment $Environment
+
 New-Item -ItemType Directory -Force -Path (Join-Path $helmHome 'repository') | Out-Null
 $env:HELM_REPOSITORY_CONFIG = Join-Path $helmHome 'repositories.yaml'
 $env:HELM_REPOSITORY_CACHE = Join-Path $helmHome 'repository'

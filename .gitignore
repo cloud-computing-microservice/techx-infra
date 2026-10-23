@@ -1,4 +1,6 @@
 .terraform/
+.terraform-offline/
+bootstrap/automation/cleanup-launcher.zip
 *.tfstate
 *.tfstate.*
 *.tfplan

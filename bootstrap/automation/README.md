@@ -21,8 +21,10 @@ Inputs:
 
 - `bucket_name`: unique bucket in account `058114477594`.
 - `create_github_oidc_provider`: defaults false, reuses the standard provider ARN.
-  Set true only after verifying that provider does not exist. If reused, verify
-  its audience configuration before applying the role.
+  On initial bootstrap, set true only after verifying that provider does not exist.
+  Keep true on subsequent runs when this root's state owns the provider; changing
+  to false would plan its deletion. Use false only to reuse a provider outside
+  this root's state, and verify its audience before applying the role.
 - `cloudflare_secret_arn`: required with cleanup enabled; an existing shared
   `techx/automation/cloudflare-*` Secrets Manager secret whose JSON has `apiToken`
   and `zoneId`. The executor fetches it only when DNS work is actually needed;

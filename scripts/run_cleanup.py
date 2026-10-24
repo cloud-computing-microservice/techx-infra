@@ -34,30 +34,72 @@ def aws_clients():
     return {name: boto3.client(name, region_name="us-east-1") for name in ("s3", "sts", "eks", "codebuild", "ec2", "secretsmanager")}
 
 
-def prepare_takeover(clients, record, owner, bucket):
+def read_private_snapshot(clients, record, bucket):
     response = clients["s3"].get_object(Bucket=bucket, Key=f"private/staging/{record['sessionId']}/inputs.json", ExpectedBucketOwner="058114477594")
     body = response["Body"].read(256 * 1024 + 1)
     if len(body) > 256 * 1024: raise ValueError("Private cleanup snapshot exceeds size policy")
     private = json.loads(body)
     if private.get("sessionId") != record["sessionId"] or private.get("schemaVersion") != 1:
         raise ValueError("Private cleanup snapshot belongs to another session")
+    return private
+
+
+def prepare_takeover(clients, record, owner, bucket):
+    private = read_private_snapshot(clients, record, bucket)
     lease = record.get("lease", {})
     previous = lease.get("owner")
     expected_instance = None
+    stopped_managers = set()
     if previous and previous != owner and lease.get("operation") != "release":
         match = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", previous)
         if match:
             expected_instance = match[1]
         else:
             stop_executor(clients["codebuild"], previous, owner)
+            stopped_managers.add(previous)
+    # A manager may save launch intent or an instance ID while we stop it.
+    # S3's fresh read, after confirmed terminal status, is authoritative.
+    original_launch = private.get("deploymentLaunch")
+    private = read_private_snapshot(clients, record, bucket)
+    launch = private.get("deploymentLaunch")
+    if original_launch is not None and (launch is None or
+            any(original_launch.get(key) != launch.get(key) for key in ("clientToken", "managerArn"))):
+        raise ValueError("Executor launch identity changed during cleanup takeover")
+    if launch and launch.get("managerArn"):
+        manager = launch["managerArn"]
+        if not re.fullmatch(r"arn:aws:codebuild:us-east-1:058114477594:build/techx-automation-lifecycle:[a-f0-9-]+", manager):
+            raise ValueError("Launch intent must identify the fixed lifecycle manager")
+        if manager not in stopped_managers:
+            stop_executor(clients["codebuild"], manager, owner)
+        private = read_private_snapshot(clients, record, bucket)
+        fresh = private.get("deploymentLaunch")
+        if fresh is None or any(fresh.get(key) != launch.get(key) for key in ("clientToken", "managerArn")):
+            raise ValueError("Executor launch identity changed after manager termination")
+        launch = fresh
+    recorded = private.get("deploymentExecutor", {}).get("instanceId")
+    if recorded:
+        if expected_instance is not None and expected_instance != recorded:
+            raise ValueError("Lease executor differs from its private launch snapshot")
+        expected_instance = recorded
     # Do this even when no lease exists: an idle approval-waiting executor still
     # costs money and a detached remote command may outlive its manager.
-    launch = private.get("deploymentLaunch")
     token, proof = None, None
     proof_key = f"cleanup/{record['sessionId']}/executor-proof.json"
     if launch is not None:
         token = launch.get("clientToken", "")
         if not re.fullmatch(r"[a-f0-9]{64}", token): raise ValueError("Invalid executor launch intent")
+        if launch.get("protocolVersion") == 1 and launch.get("phase") == "PREPARED":
+            if not launch.get("managerArn") or private.get("deploymentExecutor") or expected_instance is not None:
+                raise ValueError("Pre-API intent conflicts with an executor reference")
+            observed = terminate_deployment_executors(clients["ec2"], record["sessionId"])
+            if observed["instanceIds"]:
+                raise ValueError("Pre-API intent conflicts with an observed executor")
+            proof = dict(schemaVersion=1, executionVersion=record["executionVersion"], clientToken=token,
+                managerArn=launch["managerArn"], launchNotInvoked=True, instanceIds=[], terminated=True,
+                checkedAt=datetime.now(timezone.utc).isoformat())
+            clients["s3"].put_object(Bucket=bucket, Key=proof_key, ExpectedBucketOwner="058114477594",
+                                    Body=json.dumps(proof).encode(), ContentType="application/json")
+            return fence_session(record, owner, executor_stopped=True)
         try:
             result = clients["s3"].get_object(Bucket=bucket, Key=proof_key, ExpectedBucketOwner="058114477594")
             proof_body = result["Body"].read(16 * 1024 + 1)
@@ -74,11 +116,6 @@ def prepare_takeover(clients, record, owner, bucket):
                         and private["deploymentExecutor"]["instanceId"] not in proof["instanceIds"])
                     or (expected_instance is not None and expected_instance not in proof["instanceIds"])):
                 raise ValueError("Executor termination proof does not match the admitted launch")
-        elif private.get("deploymentExecutor", {}).get("instanceId"):
-            recorded = private["deploymentExecutor"]["instanceId"]
-            if expected_instance is not None and expected_instance != recorded:
-                raise ValueError("Lease executor differs from its private launch snapshot")
-            expected_instance = recorded
     if token is None:
         terminate_deployment_executors(clients["ec2"], record["sessionId"], expected_instance)
     else:

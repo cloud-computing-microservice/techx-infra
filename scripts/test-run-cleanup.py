@@ -140,5 +140,73 @@ class CleanupWorkerTests(unittest.TestCase):
         proofs[key] = json.dumps(changed).encode()
         with self.assertRaises(ValueError): run_cleanup.prepare_takeover(self.clients, record, "cleanup", "control-bucket")
 
+    def takeover_record(self):
+        record = initial_record("staging-123456", {key: "a" * 40 for key in ("techx-infra", "techx-chart", "techx-platform")},
+            4, "owner@example.invalid", "deploy-window", datetime.now(timezone.utc), approved_budget_usd=60)
+        record["executionVersion"] = "execution-v1"
+        return record
+
+    def test_prepared_intent_requires_terminal_manager_then_records_no_api_proof(self):
+        manager = "arn:aws:codebuild:us-east-1:058114477594:build/techx-automation-lifecycle:1234-abcd"
+        self.private["deploymentLaunch"] = dict(protocolVersion=1, phase="PREPARED", clientToken="a" * 64, managerArn=manager)
+        written = []
+        self.clients["s3"].put_object = lambda **kw: written.append(kw)
+        with patch("run_cleanup.stop_executor", return_value=True) as stop:
+            result = run_cleanup.prepare_takeover(self.clients, self.takeover_record(), "cleanup", "control-bucket")
+            stop.assert_called_once_with(self.clients["codebuild"], manager, "cleanup")
+        self.assertEqual(result["status"], "FAILED_NEEDS_CLEANUP")
+        proof = json.loads(written[0]["Body"])
+        self.assertTrue(proof["launchNotInvoked"])
+        self.assertEqual(proof["instanceIds"], [])
+        self.assertEqual(proof["managerArn"], manager)
+        written.clear()
+        with patch("run_cleanup.stop_executor", side_effect=TimeoutError("manager not terminal")), patch("run_cleanup.fence_session") as fence:
+            with self.assertRaises(TimeoutError):
+                run_cleanup.prepare_takeover(self.clients, self.takeover_record(), "cleanup", "control-bucket")
+            fence.assert_not_called()
+        self.assertFalse(written)
+
+    def test_snapshot_is_refreshed_after_stopping_manager_before_any_no_api_conclusion(self):
+        manager = "arn:aws:codebuild:us-east-1:058114477594:build/techx-automation-lifecycle:1234-abcd"
+        class Missing(Exception): pass
+        def get_object(**kw):
+            if not kw["Key"].endswith("inputs.json"): raise Missing()
+            return dict(Body=io.BytesIO(json.dumps(self.private).encode()))
+        self.clients["s3"].get_object = get_object
+        self.clients["s3"].exceptions = SimpleNamespace(NoSuchKey=Missing)
+        for prepared in (False, True):
+            self.private.pop("deploymentLaunch", None)
+            if prepared:
+                self.private["deploymentLaunch"] = dict(protocolVersion=1, phase="PREPARED", clientToken="a" * 64, managerArn=manager)
+            def stop(*args):
+                # The API may be invoked between our first read and stopping
+                # the process. Its response can be lost and EC2 still empty.
+                self.private["deploymentLaunch"] = dict(protocolVersion=1, phase="CALLING", clientToken="a" * 64, managerArn=manager)
+                return True
+            record = self.takeover_record()
+            record["lease"] = dict(owner=manager, operation="deploy", epoch=1)
+            with self.subTest(prepared=prepared), patch("run_cleanup.stop_executor", side_effect=stop), patch("run_cleanup.fence_session") as fence:
+                with self.assertRaisesRegex(ValueError, "launch outcome is unproven"):
+                    run_cleanup.prepare_takeover(self.clients, record, "cleanup", "control-bucket")
+                fence.assert_not_called()
+
+    def test_prepared_intent_cannot_bypass_manager_identity_or_conflicting_vm_proof(self):
+        self.private["deploymentLaunch"] = dict(protocolVersion=1, phase="PREPARED", clientToken="a" * 64,
+            managerArn="arn:aws:codebuild:us-east-1:058114477594:build/other:1234")
+        with self.assertRaisesRegex(ValueError, "fixed lifecycle manager"):
+            run_cleanup.prepare_takeover(self.clients, self.takeover_record(), "cleanup", "control-bucket")
+        self.private["deploymentLaunch"]["managerArn"] = "arn:aws:codebuild:us-east-1:058114477594:build/techx-automation-lifecycle:1234"
+        self.private["deploymentExecutor"] = dict(instanceId="i-1234567890abcdef0")
+        with patch("run_cleanup.stop_executor", return_value=True):
+            with self.assertRaisesRegex(ValueError, "conflicts with an executor"):
+                run_cleanup.prepare_takeover(self.clients, self.takeover_record(), "cleanup", "control-bucket")
+
+    def test_snapshot_instance_reference_is_required_even_without_a_legacy_launch_intent(self):
+        self.private["deploymentExecutor"] = dict(instanceId="i-1234567890abcdef0")
+        with patch("run_cleanup.fence_session") as fence:
+            with self.assertRaisesRegex(ValueError, "missing from scoped inventory"):
+                run_cleanup.prepare_takeover(self.clients, self.takeover_record(), "cleanup", "control-bucket")
+            fence.assert_not_called()
+
 
 if __name__ == "__main__": unittest.main()

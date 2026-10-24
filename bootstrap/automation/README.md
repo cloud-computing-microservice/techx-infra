@@ -231,8 +231,15 @@ Cleanup reads deploymentLaunch intent. It must observe the exact launch client
 token and await VM termination, storing cleanup-owned executor-proof.json before
 fencing. The proof survives EC2's terminated-instance metadata eviction. An empty
 EC2 response cannot resolve an unknown launch; preserve state/snapshot and report
-reconciliation needed rather than writing complete.json. The intent-saved/API-
-possibly-not-called reconciliation branch still needs implementation/acceptance.
+reconciliation needed rather than writing complete.json. New launch intents use
+protocolVersion 1 with PREPARED, then durably write CALLING before invoking EC2.
+Cleanup confirms the manager terminal and re-reads the snapshot before deciding:
+PREPARED with no executor reference/scoped instance proves no API call and writes
+launchNotInvoked evidence. CALLING, legacy intent or a lost checkpoint write
+remains uncertain without positive instance termination proof. An empty EC2 read
+never resolves those cases. A snapshot read before stopping the manager cannot
+justify takeover; fresh instance references must also be observed even without
+legacy launch intent. Live failure-injection acceptance remains required.
 
 Tests: manager 14, factory 6, task loader 5, approval resume 5 and runtime 20 pass,
 including SDK parameter-shape validation. Full infra verify passes in

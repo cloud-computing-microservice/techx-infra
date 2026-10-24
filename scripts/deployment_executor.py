@@ -119,8 +119,18 @@ class ExecutorFactory:
                     raise ValueError("Previous executor launch is ambiguous; cleanup required before another launch")
                 token = hashlib.sha256(f"{self.manager.execution['sessionId']}:{self.manager.version}:executor".encode()).hexdigest()
                 self.guard(epoch)
-                private["deploymentLaunch"] = dict(clientToken=token, managerArn=self.manager.owner, requestedAt=self.manager.clock().isoformat())
+                private["deploymentLaunch"] = dict(protocolVersion=1, phase="PREPARED", clientToken=token,
+                    managerArn=self.manager.owner, requestedAt=self.manager.clock().isoformat())
                 self.save(private, private_etag)  # Cleanup can discover a lost RunInstances response by exact session tags.
+                self.guard(epoch)
+                latest, private_etag = self.snapshot()
+                if latest != private:
+                    raise ValueError("Private snapshot changed before executor API dispatch")
+                # A terminal manager plus a fresh PREPARED snapshot proves the
+                # API was never invoked. CALLING must be durable before the SDK;
+                # its missing response remains uncertain and is never replayed.
+                private["deploymentLaunch"]["phase"] = "CALLING"
+                self.save(private, private_etag)
                 self.guard(epoch)
                 tags = [dict(Key=k, Value=v) for k, v in dict(Project="techx", Environment="staging", Role="deployment-executor",
                                                              SessionId=self.manager.execution["sessionId"]).items()]

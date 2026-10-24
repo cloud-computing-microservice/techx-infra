@@ -54,6 +54,7 @@ class ExecutorTests(unittest.TestCase):
             validate_parameters(kw, model.operation_model("RunInstances").input_shape)
             self.assertEqual(self.f.record["lease"]["owner"], self.f.owner)
             self.assertIn("deploymentLaunch", self.f.private)
+            self.assertEqual(self.f.private["deploymentLaunch"]["phase"], "CALLING")
             self.assertEqual(kw["MinCount"], kw["MaxCount"], 1)
             self.launched.append(kw)
             if self.run_callback: self.run_callback()
@@ -110,6 +111,19 @@ class ExecutorTests(unittest.TestCase):
         self.assertTrue(self.f.cleanup)
         with self.assertRaises(ValueError): self.factory.prepare(observations=1)
         self.assertEqual(len(self.launched), 1)
+
+    def test_interruption_after_prepared_intent_never_invokes_ec2(self):
+        original_guard = self.factory.guard
+        def interrupted(epoch):
+            if self.f.private.get("deploymentLaunch", {}).get("phase") == "PREPARED":
+                raise TimeoutError("Manager stopped before durable CALLING checkpoint")
+            return original_guard(epoch)
+        self.factory.guard = interrupted
+        with self.assertRaises(TimeoutError): self.factory.prepare(observations=1)
+        self.assertEqual(self.f.private["deploymentLaunch"]["phase"], "PREPARED")
+        self.assertFalse(self.launched)
+        self.assertTrue(self.f.cleanup)
+        self.assertNotIn("lease", self.f.record)
 
     def test_ssm_timeout_keeps_executor_reference_for_independent_cleanup(self):
         self.online = False

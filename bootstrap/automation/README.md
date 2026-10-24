@@ -257,6 +257,11 @@ remove that boundary or change its own IAM policies. Manual staging keeps a null
 boundary by default. Cleanup may remove the boundary from its own workload roles
 when deleting them.
 
+The boundary includes the ENI attribute update required by
+[AmazonEKS_CNI_Policy v6](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonEKS_CNI_Policy.html).
+The mock control-plane test guards this permission within the deployment
+account/region ceiling. It does not prove live node/CNI behavior.
+
 The control network permits HTTPS egress and VPC DNS only. The HTTPS rule has a
 local `AWS-0104` Trivy exception because dynamic AWS endpoints and signed tool
 sources are required without NAT. This is not a global scanner exemption.

@@ -254,6 +254,15 @@ run "lifecycle_is_scoped_and_pinned" {
     ]]))
     error_message = "Deployment cannot remove/change boundaries or grant arbitrary account-admin actions."
   }
+  assert {
+    # AmazonEKS_CNI_Policy v6: ENI attribute updates are required as well as
+    # attachment/address changes. Missing this ceiling permission breaks CNI.
+    condition = anytrue([for statement in jsondecode(aws_iam_policy.workload_boundary[0].policy).Statement :
+      contains(statement.Action, "ec2:ModifyNetworkInterfaceAttribute") &&
+      contains(try(tolist(statement.Resource), []), "arn:aws:ec2:us-east-1:058114477594:network-interface/*")
+    ])
+    error_message = "The scoped boundary must permit CNI ENI attribute updates."
+  }
 }
 
 run "lifecycle_requires_dependencies" {

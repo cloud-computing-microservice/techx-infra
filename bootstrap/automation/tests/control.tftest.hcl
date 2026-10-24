@@ -60,7 +60,7 @@ variables {
 run "control_off_by_default" {
   command = plan
   assert {
-    condition     = length(aws_codebuild_project.lifecycle) == 0 && length(aws_imagebuilder_image_pipeline.executor) == 0 && length(aws_vpc.executor_control) == 0
+    condition     = length(aws_codebuild_project.lifecycle) == 0 && length(aws_imagebuilder_image_pipeline.executor) == 0 && length(aws_vpc.executor_control) == 0 && length(aws_iam_role.chart_selector) == 0
     error_message = "Lifecycle compute/network/image resources must remain disabled by default."
   }
   assert {
@@ -286,6 +286,21 @@ run "lifecycle_is_scoped_and_pinned" {
       statement.Resource == "arn:aws:s3:::techx-test-control/releases/staging/*/bootstrap.json" if contains(statement.Action, "s3:PutObject")])
     )
     error_message = "Cold publish needs a separate protected OIDC subject and a scoped immutable receipt prefix."
+  }
+  assert {
+    condition = (jsondecode(aws_iam_role.chart_selector[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-infra:environment:staging-chart-select" &&
+      alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.chart_selector[0].policy).Statement : [for action in statement.Action :
+        !contains(["codebuild:StartBuild", "iam:PassRole", "ec2:RunInstances", "ecr:PutImage", "secretsmanager:GetSecretValue"], action)
+      ]]))
+    )
+    error_message = "Chart selector must have a protected subject and no deploy/publish/secret credentials authority."
+  }
+  assert {
+    condition = length([for statement in data.aws_iam_policy_document.control.statement : statement if
+      statement.sid == "OnlyChartSelectorCanWriteSelections" && statement.effect == "Deny" &&
+      contains(statement.resources, "arn:aws:s3:::techx-test-control/chart-selections/staging/*")
+    ]) == 1
+    error_message = "A bucket deny must reserve chart-selection writes for the selector role."
   }
 }
 

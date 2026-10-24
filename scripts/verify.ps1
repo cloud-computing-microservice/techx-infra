@@ -60,6 +60,8 @@ python (Join-Path $PSScriptRoot 'test-secret-recovery.py')
 if ($LASTEXITCODE -ne 0) { throw 'Secret intent recovery/completion regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-bootstrap-publish.py')
 if ($LASTEXITCODE -ne 0) { throw 'Cold publish source/CI/lease/artifact regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-chart-selection.py')
+if ($LASTEXITCODE -ne 0) { throw 'Protected chart PR/CI/tree/manifest selection tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-coordinator.py')
 if ($LASTEXITCODE -ne 0) { throw 'Lifecycle startup, cleanup-arming and uncertain-response regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-resume.py')

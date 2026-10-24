@@ -140,6 +140,21 @@ resource "aws_s3_bucket_lifecycle_configuration" "control" {
 
 data "aws_iam_policy_document" "control" {
   statement {
+    sid       = "OnlyChartSelectorCanWriteSelections"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+    resources = ["${aws_s3_bucket.control.arn}/chart-selections/staging/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = ["arn:aws:iam::058114477594:role/techx-automation-chart-selector"]
+    }
+  }
+  statement {
     sid       = "OnlyPlanBridgeCanWriteApprovals"
     effect    = "Deny"
     actions   = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]

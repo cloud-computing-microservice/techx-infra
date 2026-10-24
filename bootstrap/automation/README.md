@@ -391,3 +391,44 @@ The protected workflow, chart release PR/checks/selection, GitOps bootstrap and
 live integration remain unwired. A receipt is not a chart merge, running app or
 READY evidence. Do not create an Application pointing at moving main or reuse
 an old manifest merely because this source primitive exists.
+
+
+### Protected bootstrap chart selection (source only)
+
+`staging-chart-select.yml` and `select_bootstrap_chart.py` verify the chart before
+an Application may consume it. The workflow is manual-dispatch, trusted main,
+first attempt, exact admitted infra SHA and `LIFECYCLE_ENABLED` gated. Its separate
+`staging-chart-select` environment must restrict deployment branches to main
+before activation. Configure `AWS_CHART_SELECTOR_ROLE_ARN` and
+`TECHX_STATE_BUCKET`; its short-lived GitHub token needs read access only.
+
+Selection requires an idle PROVISIONING session, APPLIED foundation, exact
+version/hash cold-release receipt and live cleanup schedule. It verifies a merged
+same-repository chart main PR containing only `values-staging.yaml` and
+`releases/staging.json`, plus a human approval of that exact PR head. A later
+change request or latest failed/pending main CI cannot reuse an older green run.
+GitHub responses must be complete, bounded and from the fixed repository.
+
+The selected full tree may differ from the admitted chart baseline only in the
+two release files. Blob Git hashes are checked, the staged values must equal the
+approved renderer's output for the cold manifest, and the release JSON must
+match all three digests. Permission changes, linked/submodule entries, extra
+template changes, a moved main ref or cleanup takeover refuse selection.
+
+An immutable receipt is stored at
+`chart-selections/staging/<session>/bootstrap.json`, then CAS-recorded as
+`bootstrapChart`. A bucket deny reserves writes/deletes to the selector role;
+EC2 has read-only access. The role has no ECR publication, Secret access, deploy,
+StartBuild or PassRole authority. A lost session CAS can recover the original
+receipt after freshly verifying the same release/PR; an existing selection cannot
+be replaced. `read_selection` binds worker consumption to the protected version,
+checksum, source/session, release reference and reviewed CI provenance.
+
+The core proof uses GitHub's public REST contracts for
+[pull requests](https://docs.github.com/en/rest/pulls/pulls),
+[reviews](https://docs.github.com/en/rest/pulls/reviews),
+[workflow runs](https://docs.github.com/en/rest/actions/workflow-runs) and
+[Git trees/blobs](https://docs.github.com/en/rest/git/trees).
+This is source/contract verification, not live OIDC, human-review, bucket-policy
+or deployment acceptance. The caller/orchestrator, chart proposal/merge gate and
+EC2 GitOps bootstrap remain incomplete; do not treat this selection as READY.

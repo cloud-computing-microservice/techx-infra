@@ -41,6 +41,13 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(stopped, [dict(id="techx-automation-lifecycle:abcdef-1234")])
         with self.assertRaises(ValueError): stop_executor(client, "arn:aws:codebuild:elsewhere", "other")
 
+    def test_ecr_only_bootstrap_publisher_can_be_logically_fenced(self):
+        record = self.record("bootstrap-publish")
+        record["status"] = "PROVISIONING"
+        fenced = fence_session(record, "cleanup:new")
+        self.assertNotIn("lease", fenced)
+        self.assertGreater(fenced["leaseEpoch"], record["leaseEpoch"])
+
     def test_probe_ownership_is_verified_before_termination(self):
         tags = dict(Project="techx", Environment="staging", SessionId="staging-123456", Role="private-probe")
         instance = dict(InstanceId="i-probe", Tags=[dict(Key=k, Value=v) for k, v in tags.items()])

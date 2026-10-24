@@ -32,7 +32,7 @@ def fence_session(record, owner, executor_stopped=False):
     """
     validate(record)
     lease = record.get("lease", {})
-    if lease.get("owner") and lease["owner"] != owner and lease.get("operation") != "release" and not executor_stopped:
+    if lease.get("owner") and lease["owner"] != owner and lease.get("operation") not in ("release", "bootstrap-publish") and not executor_stopped:
         raise ValueError("Infrastructure executor must be confirmed stopped before cleanup takeover")
     result = dict(record, status="FAILED_NEEDS_CLEANUP", leaseEpoch=record.get("leaseEpoch", lease.get("epoch", 0)) + 1)
     result.pop("lease", None)

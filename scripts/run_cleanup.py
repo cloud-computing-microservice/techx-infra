@@ -53,7 +53,7 @@ def prepare_takeover(clients, record, owner, bucket):
     previous = lease.get("owner")
     expected_instance = None
     stopped_managers = set()
-    if previous and previous != owner and lease.get("operation") != "release":
+    if previous and previous != owner and lease.get("operation") not in ("release", "bootstrap-publish"):
         match = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", previous)
         if match:
             expected_instance = match[1]
@@ -230,7 +230,7 @@ def main():
     lease = current.get("lease", {})
     fenced = prepare_takeover(clients, current, owner, args.bucket)
     store.write(fenced, etag)
-    if lease.get("operation") == "release": time.sleep(35)  # Allow the publisher's bounded heartbeat to stop its child.
+    if lease.get("operation") in ("release", "bootstrap-publish"): time.sleep(35)  # Let the bounded publisher heartbeat stop its child.
     command = [sys.executable, str(Path(__file__)), "--execution", str(args.execution),
                "--execution-version", args.execution_version, "--bucket", args.bucket, "--worker"]
     execute(store, owner, "cleanup", session_id, command)

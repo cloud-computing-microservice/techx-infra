@@ -45,7 +45,7 @@ def validate(record: dict):
 def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, previous_owner_stopped=False):
     validate(record)
     now = now or datetime.now(timezone.utc)
-    if operation not in ("deploy", "release", "acceptance", "cleanup"):
+    if operation not in ("deploy", "release", "bootstrap-publish", "acceptance", "cleanup"):
         raise ValueError("Unknown lease operation")
     if not re.fullmatch(r"[a-zA-Z0-9:/_.-]{1,160}", owner):
         raise ValueError("Invalid lease owner")
@@ -61,6 +61,9 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
         raise ValueError("Cleanup window has started")
     if operation in ("release", "acceptance") and record["status"] != "READY":
         raise ValueError("Application operations require READY")
+    if operation == "bootstrap-publish" and (record["status"] != "PROVISIONING"
+            or record.get("stages", {}).get("foundation", {}).get("state") != "APPLIED"):
+        raise ValueError("Cold publish requires the applied foundation in PROVISIONING")
     if operation == "deploy" and record["status"] not in ("PLANNING", "PROVISIONING"):
         raise ValueError("Deploy cannot recreate an active environment")
     if operation == "cleanup" and record["status"] in ("OFF", "DESTROYED"):
@@ -94,6 +97,7 @@ def transition(record: dict, owner: str, status: str, now=None):
     allowed = {
         "deploy": {"PROVISIONING", "READY", "FAILED_NEEDS_CLEANUP"},
         "release": {"FAILED_NEEDS_CLEANUP"},
+        "bootstrap-publish": {"FAILED_NEEDS_CLEANUP"},
         "acceptance": {"TESTING", "READY", "FAILED_NEEDS_CLEANUP"},
         "cleanup": {"DESTROYING", "DESTROYED", "FAILED_NEEDS_CLEANUP"},
     }

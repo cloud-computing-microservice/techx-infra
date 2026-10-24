@@ -352,3 +352,42 @@ Local tests cover SDK parameter shapes, actual OpenSSL generation, duplicate
 prevention, lost responses, secret immutability, foreign DNS/ownership and
 cleanup retry receipts. No AWS certificate/secret API integration is accepted
 yet; this does not finish GitOps bootstrap, lifecycle workflows or A12.
+
+
+### Cold image publication (source only)
+
+`scripts/run_bootstrap_publish.py` is a Docker-capable disposable publisher entry
+point, separate from the EC2 Terraform worker. Its protected OIDC identity is
+`techx-automation-bootstrap-publisher`, subject to the platform environment
+`staging-bootstrap`. Terraform creates it only with lifecycle control enabled;
+no new flag/settings have been activated. Existing READY publishers are unchanged.
+
+The new `bootstrap-publish` lease requires PROVISIONING and an APPLIED foundation.
+The worker verifies its GitHub run identity, exact execution/source/budget/window,
+terminal successful foundation SSM task and live cleanup schedule. It downloads
+exact version/hash bundle references through the trusted archive loader, runs
+application CI, then extracts those same verified bytes again for image builds.
+It rejects linked/generated archived application source; it never reads an
+ancestor checkout's Git metadata or adds a skip-clean option to the manual
+publisher. Old platform revisions without the reviewed shared publisher core are
+rejected rather than silently falling back to another source or entry point.
+
+The platform core preserves existing immutable tags, builds only missing images
+and requires completed clean ECR scans. After validating all three digests and the
+full source SHA, cold publish stores an immutable version/hash receipt at
+`releases/staging/<session>/bootstrap.json` and CAS-records `bootstrapRelease` in
+the owned session. CI-generated files and private input snapshots are not image
+inputs. Missing source CI, changed scope, cleanup takeover or failed SSM status
+cannot publish a successful session reference.
+
+This publisher can push only existing ECR repositories and write its release
+receipt/session lease; it cannot create ECR/VPC/EKS/Secrets resources. Like a
+normal publisher, cleanup may logically fence its heartbeat while independently
+terminating the Terraform executor. Force-removal of workload ECR repositories
+prevents a detached upload from recreating them. A stale/closed invocation is
+rejected before the early-cleanup failure handler.
+
+The protected workflow, chart release PR/checks/selection, GitOps bootstrap and
+live integration remain unwired. A receipt is not a chart merge, running app or
+READY evidence. Do not create an Application pointing at moving main or reuse
+an old manifest merely because this source primitive exists.

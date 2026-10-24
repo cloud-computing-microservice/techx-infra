@@ -279,6 +279,14 @@ run "lifecycle_is_scoped_and_pinned" {
     ])
     error_message = "The resource-less ACM request action must constrain domain and forbid exportable certificates."
   }
+  assert {
+    condition = (length(aws_iam_role.bootstrap_publisher) == 1 &&
+      jsondecode(aws_iam_role.bootstrap_publisher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-platform:environment:staging-bootstrap" &&
+      alltrue([for statement in jsondecode(aws_iam_role_policy.bootstrap_publisher_control[0].policy).Statement :
+      statement.Resource == "arn:aws:s3:::techx-test-control/releases/staging/*/bootstrap.json" if contains(statement.Action, "s3:PutObject")])
+    )
+    error_message = "Cold publish needs a separate protected OIDC subject and a scoped immutable receipt prefix."
+  }
 }
 
 run "lifecycle_requires_dependencies" {

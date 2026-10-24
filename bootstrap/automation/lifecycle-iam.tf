@@ -91,7 +91,7 @@ locals {
     state = {
       Version = "2012-10-17", Statement = [
         { Effect = "Allow", Action = ["s3:ListBucket", "s3:GetBucketLocation"], Resource = aws_s3_bucket.control.arn },
-        { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [for prefix in ["executions/*", "bundles/*", "private/staging/*", "approvals/staging/*", "control/staging/tasks/*", "automation/staging/session.json", "staging/terraform.tfstate", "staging/terraform.tfstate.tflock"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
+        { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [for prefix in ["executions/*", "bundles/*", "private/staging/*", "approvals/staging/*", "releases/staging/*/bootstrap.json", "control/staging/tasks/*", "automation/staging/session.json", "staging/terraform.tfstate", "staging/terraform.tfstate.tflock"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
         { Effect = "Allow", Action = ["s3:PutObject"], Resource = [for prefix in ["private/staging/*", "automation/staging/session.json", "staging/terraform.tfstate", "staging/terraform.tfstate.tflock", "evidence/staging/*"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
         { Effect = "Allow", Action = ["s3:DeleteObject"], Resource = "${aws_s3_bucket.control.arn}/staging/terraform.tfstate.tflock" },
         { Effect = "Allow", Action = ["kms:Decrypt", "kms:GenerateDataKey"], Resource = aws_kms_key.control.arn, Condition = { StringEquals = { "kms:ViaService" = ["s3.us-east-1.amazonaws.com", "secretsmanager.us-east-1.amazonaws.com"] } } },

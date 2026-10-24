@@ -82,7 +82,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--owner", required=True)
-    parser.add_argument("--operation", choices=("deploy", "release", "acceptance", "cleanup"), required=True)
+    parser.add_argument("--operation", choices=("deploy", "release", "bootstrap-publish", "acceptance", "cleanup"), required=True)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--success-status", choices=("READY",))
     parser.add_argument("command", nargs=argparse.REMAINDER)

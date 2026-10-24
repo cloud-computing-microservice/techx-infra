@@ -38,6 +38,14 @@ class SessionTests(unittest.TestCase):
         with self.assertRaises(ValueError): transition(release, "platform:100", "DESTROYING", self.now)
         with self.assertRaises(ValueError): transition(release, "someone-else", "FAILED_NEEDS_CLEANUP", self.now)
 
+    def test_bootstrap_publishing_does_not_relax_the_ready_release_contract(self):
+        provisioning = dict(self.record, status="PROVISIONING", stages=dict(foundation=dict(state="APPLIED")))
+        cold = claim(provisioning, "platform:100", "bootstrap-publish", self.now)
+        self.assertEqual(cold["lease"]["operation"], "bootstrap-publish")
+        with self.assertRaises(ValueError): claim(provisioning, "platform:100", "release", self.now)
+        with self.assertRaises(ValueError): claim(self.record, "platform:100", "bootstrap-publish", self.now)
+        with self.assertRaises(ValueError): transition(cold, "platform:100", "READY", self.now)
+
     def test_conditional_write_conflict_propagates(self):
         calls = []
         def fake_run(args, **kwargs):

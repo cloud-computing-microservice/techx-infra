@@ -11,7 +11,8 @@ def command(infra, directory, bucket, version, environment):
     mode = environment.get("TECHX_MODE", "prepare")
     stage = environment.get("TECHX_PLAN_STAGE", "foundation")
     attempt = environment.get("TECHX_PLAN_ATTEMPT", "1")
-    if mode not in ("prepare", "plan", "apply") or stage not in ("foundation", "edge") or not re.fullmatch(r"[1-9][0-9]{0,5}", attempt):
+    valid = mode in ("prepare", "plan", "apply") and stage in ("foundation", "edge") or (mode, stage, attempt) == ("bootstrap", "gitops", "1")
+    if not valid or not re.fullmatch(r"[1-9][0-9]{0,5}", attempt):
         raise ValueError("Unsupported typed lifecycle operation")
     return ["python", str(infra / "scripts/run_lifecycle_manager.py"), mode, "--stage", stage, "--attempt", attempt,
             "--execution", str(directory / "execution.json"), "--execution-version", version, "--bucket", bucket]

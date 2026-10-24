@@ -113,6 +113,24 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(pointer["commandId"], self.command_id)
         self.assertFalse(self.cleanup)
 
+    def test_bootstrap_dispatch_pins_selection_and_refuses_a_second_attempt(self):
+        self.record.update(status="PROVISIONING", stages=dict(foundation=dict(state="APPLIED")),
+            bootstrapChart=dict(key=f"chart-selections/staging/{self.record['sessionId']}/bootstrap.json", versionId="selection-v1", sha256="c" * 64))
+        pointer = self.manager.dispatch(self.private, "bootstrap", "gitops", 1)
+        task = read_task(self.clients["s3"], "control-bucket", self.record, pointer["taskId"], self.now)
+        self.assertEqual(task["expectedBootstrapChart"], self.record["bootstrapChart"])
+        self.assertEqual(pointer["expectedBootstrapChart"], task["expectedBootstrapChart"])
+        self.assertEqual(self.sent[0]["Parameters"], dict(TaskId=[pointer["taskId"]]))
+        self.record["bootstrapChart"]["sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "selection changed"):
+            read_task(self.clients["s3"], "control-bucket", self.record, pointer["taskId"], self.now)
+
+    def test_edge_dispatch_refuses_foundation_without_gitops_readiness(self):
+        self.record.update(status="PROVISIONING", stages=dict(foundation=dict(state="APPLIED")))
+        with self.assertRaisesRegex(ValueError, "GitOps readiness"):
+            self.manager.dispatch(self.private, "plan", "edge", 1)
+        self.assertFalse(self.sent)
+
     def test_single_consumer_cas_blocks_duplicate_delivery_and_wrong_instance(self):
         pointer = self.dispatch()
         with self.assertRaises(ValueError): claim_task(self.store, self.clients["s3"], "control-bucket", pointer["taskId"], "i-00000000", self.now)

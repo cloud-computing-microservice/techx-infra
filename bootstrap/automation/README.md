@@ -190,7 +190,7 @@ IAM/network/AWS behavior is not yet accepted and automation stays disabled.
 
 ### Manager, executor and task loaders (source only)
 
-`scripts/run_lifecycle_manager.py` now exposes typed prepare/plan/apply modes.
+`scripts/run_lifecycle_manager.py` now exposes typed prepare/plan/apply/bootstrap modes.
 `deployment_executor.py` verifies the pinned account-owned AMI/bootstrap digest,
 exact launch-template version, t3.small with standard CPU credits, 20 GiB encrypted
 delete-on-termination root disk, IMDSv2, owned control VPC, no inbound rules,
@@ -328,7 +328,7 @@ and the CA certificate are stored in a session-scoped Secrets Manager secret
 with the control KMS key and a fixed version token. No PEM or API key enters
 Terraform variables, S3 input snapshots, task output or public artifacts. The
 Order API key primitive similarly creates/reuses one immutable secret; its
-Kubernetes injection will be wired in the subsequent GitOps stage.
+Kubernetes injection is implemented by the bounded GitOps stage described below; it has not been accepted live.
 
 CreateSecret retries reuse the original current version. A known secret that
 vanishes is rejected, never recreated/rotated by retry. PREPARED/CALLING intent
@@ -387,8 +387,9 @@ terminating the Terraform executor. Force-removal of workload ECR repositories
 prevents a detached upload from recreating them. A stale/closed invocation is
 rejected before the early-cleanup failure handler.
 
-The protected workflow, chart release PR/checks/selection, GitOps bootstrap and
-live integration remain unwired. A receipt is not a chart merge, running app or
+The cold-publisher workflow caller, chart proposal/merge coordination and live
+integration remain unwired. Protected chart selection and the EC2 GitOps worker
+now have source implementations below. A receipt is not a chart merge, running app or
 READY evidence. Do not create an Application pointing at moving main or reuse
 an old manifest merely because this source primitive exists.
 
@@ -431,4 +432,47 @@ The core proof uses GitHub's public REST contracts for
 [Git trees/blobs](https://docs.github.com/en/rest/git/trees).
 This is source/contract verification, not live OIDC, human-review, bucket-policy
 or deployment acceptance. The caller/orchestrator, chart proposal/merge gate and
-EC2 GitOps bootstrap remain incomplete; do not treat this selection as READY.
+live EC2 GitOps acceptance remain incomplete; do not treat this selection as READY.
+
+
+### Bounded EC2 GitOps bootstrap (source only)
+
+The manager/SSM loaders accept only `bootstrap --stage gitops --attempt 1` for
+this operation. Its immutable task pins the protected `bootstrapChart` reference;
+a changed selection, consumed attempt, active edge stage or cleanup takeover
+cannot execute. Existing plan/apply actions keep their approval contract. The
+updated baked loader changes the AMI loader/build hash: a newly reviewed image
+and executor config are required before activating this path.
+
+`run_gitops_bootstrap.py` holds the deploy heartbeat while `gitops_bootstrap.py`
+verifies the dedicated EC2 identity, active tagged EKS cluster, regional ARN,
+version and exact executor public /32. It builds an isolated private kubeconfig
+with the AWS token exec provider and explicit context, discarding ambient
+Kubernetes/Helm settings. Every kubectl call has a bounded timeout and rechecks
+the task, lease, immutable release, budget and independent cleanup schedule.
+
+After controller readiness, it creates the namespace policy/readiness labels
+before pods, and injects the session's immutable Order key from Secrets Manager.
+Secret data travels on stdin, with captured output; it is never an argument,
+last-applied annotation or task result. Existing objects require session ownership
+in an annotation (full session IDs may exceed Kubernetes label length). An
+existing Secret must be immutable with the same key; bootstrap never rotates it.
+The Application is derived from the admitted baseline, but selects the protected
+full chart SHA instead of moving main. It cannot overwrite another session's
+Application or a different existing spec.
+
+Completion requires exact Argo revision + Synced/Healthy, all three deployments
+and running container digests, ready pods, and true frontend ALB readiness gates.
+Cold pods created before a TargetGroupBinding may receive one durably recorded
+frontend restart after that binding exists. Missing gates cannot trigger an
+unbounded restart loop. The two ingresses must resolve to the same active,
+internal, tagged staging ALB in the cluster VPC. Only then is its ARN persisted
+privately and a BOOTSTRAPPED checkpoint written. Edge planning/apply refuses
+missing readiness or a different private ALB ARN. SSM success alone is insufficient.
+
+The worker does not publish READY. Orchestration, public/private acceptance,
+Client VPN end-to-end verification, rollback and cloud integration remain due.
+The tests use controlled SDK/kubectl responses, not a running Kubernetes cluster.
+See [Kubernetes credential plugins](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#client-go-credential-plugins),
+[ALB pod readiness gates](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/deploy/pod_readiness_gate/)
+and [Argo CD declarative setup](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/).

@@ -46,8 +46,9 @@ def admitted_task(client, bucket, task_id, instance_id, now):
     digest = hashlib.sha256(json.dumps(task, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     if (digest != ref.get("sha256") or task.get("schemaVersion") != 1 or task.get("taskId") != task_id
             or task.get("sessionId") != record.get("sessionId") or task.get("executionVersion") != record.get("executionVersion")
-            or task.get("instanceId") != instance_id or task.get("mode") not in ("plan", "apply")
-            or task.get("stage") not in ("foundation", "edge") or type(task.get("attempt")) is not int or task["attempt"] < 1):
+            or task.get("instanceId") != instance_id
+            or (task.get("mode"), task.get("stage")) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops")}
+            or type(task.get("attempt")) is not int or task["attempt"] < 1):
         raise ValueError("Task intent differs from the admitted pointer")
     def utc(value):
         value = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -93,7 +94,8 @@ def run_task(clients, bucket, kms, task_id, base, *, run=subprocess.run, clock=N
     try:
         with log.open("xb") as output:
             log.chmod(0o600)
-            run([sys.executable, str(infra / "scripts/run_lifecycle_stage.py"), task["mode"], "--stage", task["stage"],
+            worker = "run_gitops_bootstrap.py" if task["mode"] == "bootstrap" else "run_lifecycle_stage.py"
+            run([sys.executable, str(infra / "scripts" / worker), task["mode"], "--stage", task["stage"],
                  "--attempt", str(task["attempt"]), "--execution", str(directory / "execution.json"),
                  "--execution-version", task["executionVersion"], "--bucket", bucket, "--kms-key", kms,
                  "--task-id", task_id], check=True, stdout=output, stderr=subprocess.STDOUT)

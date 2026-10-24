@@ -16,6 +16,35 @@ CONFIG_FIELDS = {"schemaVersion", "imageId", "launchTemplateId", "launchTemplate
                  "loaderSha256", "imageBuildSha256", "documentVersion", "documentSha256"}
 
 
+def bootstrap_reference(record):
+    ref = record.get("bootstrapChart", {})
+    if (not isinstance(ref, dict) or set(ref) != {"key", "versionId", "sha256"}
+            or ref.get("key") != f"chart-selections/staging/{record['sessionId']}/bootstrap.json"
+            or not re.fullmatch(r"[a-f0-9]{64}", ref.get("sha256", ""))):
+        raise ValueError("GitOps requires a protected immutable chart selection")
+    version(ref.get("versionId"))
+    return ref
+
+
+def validate_bootstrap(record, attempt):
+    if (record.get("status") != "PROVISIONING" or attempt != 1 or record.get("pendingPlan") is not None
+            or record.get("stages", {}).get("foundation", {}).get("state") != "APPLIED"
+            or record.get("stages", {}).get("edge") or record.get("stages", {}).get("gitops")):
+        raise ValueError("GitOps requires a completed foundation and one unconsumed bootstrap attempt")
+    return bootstrap_reference(record)
+
+
+def validate_gitops_checkpoint(record):
+    stage = record.get("stages", {}).get("gitops", {})
+    if (stage.get("state") != "BOOTSTRAPPED" or stage.get("attempt") != 1
+            or stage.get("selectionReference") != bootstrap_reference(record)
+            or stage.get("releaseReference") != record.get("bootstrapRelease")
+            or not re.fullmatch(r"[a-f0-9]{40}", stage.get("chartSha", ""))
+            or not re.fullmatch(rf"arn:aws:elasticloadbalancing:us-east-1:{ACCOUNT}:loadbalancer/app/[A-Za-z0-9-]+/[a-f0-9]+", stage.get("internalAlbArn", ""))):
+        raise ValueError("Edge requires the durable GitOps readiness checkpoint")
+    return stage
+
+
 def executor_config(config):
     if not isinstance(config, dict) or set(config) != CONFIG_FIELDS or config["schemaVersion"] != 1:
         raise ValueError("A complete versioned deployment executor configuration is required")
@@ -30,7 +59,8 @@ def executor_config(config):
 
 def validate_task(task, record, now):
     validate(record)
-    if not isinstance(task, dict) or set(task) != TASK_FIELDS or task["schemaVersion"] != 1:
+    fields = TASK_FIELDS | ({"expectedBootstrapChart"} if isinstance(task, dict) and task.get("mode") == "bootstrap" else set())
+    if not isinstance(task, dict) or set(task) != fields or task["schemaVersion"] != 1:
         raise ValueError("Unsupported deployment task schema")
     if not re.fullmatch(r"[a-f0-9]{32}", task["taskId"]) or not re.fullmatch(MANAGER, task["managerArn"]):
         raise ValueError("Invalid task/manager identity")
@@ -42,8 +72,11 @@ def validate_task(task, record, now):
         raise ValueError("Task does not belong to the active admitted session")
     if not utc(task["createdAt"]) <= now < utc(task["expiresAt"]) <= utc(record["cleanupStartAt"]):
         raise ValueError("Task expired or enters the cleanup window")
-    if task["mode"] not in ("plan", "apply") or task["stage"] not in ("foundation", "edge") or type(task["attempt"]) is not int or task["attempt"] < 1:
+    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops")}
+            or type(task["attempt"]) is not int or task["attempt"] < 1):
         raise ValueError("Unsupported deployment task action")
+    if task["mode"] == "bootstrap" and task["expectedBootstrapChart"] != bootstrap_reference(record):
+        raise ValueError("Bootstrap task selection changed after dispatch")
     if task["mode"] == "apply":
         pending = task["expectedPendingPlan"]
         if (not isinstance(pending, dict) or record.get("pendingPlan") != pending
@@ -60,10 +93,14 @@ def create_task(client, bucket, record, execution_version, instance_id, owner, m
                 instanceId=instance_id, managerArn=owner, mode=mode, stage=stage, attempt=attempt,
                 createdAt=now.isoformat(), expiresAt=min(utc(record["cleanupStartAt"]), now + timedelta(minutes=90)).isoformat(),
                 expectedPendingPlan=deepcopy(record.get("pendingPlan")) if mode == "apply" else None)
+    if mode == "bootstrap":
+        task["expectedBootstrapChart"] = deepcopy(validate_bootstrap(record, attempt))
     validate_task(task, record, now)
     ref = immutable_json(client, bucket, f"control/staging/tasks/{task_id}.json", task)
-    return task, dict(taskId=task_id, instanceId=instance_id, managerArn=owner, mode=mode, stage=stage, attempt=attempt,
-                      reference=dict(ref, sha256=checksum(task)), state="DISPATCHING")
+    pointer = dict(taskId=task_id, instanceId=instance_id, managerArn=owner, mode=mode, stage=stage, attempt=attempt,
+                   reference=dict(ref, sha256=checksum(task)), state="DISPATCHING")
+    if mode == "bootstrap": pointer["expectedBootstrapChart"] = deepcopy(task["expectedBootstrapChart"])
+    return task, pointer
 
 
 def read_task(client, bucket, record, task_id, now):
@@ -78,6 +115,8 @@ def read_task(client, bucket, record, task_id, now):
     validate_task(task, record, now)
     if any(pointer.get(key) != task[key] for key in ("taskId", "instanceId", "managerArn", "mode", "stage", "attempt")):
         raise ValueError("Task pointer differs from immutable intent")
+    if task["mode"] == "bootstrap" and pointer.get("expectedBootstrapChart") != task["expectedBootstrapChart"]:
+        raise ValueError("Bootstrap pointer differs from immutable selection intent")
     return task
 
 
@@ -99,7 +138,11 @@ def validate_result(record, task):
     stage = record.get("stages", {}).get(task["stage"], {})
     if stage.get("attempt") != task["attempt"]:
         raise ValueError("Remote task did not complete its expected stage attempt")
-    if task["mode"] == "plan":
+    if task["mode"] == "bootstrap":
+        validate_gitops_checkpoint(record)
+        if stage.get("selectionReference") != task.get("expectedBootstrapChart"):
+            raise ValueError("Bootstrap completed a different chart selection")
+    elif task["mode"] == "plan":
         ref = stage.get("reviewReference")
         if (stage.get("state") != "AWAITING_APPROVAL" or not isinstance(ref, dict) or ref != record.get("pendingPlan")
                 or any(ref.get(key) != task[key] for key in ("stage", "attempt")) or ref.get("sessionId") != record["sessionId"]

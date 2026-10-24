@@ -110,6 +110,10 @@ class ResumeTests(unittest.TestCase):
         infra, directory = Path("/verified/source/techx-infra"), Path("/verified")
         result = command(infra, directory, "control-bucket", "execution-version", {})
         self.assertEqual(result[2], "prepare")
+        bootstrap = command(infra, directory, "control-bucket", "execution-version", dict(TECHX_MODE="bootstrap", TECHX_PLAN_STAGE="gitops"))
+        self.assertEqual(bootstrap[2], "bootstrap")
+        with self.assertRaises(ValueError):
+            command(infra, directory, "control-bucket", "execution-version", dict(TECHX_MODE="bootstrap", TECHX_PLAN_STAGE="foundation"))
         for key, value in dict(TECHX_MODE="bash", TECHX_PLAN_STAGE="edge; bad", TECHX_PLAN_ATTEMPT="1; bad").items():
             with self.subTest(key=key), self.assertRaises(ValueError): command(infra, directory, "control-bucket", "execution-version", {key: value})
 

@@ -80,6 +80,11 @@ class LifecycleStageWorker:
             validate_planning(record, stage, attempt)
         if mode == "apply" and (checkpoint.get("state") != "AWAITING_APPROVAL" or checkpoint.get("attempt") != attempt):
             raise ValueError("Apply requires the current unconsumed stage attempt")
+        if stage == "edge":
+            from deployment_tasks import validate_gitops_checkpoint
+            gitops = validate_gitops_checkpoint(record)
+            if self.runtime.private["terraformVars"].get("internal_alb_arn") != gitops["internalAlbArn"]:
+                raise ValueError("Edge private inputs differ from the observed GitOps ALB")
         self.runtime.initialize()
         self.guard(owner, epoch)
         if mode == "plan" and stage == "foundation":

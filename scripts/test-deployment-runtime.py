@@ -398,12 +398,18 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(self.calls)
         self.approve(self.perform())
         self.perform("apply")
+        with self.assertRaisesRegex(ValueError, "GitOps readiness"): self.perform(stage="edge")
         # Model the separate bootstrap producer persisting its observed ALB/PKI
         # outputs. This fixture is not evidence that cloud bootstrap is built.
         self.current_private["terraformVars"].update(
             internal_alb_arn=f"arn:aws:elasticloadbalancing:us-east-1:{ACCOUNT}:loadbalancer/app/techx/1234",
             client_vpn_server_certificate_arn=self.private["terraformVars"]["public_certificate_arn"],
             client_vpn_root_certificate_arn=self.private["terraformVars"]["public_certificate_arn"])
+        self.record["bootstrapRelease"] = dict(key="release", versionId="release-v1", sha256="d" * 64)
+        self.record["bootstrapChart"] = dict(key=f"chart-selections/staging/{self.record['sessionId']}/bootstrap.json", versionId="chart-v1", sha256="e" * 64)
+        self.record["stages"]["gitops"] = dict(state="BOOTSTRAPPED", attempt=1, chartSha="f" * 40,
+            selectionReference=deepcopy(self.record["bootstrapChart"]), releaseReference=deepcopy(self.record["bootstrapRelease"]),
+            internalAlbArn=self.current_private["terraformVars"]["internal_alb_arn"])
         self.private = deepcopy(self.current_private)
         self.runtime = self.create()
         self.worker = LifecycleStageWorker(self.runtime, self.store, "execution-version", clock=lambda: self.now)

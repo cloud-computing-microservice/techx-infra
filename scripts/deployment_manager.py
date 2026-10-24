@@ -163,6 +163,12 @@ class DeploymentManager:
         from lifecycle_stage import validate_planning
         if mode == "plan":
             validate_planning(record, stage, attempt)
+            if stage == "edge":
+                from deployment_tasks import validate_gitops_checkpoint
+                validate_gitops_checkpoint(record)
+        elif mode == "bootstrap" and stage == "gitops":
+            from deployment_tasks import validate_bootstrap
+            validate_bootstrap(record, attempt)
         elif (mode != "apply" or record.get("stages", {}).get(stage, {}).get("state") != "AWAITING_APPROVAL"
                 or record["stages"][stage].get("attempt") != attempt or record.get("pendingPlan", {}).get("stage") != stage):
             raise ValueError("Task requires a supported plan or pending apply stage")

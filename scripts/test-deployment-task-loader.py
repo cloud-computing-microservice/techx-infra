@@ -61,6 +61,25 @@ class TaskLoaderTests(unittest.TestCase):
         self.f.clients["s3"].get_object = wrong_version
         with self.assertRaises(ValueError): admitted_task(*self.args)
 
+    def test_bootstrap_loader_calls_only_the_fixed_gitops_worker_and_requires_its_receipt(self):
+        from deployment_tasks import create_task
+        self.f.record.pop("deploymentTask")
+        self.f.record.update(status="PROVISIONING", stages=dict(foundation=dict(state="APPLIED")),
+            bootstrapChart=dict(key=f"chart-selections/staging/{self.f.record['sessionId']}/bootstrap.json", versionId="selection-v1", sha256="e" * 64),
+            bootstrapRelease=dict(key="release", versionId="release-v1", sha256="f" * 64))
+        _, self.pointer = create_task(self.f.clients["s3"], "control-bucket", self.f.record, "execution-v1", self.f.instance_id,
+            self.f.owner, "bootstrap", "gitops", 1, "9" * 32, self.f.now)
+        self.f.record["deploymentTask"] = self.pointer
+        def child(command, **kw):
+            self.assertTrue(command[1].endswith("run_gitops_bootstrap.py"))
+            self.assertEqual(command[2], "bootstrap")
+            self.f.record["stages"]["gitops"] = dict(state="BOOTSTRAPPED", attempt=1, chartSha="b" * 40,
+                selectionReference=deepcopy(self.f.record["bootstrapChart"]), releaseReference=deepcopy(self.f.record["bootstrapRelease"]),
+                internalAlbArn="arn:aws:elasticloadbalancing:us-east-1:058114477594:loadbalancer/app/techx/123abc")
+            return SimpleNamespace(returncode=0)
+        self.execute(child)
+        self.assertEqual(self.f.record["deploymentTask"]["state"], "SUCCEEDED")
+
     def child_command(self, command, **kw):
         self.assertEqual(self.f.record["deploymentTask"]["state"], "RUNNING")
         self.assertEqual(command[command.index("--task-id") + 1], self.pointer["taskId"])

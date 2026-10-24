@@ -82,6 +82,9 @@ class LifecycleStageWorker:
             raise ValueError("Apply requires the current unconsumed stage attempt")
         self.runtime.initialize()
         self.guard(owner, epoch)
+        if mode == "plan" and stage == "foundation":
+            self.runtime.prepare_bootstrap(lambda: self.guard(owner, epoch))
+            self.guard(owner, epoch)
         self.runtime.configure(stage, planning=mode == "plan")
         if mode == "plan":
             self.guard(owner, epoch)
@@ -144,7 +147,12 @@ def main():
     parser.add_argument("--worker", action="store_true")
     args = parser.parse_args()
     import boto3
-    clients = {name: boto3.client(name, region_name="us-east-1") for name in ("s3", "sts", "ec2", "scheduler")}
+    from botocore.config import Config
+    # ImportCertificate has no idempotency token: the SDK must not retry a lost
+    # response internally before our durable intent can reconcile it.
+    clients = {name: boto3.client(name, region_name="us-east-1",
+        **({"config": Config(retries={"total_max_attempts": 1, "mode": "standard"})} if name == "acm" else {})) for name in
+        ("s3", "sts", "ec2", "scheduler", "acm", "secretsmanager", "resourcegroupstaggingapi")}
     local = json.loads(args.execution.read_bytes())
     execution, _ = read_json(clients["s3"], args.bucket, f"executions/{local['sessionId']}.json", args.execution_version)
     if local != execution:

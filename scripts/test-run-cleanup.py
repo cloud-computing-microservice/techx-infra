@@ -60,6 +60,18 @@ class CleanupWorkerTests(unittest.TestCase):
         self.assertNotIn("shared-secret", self.events)
         self.assertLess(self.events.index("dns-proof"), self.events.index("teardown"))
 
+    def test_unresolved_certificate_receipt_does_not_block_deleting_workload_but_cannot_complete(self):
+        with patch("run_cleanup.reconcile_certificates", return_value=({}, ["client-vpn-reference"])):
+            with self.assertRaisesRegex(ValueError, "outcomes remain unproven"):
+                self.work()
+        self.assertIn("teardown", self.events)
+
+    def test_unresolved_secret_receipt_prevents_completion_after_workload_deletion(self):
+        with patch("run_cleanup.reconcile_secrets", return_value=([], ["vpn-pki"])):
+            with self.assertRaisesRegex(ValueError, "Secret mutation outcomes remain unproven"):
+                self.work()
+        self.assertIn("teardown", self.events)
+
     def test_storefront_removal_precedes_edge_teardown(self):
         self.private["dnsMutationAttempted"] = True
         with patch("run_cleanup.remove_owned_shop", side_effect=lambda *args: self.events.append("remove-shop")):

@@ -191,6 +191,7 @@ resource "aws_ssm_document" "deployment_task" {
     mainSteps = [{
       action = "aws:runShellScript", name = "runTask", precondition = { StringEquals = ["platformType", "Linux"] }
       inputs = { timeoutSeconds = "5400", runCommand = [
+        "export CLOUDFLARE_SECRET_ARN='${var.cloudflare_secret_arn}'",
         "set -eu",
         "cd /opt/techx/bootstrap",
         "printf '%s  %s\\n' '${local.executor_loader_sha256}' SHA256SUMS | sha256sum --check --status",

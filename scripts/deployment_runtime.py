@@ -16,6 +16,7 @@ from urllib.request import urlopen
 
 from automation_inputs import validate_variables
 from automation_session import validate
+from bootstrap_assets import AssetBootstrap
 from lifecycle_stage import apply_saved_plan
 from plan_approval import digest
 from plan_review_store import summarize_changes
@@ -113,6 +114,10 @@ class TerraformRuntime:
 
     def command(self, *args):
         return self.run(["terraform", f"-chdir={self.root}", *args], env=self.env, check=True, capture_output=True)
+
+    def prepare_bootstrap(self, guard):
+        self.executor()
+        AssetBootstrap(self, guard).prepare()
 
     def initialize(self):
         self.executor()

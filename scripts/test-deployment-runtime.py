@@ -255,6 +255,11 @@ class RuntimeTests(unittest.TestCase):
 
     def flow(self):
         """Use actual runtime, stage worker, approval store and controller together."""
+        # Asset SDK/PKI behavior is exercised by test-bootstrap-assets.py.
+        # Here keep the existing certificate fixture and prove worker ordering.
+        bootstrap = patch("deployment_runtime.AssetBootstrap")
+        self.asset_bootstrap = bootstrap.start()
+        self.addCleanup(bootstrap.stop)
         self.now = datetime.now(timezone.utc)
         self.owner = f"arn:aws:ec2:us-east-1:{ACCOUNT}:instance/{self.instance['InstanceId']}"
         self.record = claim(self.execution, self.owner, "deploy", now=self.now)
@@ -345,6 +350,14 @@ class RuntimeTests(unittest.TestCase):
         self.record["executionVersion"] = "new-version"
         with self.assertRaises(ValueError): self.perform()
         self.assertFalse(self.calls)
+
+    def test_flow_bootstrap_failure_cannot_publish_a_foundation_plan(self):
+        self.flow()
+        self.asset_bootstrap.return_value.prepare.side_effect = TimeoutError("ACM receipt unresolved")
+        with self.assertRaises(TimeoutError): self.perform()
+        self.asset_bootstrap.return_value.prepare.assert_called_once()
+        self.assertNotIn("pendingPlan", self.record)
+        self.assertFalse(any(command[2:3] == ["plan"] for command, _ in self.calls))
 
     def test_flow_publish_cas_failure_recovers_original_review_without_replan_or_expiry_extension(self):
         self.flow()

@@ -129,11 +129,14 @@ def terminate_deployment_executors(ec2, session_id, expected_instance_id=None, *
     return dict(instanceIds=sorted(found), launchObserved=launch_observed)
 
 
-def delete_session_secrets(client, session_id):
+def delete_session_secrets(client, session_id, known_secrets=()):
     prefix = f"techx/staging/{session_id}/"
     response = client.list_secrets(Filters=[dict(Key="name", Values=[prefix])], IncludePlannedDeletion=True)
     if response.get("NextToken"): raise ValueError("Unexpected secret inventory pagination")
-    for secret in response.get("SecretList", []):
+    # Exact recovered receipts bypass ListSecrets propagation delay, while the
+    # list still catches a creation whose response was lost before persistence.
+    combined = {secret["ARN"]: secret for secret in [*response.get("SecretList", []), *known_secrets]}
+    for secret in combined.values():
         tags = {item["Key"]: item["Value"] for item in secret.get("Tags", [])}
         if (not secret.get("Name", "").startswith(prefix) or tags.get("SessionId") != session_id
                 or tags.get("Project") != "techx" or tags.get("Environment") != "staging"

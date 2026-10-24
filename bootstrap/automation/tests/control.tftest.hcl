@@ -174,6 +174,14 @@ run "cleanup_control_is_project_scoped" {
     error_message = "Cleanup log policy must cover the actual /aws/client-vpn module log path."
   }
   assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_iam_policy.cleanup_executor["storage"].policy).Statement :
+      contains(statement.Action, "s3:GetObject") &&
+      contains(try(tolist(statement.Resource), []), "arn:aws:s3:::techx-test-control/cleanup/*")
+    ])
+    error_message = "Cleanup must be able to read its durable executor/certificate receipts on retry."
+  }
+  assert {
     condition = alltrue(flatten([
       for policy in aws_iam_policy.cleanup_executor : [
         for statement in jsondecode(policy.policy).Statement :
@@ -262,6 +270,14 @@ run "lifecycle_is_scoped_and_pinned" {
       contains(try(tolist(statement.Resource), []), "arn:aws:ec2:us-east-1:058114477594:network-interface/*")
     ])
     error_message = "The scoped boundary must permit CNI ENI attribute updates."
+  }
+  assert {
+    condition = anytrue([for statement in jsondecode(aws_iam_policy.deployment_executor["edge"].policy).Statement :
+      contains(statement.Action, "acm:RequestCertificate") && statement.Resource == "*" &&
+      try(statement.Condition.StringEquals["acm:Export"] == "DISABLED", false) &&
+      try(statement.Condition["ForAllValues:StringEquals"]["acm:DomainNames"] == ["shop.dinhminhkhoa.id.vn"], false)
+    ])
+    error_message = "The resource-less ACM request action must constrain domain and forbid exportable certificates."
   }
 }
 

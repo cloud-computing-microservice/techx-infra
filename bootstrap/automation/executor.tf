@@ -14,7 +14,7 @@ locals {
       Version = "2012-10-17", Statement = [
         { Effect = "Allow", Action = ["s3:ListBucket", "s3:GetBucketLocation"], Resource = aws_s3_bucket.control.arn },
         { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [
-          "${aws_s3_bucket.control.arn}/executions/*", "${aws_s3_bucket.control.arn}/bundles/*",
+          "${aws_s3_bucket.control.arn}/executions/*", "${aws_s3_bucket.control.arn}/bundles/*", "${aws_s3_bucket.control.arn}/cleanup/*",
           "${aws_s3_bucket.control.arn}/private/staging/*", "${aws_s3_bucket.control.arn}/staging/terraform.tfstate",
           "${aws_s3_bucket.control.arn}/staging/terraform.tfstate.tflock", "${aws_s3_bucket.control.arn}/automation/staging/session.json"
         ] },
@@ -26,6 +26,7 @@ locals {
         { Effect = "Allow", Action = ["kms:Decrypt", "kms:GenerateDataKey"], Resource = aws_kms_key.control.arn,
         Condition = { StringEquals = { "kms:ViaService" = ["s3.us-east-1.amazonaws.com", "secretsmanager.us-east-1.amazonaws.com"] } } },
         { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = var.cloudflare_secret_arn },
+        { Effect = "Allow", Action = ["secretsmanager:DescribeSecret"], Resource = "arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/staging/*" },
         { Effect = "Allow", Action = ["secretsmanager:DeleteSecret"], Resource = "arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/staging/*",
         Condition = { StringEquals = { "aws:ResourceTag/Project" = "techx", "aws:ResourceTag/Environment" = "staging" } } }
       ]

@@ -67,7 +67,7 @@ policy against the actual private JSON before applying that binary plan.
 The worker initializes the reviewed remote backend, observes real
 state/config/network identity, enforces the toolchain and maintains its
 lease. Terraform now defines the gated worker/project/IAM below;
-certificate/bootstrap stages and actual service integration still need completion. In particular, resuming a CodeBuild job after
+certificate/PKI assets now run before foundation planning; GitOps bootstrap and actual service integration still need completion. In particular, resuming a CodeBuild job after
 approval must not copy the planner's public IP: differing observed `/32` values
 require replan. Use a stable deployment executor across plan/review/apply if
 separate CodeBuild executions cannot satisfy this contract.
@@ -308,3 +308,47 @@ SSM networking still require live acceptance. Keep toggles off until all gates
 in the workspace CI/CD plan are met; an expired demo authorization cannot fund a
 new build/apply. Budget estimates include a build allowance and retained AMI
 snapshot allowance, not a spending stop.
+
+
+### Cold-start certificate and secret assets (source only)
+
+Foundation planning now invokes `bootstrap_assets.py` under the deployment lease
+and verified cleanup schedule, after backend/toolchain initialization. The fixed
+SSM document supplies only the reviewed Cloudflare secret ARN, never its token.
+The worker requests the storefront certificate with DNS validation and export
+explicitly disabled. Request IAM uses exact domain/region/key/validation/tag
+conditions because this action has no resource-level support in the current
+[service authorization table](https://docs.aws.amazon.com/service-authorization/latest/reference/list_acm.html).
+Existing matching DNS validation records from another owner are reused read-only;
+only session-owned validation intents are eligible for cleanup.
+
+VPN PKI is generated with the existing OpenSSL helper in a private temporary
+directory outside source. The CA private key is not retained. Server/client keys
+and the CA certificate are stored in a session-scoped Secrets Manager secret
+with the control KMS key and a fixed version token. No PEM or API key enters
+Terraform variables, S3 input snapshots, task output or public artifacts. The
+Order API key primitive similarly creates/reuses one immutable secret; its
+Kubernetes injection will be wired in the subsequent GitOps stage.
+
+CreateSecret retries reuse the original current version. A known secret that
+vanishes is rejected, never recreated/rotated by retry. PREPARED/CALLING intent
+is persisted before generation/API dispatch; an uncertain prior intent cannot
+be downgraded after an empty read. Deployment IAM has no PutSecretValue grant.
+Both VPN ACM imports include session/role tags and are verified against stored
+PEM. ACM SDK retries are disabled because ImportCertificate has no idempotency
+token. A lost receipt is recovered by exact session/role discovery; empty or
+ambiguous discovery never authorizes another import/request.
+
+`certificate_recovery.py` and `secret_recovery.py` persist exact receipts under
+cleanup-owned keys before deletion. Cleanup can delete named secrets even while
+ListSecrets has not caught up. After a lost receipt, an empty read does not prove
+creation never happened. Cleanup still removes known workload resources but
+cannot emit completion when a certificate/secret outcome remains unproven.
+A stopped-worker PREPARED secret checkpoint may prove no create call; CALLING
+and legacy intents require positive receipts. Keep snapshots and report the
+unresolved outcome for reconciliation instead of claiming zero resources.
+
+Local tests cover SDK parameter shapes, actual OpenSSL generation, duplicate
+prevention, lost responses, secret immutability, foreign DNS/ownership and
+cleanup retry receipts. No AWS certificate/secret API integration is accepted
+yet; this does not finish GitOps bootstrap, lifecycle workflows or A12.

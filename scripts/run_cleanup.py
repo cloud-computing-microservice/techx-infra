@@ -16,6 +16,8 @@ from automation_inputs import validate_variables
 from cleanup_execution import (assert_inventory, delete_session_secrets, fence_session, remove_owned_shop,
                                restore_cleanup_access, stop_executor, terminate_deployment_executors, terminate_probes)
 from cloudflare_dns import CloudflareDNS, HOST, validate_name_target
+from certificate_recovery import reconcile_certificates
+from secret_recovery import reconcile_secrets
 from leased_command import execute
 
 
@@ -31,7 +33,8 @@ def persist_diagnostics(clients, bucket, session_id, owner, directory):
 
 def aws_clients():
     import boto3
-    return {name: boto3.client(name, region_name="us-east-1") for name in ("s3", "sts", "eks", "codebuild", "ec2", "secretsmanager")}
+    return {name: boto3.client(name, region_name="us-east-1") for name in
+        ("s3", "sts", "eks", "codebuild", "ec2", "secretsmanager", "acm", "resourcegroupstaggingapi")}
 
 
 def read_private_snapshot(clients, record, bucket):
@@ -159,10 +162,14 @@ def work(args, clients, record, directory):
     varfile = directory / "cleanup.private.tfvars.json"
     varfile.write_text(json.dumps(variables), encoding="utf-8")
     infra = Path(__file__).parents[1]
-    if private.get("certificateState"):
-        (infra / "certificate-state-staging.private.json").write_text(json.dumps(private["certificateState"]), encoding="utf-8")
+    certificate_state, unresolved_certificates = reconcile_certificates(clients, args.bucket, session_id,
+        getattr(args, "execution_version", None), private)
+    known_secrets, unresolved_secrets = reconcile_secrets(clients, args.bucket, session_id,
+        getattr(args, "execution_version", None), private)
+    if certificate_state:
+        (infra / "certificate-state-staging.private.json").write_text(json.dumps(certificate_state), encoding="utf-8")
     terminate_probes(clients["ec2"], session_id)
-    delete_session_secrets(clients["secretsmanager"], session_id)
+    delete_session_secrets(clients["secretsmanager"], session_id, known_secrets)
     with urlopen("https://checkip.amazonaws.com", timeout=15) as response: caller = response.read().decode().strip()
     restore_cleanup_access(clients["eks"], caller)
     with (directory / "teardown.private.log").open("w", encoding="utf-8") as log:
@@ -181,6 +188,10 @@ def work(args, clients, record, directory):
                             check=True, capture_output=True, text=True)
     inventory = json.loads(result.stdout)
     assert_inventory(inventory)
+    if unresolved_certificates:
+        raise ValueError("Certificate mutation outcomes remain unproven; no completion marker is permitted")
+    if unresolved_secrets:
+        raise ValueError("Secret mutation outcomes remain unproven; no completion marker is permitted")
     (directory / "inventory.json").write_text(json.dumps(inventory, sort_keys=True), encoding="utf-8")
 
 

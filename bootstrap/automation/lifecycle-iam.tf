@@ -97,7 +97,7 @@ locals {
         { Effect = "Allow", Action = ["kms:Decrypt", "kms:GenerateDataKey"], Resource = aws_kms_key.control.arn, Condition = { StringEquals = { "kms:ViaService" = ["s3.us-east-1.amazonaws.com", "secretsmanager.us-east-1.amazonaws.com"] } } },
         { Effect = "Allow", Action = ["scheduler:GetSchedule"], Resource = "arn:aws:scheduler:us-east-1:058114477594:schedule/techx-staging/cleanup-*" },
         { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = var.cloudflare_secret_arn },
-        { Effect = "Allow", Action = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:TagResource"], Resource = "arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/staging/*" }
+        { Effect = "Allow", Action = ["secretsmanager:CreateSecret", "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:TagResource"], Resource = "arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/staging/*" }
       ]
     }
     read = {
@@ -145,7 +145,21 @@ locals {
     }
     edge = {
       Version = "2012-10-17", Statement = [
-        { Effect = "Allow", Action = ["acm:RequestCertificate", "acm:ImportCertificate", "acm:DescribeCertificate", "acm:AddTagsToCertificate", "acm:ListTagsForCertificate"], Resource = "arn:aws:acm:us-east-1:058114477594:certificate/*" },
+        # RequestCertificate has no resource-level permission in the service
+        # authorization table. Restrict its wildcard by exact request context.
+        { Effect = "Allow", Action = ["acm:RequestCertificate"], Resource = "*", Condition = {
+          StringEquals = { "aws:RequestedRegion" = "us-east-1", "aws:RequestTag/Project" = "techx", "aws:RequestTag/Environment" = "staging",
+          "aws:RequestTag/Role" = "storefront-public", "acm:ValidationMethod" = "DNS", "acm:KeyAlgorithm" = "RSA_2048", "acm:Export" = "DISABLED" }
+          "ForAllValues:StringEquals" = { "acm:DomainNames" = ["shop.dinhminhkhoa.id.vn"] }
+          Null                        = { "acm:DomainNames" = "false" }
+        } },
+        { Effect = "Allow", Action = ["acm:ImportCertificate"], Resource = "arn:aws:acm:us-east-1:058114477594:certificate/*", Condition = {
+          StringEquals = { "aws:RequestTag/Project" = "techx", "aws:RequestTag/Environment" = "staging", "aws:RequestTag/Role" = ["client-vpn-server", "client-vpn-reference"] }
+        } },
+        { Effect = "Allow", Action = ["acm:DescribeCertificate", "acm:GetCertificate", "acm:ListTagsForCertificate"], Resource = "arn:aws:acm:us-east-1:058114477594:certificate/*" },
+        { Effect = "Allow", Action = ["acm:AddTagsToCertificate"], Resource = "arn:aws:acm:us-east-1:058114477594:certificate/*", Condition = {
+          StringEquals = { "aws:RequestTag/Project" = "techx", "aws:RequestTag/Environment" = "staging", "aws:RequestTag/Role" = ["storefront-public", "client-vpn-server", "client-vpn-reference"] }
+        } },
         { Effect = "Allow", Action = ["cloudfront:CreateDistribution", "cloudfront:GetDistribution", "cloudfront:GetDistributionConfig", "cloudfront:TagResource", "cloudfront:ListTagsForResource", "cloudfront:CreateVpcOrigin", "cloudfront:GetVpcOrigin", "cloudfront:CreateFunction", "cloudfront:DescribeFunction", "cloudfront:PublishFunction"], Resource = ["arn:aws:cloudfront::058114477594:distribution/*", "arn:aws:cloudfront::058114477594:vpcorigin/*", "arn:aws:cloudfront::058114477594:function/techx-staging-*"] },
         { Effect = "Allow", Action = ["cloudfront:GetCachePolicy", "cloudfront:ListCachePolicies", "cloudfront:GetOriginRequestPolicy", "cloudfront:ListOriginRequestPolicies", "cloudfront:GetResponseHeadersPolicy", "cloudfront:ListResponseHeadersPolicies"], Resource = "*" },
         { Effect = "Allow", Action = ["route53:CreateHostedZone", "route53:AssociateVPCWithHostedZone", "route53:GetHostedZone", "route53:ListResourceRecordSets", "route53:ListTagsForResource", "route53:ChangeTagsForResource", "route53:ChangeResourceRecordSets"], Resource = "arn:aws:route53:::hostedzone/*" },

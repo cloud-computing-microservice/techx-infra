@@ -14,7 +14,10 @@ def load(client, bucket, session_id, version, directory):
         raise ValueError("An exact execution identity is required")
     response = client.get_object(Bucket=bucket, Key=f"executions/{session_id}.json", VersionId=version,
                                  ExpectedBucketOwner="058114477594")
-    record = json.loads(response["Body"].read())
+    execution_bytes = response["Body"].read(256 * 1024 + 1)
+    if response.get("VersionId") != version or len(execution_bytes) > 256 * 1024:
+        raise ValueError("Execution read returned an unexpected version or oversized object")
+    record = json.loads(execution_bytes)
     validate_execution(record, session_id, version)
     artifact = record["cleanupBundle"]
     if artifact["key"] != f"bundles/{artifact['sha256']}.tar.gz":
@@ -22,7 +25,8 @@ def load(client, bucket, session_id, version, directory):
     source = client.get_object(Bucket=bucket, Key=artifact["key"], VersionId=artifact["versionId"],
                                ExpectedBucketOwner="058114477594")
     payload = source["Body"].read(MAX_BUNDLE_BYTES + 1)
-    if len(payload) > MAX_BUNDLE_BYTES: raise ValueError("Cleanup bundle exceeds the size policy")
+    if source.get("VersionId") != artifact["versionId"] or len(payload) > MAX_BUNDLE_BYTES:
+        raise ValueError("Cleanup bundle version/size differs from the immutable execution")
     directory.mkdir(parents=True, exist_ok=False)
     bundle = directory / "source.tar.gz"
     bundle.write_bytes(payload)

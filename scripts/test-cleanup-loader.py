@@ -34,7 +34,7 @@ class LoaderTests(unittest.TestCase):
         def get_object(**kwargs):
             self.calls.append(kwargs)
             data = json.dumps(self.record).encode() if kwargs["Key"].startswith("executions/") else self.payload
-            return dict(Body=io.BytesIO(data))
+            return dict(Body=io.BytesIO(data), VersionId=kwargs["VersionId"])
         self.client = SimpleNamespace(get_object=get_object)
 
     def test_exact_versions_and_checksum_are_required_before_execution(self):

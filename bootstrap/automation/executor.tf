@@ -66,7 +66,7 @@ locals {
           ], Resource = [for kind in ["vpc", "subnet", "internet-gateway", "route-table", "security-group", "security-group-rule", "vpc-endpoint", "launch-template"] : "arn:aws:ec2:us-east-1:058114477594:${kind}/*"],
         Condition = { StringEquals = { "ec2:ResourceTag/Project" = "techx", "ec2:ResourceTag/Environment" = "staging" } } },
         { Effect = "Allow", Action = ["ec2:TerminateInstances"], Resource = "arn:aws:ec2:us-east-1:058114477594:instance/*",
-        Condition = { StringEquals = { "ec2:ResourceTag/Project" = "techx", "ec2:ResourceTag/Environment" = "staging", "ec2:ResourceTag/Role" = "private-probe" } } },
+        Condition = { StringEquals = { "ec2:ResourceTag/Project" = "techx", "ec2:ResourceTag/Environment" = "staging", "ec2:ResourceTag/Role" = ["private-probe", "deployment-executor"] } } },
         { Effect   = "Allow", Action = ["ec2:DeleteClientVpnEndpoint", "ec2:DisassociateClientVpnTargetNetwork", "ec2:RevokeClientVpnIngress"],
           Resource = "arn:aws:ec2:us-east-1:058114477594:client-vpn-endpoint/*",
         Condition = { StringEquals = { "ec2:ResourceTag/Project" = "techx", "ec2:ResourceTag/Environment" = "staging" } } }
@@ -82,7 +82,7 @@ locals {
         { Effect = "Allow", Action = ["elasticloadbalancing:Describe*"], Resource = "*" },
         { Effect = "Allow", Action = ["dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive", "dynamodb:DescribeContinuousBackups", "dynamodb:DescribeContributorInsights", "dynamodb:DescribeKinesisStreamingDestination", "dynamodb:ListTagsOfResource", "dynamodb:DeleteTable"], Resource = "arn:aws:dynamodb:us-east-1:058114477594:table/techx-staging-orders" },
         { Effect = "Allow", Action = ["ecr:DescribeRepositories", "ecr:ListTagsForResource", "ecr:GetLifecyclePolicy", "ecr:DeleteLifecyclePolicy", "ecr:DeleteRepository"], Resource = [for name in ["frontend", "catalog", "order"] : "arn:aws:ecr:us-east-1:058114477594:repository/techx/${name}"] },
-        { Effect = "Allow", Action = ["logs:ListTagsForResource", "logs:ListTagsLogGroup", "logs:DescribeLogStreams", "logs:DeleteLogStream", "logs:DeleteLogGroup"], Resource = ["arn:aws:logs:us-east-1:058114477594:log-group:/aws/eks/techx-staging/*", "arn:aws:logs:us-east-1:058114477594:log-group:/aws/vpn/techx-staging*"] },
+        { Effect = "Allow", Action = ["logs:ListTagsForResource", "logs:ListTagsLogGroup", "logs:DescribeLogStreams", "logs:DeleteLogStream", "logs:DeleteLogGroup"], Resource = ["arn:aws:logs:us-east-1:058114477594:log-group:/aws/eks/techx-staging/*", "arn:aws:logs:us-east-1:058114477594:log-group:/aws/client-vpn/techx-staging*"] },
         { Effect = "Allow", Action = ["budgets:ViewBudget", "budgets:ModifyBudget"], Resource = "arn:aws:budgets::058114477594:budget/techx-staging-hard-cap" }
       ]
     }

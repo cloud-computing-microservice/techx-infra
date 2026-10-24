@@ -85,6 +85,50 @@ def terminate_probes(ec2, session_id):
         ec2.get_waiter("instance_terminated").wait(InstanceIds=ids, WaiterConfig=dict(Delay=10, MaxAttempts=60))
 
 
+def terminate_deployment_executors(ec2, session_id, expected_instance_id=None, *, launch_token=None):
+    """Stop remote mutation even when the review-waiting VM has no active lease.
+
+    Stopping its CodeBuild manager does not stop SSM/EC2 child processes. Every
+    owned executor must be observed terminated before cleanup can fence deploy.
+    """
+    if not re.fullmatch(r"staging-[a-zA-Z0-9-]{1,64}", session_id):
+        raise ValueError("Invalid deployment cleanup session")
+    if expected_instance_id is not None and not re.fullmatch(r"i-[a-f0-9]{8,17}", expected_instance_id):
+        raise ValueError("Invalid deployment executor identity")
+    if launch_token is not None and not re.fullmatch(r"[a-f0-9]{64}", launch_token):
+        raise ValueError("Invalid deployment launch intent token")
+    filters = [dict(Name="tag:Project", Values=["techx"]), dict(Name="tag:Environment", Values=["staging"]),
+               dict(Name="tag:SessionId", Values=[session_id]), dict(Name="tag:Role", Values=["deployment-executor"])]
+    response = ec2.describe_instances(Filters=filters)
+    if not isinstance(response.get("Reservations"), list) or response.get("NextToken"):
+        raise ValueError("Paginated deployment executor inventory; cleanup takeover refused")
+    ids, found, launch_observed = [], set(), False
+    wanted = dict(Project="techx", Environment="staging", SessionId=session_id, Role="deployment-executor")
+    for reservation in response.get("Reservations", []):
+        if reservation.get("OwnerId") != ACCOUNT or not isinstance(reservation.get("Instances"), list):
+            raise ValueError("Deployment executor account mismatch")
+        for instance in reservation.get("Instances", []):
+            tags = {item["Key"]: item["Value"] for item in instance.get("Tags", [])}
+            instance_id = instance.get("InstanceId", "")
+            state = instance.get("State", {}).get("Name")
+            if (any(tags.get(key) != value for key, value in wanted.items())
+                    or not re.fullmatch(r"i-[a-f0-9]{8,17}", instance_id) or instance_id in found
+                    or state not in ("pending", "running", "stopping", "stopped", "shutting-down", "terminated")):
+                raise ValueError("Deployment executor ownership/state is ambiguous")
+            found.add(instance_id)
+            if instance.get("ClientToken") == launch_token and launch_token is not None:
+                launch_observed = True
+            if state != "terminated": ids.append(instance_id)
+    if expected_instance_id is not None and expected_instance_id not in found:
+        raise ValueError("Lease executor is missing from scoped inventory; termination is unproven")
+    if launch_token is not None and not launch_observed:
+        raise ValueError("Executor launch outcome is unproven; an empty eventual-consistency read cannot complete teardown")
+    if ids:
+        ec2.terminate_instances(InstanceIds=ids)
+        ec2.get_waiter("instance_terminated").wait(InstanceIds=ids, WaiterConfig=dict(Delay=10, MaxAttempts=60))
+    return dict(instanceIds=sorted(found), launchObserved=launch_observed)
+
+
 def delete_session_secrets(client, session_id):
     prefix = f"techx/staging/{session_id}/"
     response = client.list_secrets(Filters=[dict(Key="name", Values=[prefix])], IncludePlannedDeletion=True)

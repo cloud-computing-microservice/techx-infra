@@ -66,6 +66,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Saved-plan review failed.' }
   $planned = terraform "-chdir=$environmentRoot" show -json $planPath | ConvertFrom-Json
   $approvedBudget = if ($planned.variables.budget_limit_usd) { [double]$planned.variables.budget_limit_usd.value } else { 80 }
+  $cost = & (Join-Path $PSScriptRoot 'cost-estimate.ps1') -Hours $costHours -Profile domainVpn -ApprovedBudgetUsd $approvedBudget | ConvertFrom-Json
   if ($cost.upperBoundUsd -gt $approvedBudget) { throw 'Cost estimate exceeds the approved session budget.' }
   $alertAmounts = @(0.5, 0.75, 0.9 | ForEach-Object { $approvedBudget * $_ }) -join ', '
   $plannedCidrs = @($planned.variables.public_access_cidrs.value)

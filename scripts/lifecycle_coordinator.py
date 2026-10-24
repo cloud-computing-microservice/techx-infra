@@ -4,15 +4,19 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
-import math
 from pathlib import Path
 import re
 import sys
 
 from automation_inputs import FIXED, validate_variables
-from automation_session import validate
+from automation_budget import approved_budget, validate_estimate
+from automation_session import utc, validate
 from cleanup_execution import assert_inventory
-from cleanup_schedule import register
+from cleanup_schedule import register, verify_existing
+from deployment_tasks import executor_config
+from plan_approval import context_for_session, issue_approval
+from plan_review_store import approval_key, checksum, load_review, read_json
+from workload_state import ensure_empty_state
 
 ACCOUNT = "058114477594"
 PROJECT = "techx-automation-lifecycle"
@@ -34,7 +38,7 @@ def immutable_put(s3, bucket, key, body):
     return version
 
 
-def initial_record(session_id, sources, hours, email, action, now=None):
+def initial_record(session_id, sources, hours, email, action, now=None, *, approved_budget_usd):
     now = now or datetime.now(timezone.utc)
     if not re.fullmatch(r"staging-[a-zA-Z0-9-]{1,64}", session_id): raise ValueError("Invalid staging session ID")
     if set(sources) != {"techx-infra", "techx-chart", "techx-platform"} or any(not re.fullmatch(r"[a-f0-9]{40}", sha) for sha in sources.values()):
@@ -42,10 +46,11 @@ def initial_record(session_id, sources, hours, email, action, now=None):
     if type(hours) is not int or not 3 <= hours <= 24: raise ValueError("Session window must be between 3 and 24 hours")
     if action not in ("deploy-test-destroy", "deploy-window"): raise ValueError("Unsupported lifecycle action")
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email): raise ValueError("Budget alert email is invalid")
+    budget = approved_budget(approved_budget_usd)
     deadline = now + timedelta(hours=hours)
     return dict(sessionId=session_id, account=ACCOUNT, region="us-east-1", environment="staging", status="PLANNING",
                 sourceRevisions=sources, deadline=deadline.isoformat(), cleanupStartAt=(deadline - timedelta(minutes=90)).isoformat(),
-                budgetAlertEmail=email, action=action, createdAt=now.isoformat(), maximumHours=hours)
+                budgetAlertEmail=email, approvedBudgetUsd=budget, action=action, createdAt=now.isoformat(), maximumHours=hours)
 
 
 class Coordinator:
@@ -55,17 +60,17 @@ class Coordinator:
     def start(self, record, bundle_path: Path, inventory, estimate, caller_ip, now=None):
         validate(record)
         assert_inventory(inventory)
-        bound = estimate.get("upperBoundUsd")
-        if (type(bound) not in (int, float) or not math.isfinite(bound) or not 0 <= bound <= 60
-                or estimate.get("includesAutomation") is not True
-                or estimate.get("approvedBudgetUsd") != 80 or estimate.get("maximumHours") != record["maximumHours"]):
-            raise ValueError("Cost estimate does not cover this automation session")
+        budget = validate_estimate(record, estimate)
         if self.clients["sts"].get_caller_identity()["Account"] != ACCOUNT: raise ValueError("Wrong deployment account")
         projects = self.clients["codebuild"].batch_get_projects(names=[PROJECT, "techx-automation-cleanup"])
         if projects.get("projectsNotFound") or {p["name"] for p in projects.get("projects", [])} != {PROJECT, "techx-automation-cleanup"}:
             raise ValueError("Both lifecycle and independent cleanup executors must exist")
         if self.clients["s3"].get_bucket_versioning(Bucket=self.bucket, ExpectedBucketOwner=ACCOUNT).get("Status") != "Enabled":
             raise ValueError("Control bucket versioning is not enabled")
+        config_key = "control/staging/executor-config.json"
+        config, config_version = read_json(self.clients["s3"], self.bucket, config_key)
+        executor_config(config)
+        if not config_version or config_version == "null": raise ValueError("Executor configuration must be versioned")
         try:
             response = self.clients["s3"].get_object(Bucket=self.bucket, Key="automation/staging/session.json", ExpectedBucketOwner=ACCOUNT)
             current, etag = json.loads(response["Body"].read()), response["ETag"]
@@ -76,13 +81,17 @@ class Coordinator:
         self.store.write(record, etag)  # CAS reservation; publishers cannot claim PLANNING sessions.
         armed = False
         try:
+            state_identity = ensure_empty_state(self.clients["s3"], self.bucket, inventory)
             payload = bundle_path.read_bytes()
             digest = hashlib.sha256(payload).hexdigest()
             key = f"bundles/{digest}.tar.gz"
             bundle_version = immutable_put(self.clients["s3"], self.bucket, key, payload)
-            execution = dict(record, cleanupBundle=dict(key=key, sha256=digest, versionId=bundle_version), costEstimate=estimate)
+            execution = dict(record, cleanupBundle=dict(key=key, sha256=digest, versionId=bundle_version), costEstimate=estimate,
+                             initialState=state_identity, deploymentConfig=config,
+                             deploymentConfigReference=dict(key=config_key, versionId=config_version, sha256=checksum(config)))
             execution_version = immutable_put(self.clients["s3"], self.bucket, f"executions/{record['sessionId']}.json", encoded(execution))
             variables = dict(FIXED, public_access_cidrs=[f"{caller_ip}/32"], budget_alert_email=record["budgetAlertEmail"],
+                             budget_limit_usd=budget,
                              enable_domain_vpn_foundation=False, enable_domain_vpn_edge=False)
             validate_variables(variables)
             private = dict(schemaVersion=1, sessionId=record["sessionId"], terraformVars=variables,
@@ -119,3 +128,61 @@ class Coordinator:
                 if current.get("sessionId") == record["sessionId"] and current.get("status") == "PLANNING" and not current.get("lease"):
                     self.store.write(dict(current, status="OFF", startFailureBeforeWorkload=True), etag)
             raise
+
+    def resume_approved(self, session_id, now=None):
+        """Dispatch apply after bridge approval; actual context is re-observed on EC2.
+
+        This does not authorize Terraform from a copied plan context or claim a
+        workload lease on a hosted runner. The manager/worker repeats guards.
+        """
+        now = now or datetime.now(timezone.utc)
+        if self.clients["sts"].get_caller_identity().get("Account") != ACCOUNT:
+            raise ValueError("Wrong deployment account")
+        record, _ = self.store.read()
+        validate(record)
+        if (record.get("sessionId") != session_id or record.get("status") != "PROVISIONING" or record.get("lease")
+                or now >= utc(record["cleanupStartAt"])):
+            raise ValueError("Session is not idle and open for approved resume")
+        verify_existing(self.clients["scheduler"], record, record.get("executionVersion"), now)
+        ref = record.get("pendingPlan")
+        if not isinstance(ref, dict): raise ValueError("There is no pending review to resume")
+        checkpoint = record.get("stages", {}).get(ref["stage"], {})
+        if checkpoint.get("state") != "AWAITING_APPROVAL" or checkpoint.get("attempt") != ref["attempt"] or checkpoint.get("reviewReference") != ref:
+            raise ValueError("Stage is not awaiting this exact reviewed attempt")
+        envelope = load_review(self.clients["s3"], self.bucket, ref, now)
+        request = envelope["request"]
+        context_for_session(record, request["context"], now)
+        validate_estimate(record, envelope["costEstimate"])
+        approval, _ = read_json(self.clients["s3"], self.bucket, approval_key(request, ref["sha256"]))
+        if (approval.get("request") != request or approval.get("reviewReference") != ref or approval.get("schemaVersion") != 1
+                or not utc(request["createdAt"]) <= utc(approval["approvedAt"]) <= now):
+            raise ValueError("Approval does not match the current immutable review")
+        issue_approval(request, reviewer=approval.get("reviewer"), review_run=approval.get("reviewRun"), now=now)
+        execution, _ = read_json(self.clients["s3"], self.bucket, f"executions/{session_id}.json", record["executionVersion"])
+        for key in ("sessionId", "sourceRevisions", "approvedBudgetUsd", "deadline", "cleanupStartAt", "maximumHours", "action"):
+            if execution.get(key) != record.get(key): raise ValueError("Session differs from immutable execution")
+        # A real SSM terminal observation is required even if the lease is gone.
+        # The manager will verify document/instance/config and this result again.
+        from deployment_manager import previous_terminal
+        task = record.get("deploymentTask", {})
+        if (task.get("mode") != "plan" or task.get("stage") != ref["stage"] or task.get("attempt") != ref["attempt"]):
+            raise ValueError("The approved review has no matching completed SSM planning task")
+        previous_terminal(self.clients["ssm"], executor_config(execution["deploymentConfig"]), record)
+        current, _ = self.store.read()
+        if current != record: raise ValueError("Session changed during approval resume checks")
+        token = hashlib.sha256(encoded(dict(sessionId=session_id, executionVersion=record["executionVersion"],
+                                               review=ref, operation="apply"))).hexdigest()
+        try:
+            result = self.clients["codebuild"].start_build(projectName=PROJECT, idempotencyToken=token,
+                environmentVariablesOverride=[dict(name=name, value=value, type="PLAINTEXT") for name, value in dict(
+                    TECHX_SESSION_ID=session_id, TECHX_EXECUTION_VERSION=record["executionVersion"], TECHX_MODE="apply",
+                    TECHX_PLAN_STAGE=ref["stage"], TECHX_PLAN_ATTEMPT=str(ref["attempt"])).items()])
+            build_id = result["build"]["id"]
+        except BaseException:
+            # A response timeout is not permission to start another build or
+            # reopen an approved stage. Independent cleanup fences any worker.
+            self.clients["lambda"].invoke(FunctionName=LAUNCHER, InvocationType="Event",
+                Payload=encoded(dict(sessionId=session_id, executionVersion=record["executionVersion"], requestedEarly=True)))
+            raise
+        return dict(buildId=build_id, sessionId=session_id, stage=ref["stage"], attempt=ref["attempt"],
+                    executionVersion=record["executionVersion"])

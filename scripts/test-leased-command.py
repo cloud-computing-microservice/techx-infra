@@ -24,6 +24,56 @@ class MemoryStore:
 
 
 class LeaseCommandTests(unittest.TestCase):
+    def test_deploy_ready_handoff_occurs_after_child_terminal_in_one_cas(self):
+        store = MemoryStore()
+        store.record["status"] = "PROVISIONING"
+        class Child:
+            calls = 0
+            def wait(self, timeout):
+                self.calls += 1
+                self.assert_provisioning()
+                if self.calls == 1: raise subprocess.TimeoutExpired("trusted", timeout)
+                return 0
+            def assert_provisioning(self):
+                if store.record["status"] != "PROVISIONING": raise AssertionError("READY published before terminal child")
+            def poll(self): return 0
+        execute(store, "infra:100", "deploy", "staging-123456", ["trusted"], popen=lambda *a, **k: Child(), success_status="READY")
+        self.assertEqual(store.version, 3)  # acquire, heartbeat, READY + release atomically
+        self.assertEqual(store.record["status"], "READY")
+        self.assertNotIn("lease", store.record)
+
+    def test_failed_child_never_publishes_ready(self):
+        store = MemoryStore()
+        store.record["status"] = "PROVISIONING"
+        with self.assertRaises(subprocess.CalledProcessError):
+            execute(store, "infra:100", "deploy", "staging-123456", [sys.executable, "-c", "raise SystemExit(2)"], success_status="READY")
+        self.assertEqual(store.record["status"], "PROVISIONING")
+        self.assertNotIn("lease", store.record)
+
+    def test_cleanup_start_or_changed_lease_blocks_ready_handoff(self):
+        for lost_lease in (False, True):
+            store = MemoryStore()
+            store.record["status"] = "PROVISIONING"
+            class Child:
+                def wait(self, timeout):
+                    if lost_lease:
+                        store.record["lease"] = dict(owner="cleanup:101", epoch=99)
+                    else:
+                        store.record["cleanupStartAt"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+                    return 0
+                def poll(self): return 0
+            with self.subTest(lost_lease=lost_lease), self.assertRaises(ValueError):
+                execute(store, "infra:100", "deploy", "staging-123456", ["trusted"], popen=lambda *a, **k: Child(), success_status="READY")
+            self.assertEqual(store.record["status"], "PROVISIONING")
+            if lost_lease: self.assertEqual(store.record["lease"]["owner"], "cleanup:101")
+            else: self.assertNotIn("lease", store.record)
+
+    def test_publisher_cannot_request_ready_transition(self):
+        store = MemoryStore()
+        with self.assertRaises(ValueError):
+            execute(store, "platform:100", "release", "staging-123456", ["trusted"], success_status="READY")
+        self.assertEqual(store.version, 0)
+
     def test_heartbeat_renews_and_releases_without_changing_epoch(self):
         store = MemoryStore()
         class Child:

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 
 from cleanup_execution import (ACCOUNT, CLEANUP_ROLE, assert_inventory, fence_session,
-                               restore_cleanup_access, stop_executor, terminate_probes)
+                               restore_cleanup_access, stop_executor, terminate_deployment_executors, terminate_probes)
 
 
 class ExecutionTests(unittest.TestCase):
@@ -70,6 +70,44 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(calls[0]["resourcesVpcConfig"]["publicAccessCidrs"], ["8.8.8.8/32"])
         self.assertEqual(calls[1]["principalArn"], CLEANUP_ROLE)
         self.assertEqual(calls[2]["clusterName"], "techx-staging")
+
+    def test_persistent_executor_is_terminated_even_when_waiting_without_a_lease(self):
+        tags = dict(Project="techx", Environment="staging", SessionId="staging-123456", Role="deployment-executor")
+        instance = dict(InstanceId="i-1234567890abcdef0", State=dict(Name="running"), Tags=[dict(Key=k, Value=v) for k, v in tags.items()])
+        calls = []
+        response = dict(Reservations=[dict(OwnerId=ACCOUNT, Instances=[instance])])
+        client = SimpleNamespace(describe_instances=lambda **kwargs: response,
+            terminate_instances=lambda **kwargs: calls.append(("terminate", kwargs)),
+            get_waiter=lambda _: SimpleNamespace(wait=lambda **kwargs: calls.append(("wait", kwargs))))
+        self.assertTrue(terminate_deployment_executors(client, "staging-123456", instance["InstanceId"]))
+        self.assertEqual([name for name, _ in calls], ["terminate", "wait"])
+        instance["State"]["Name"] = "terminated"
+        calls.clear()
+        terminate_deployment_executors(client, "staging-123456", instance["InstanceId"])
+        self.assertFalse(calls)
+        for mutate, restore in (
+            (lambda: instance["Tags"].pop(), lambda: instance["Tags"].append(dict(Key="Role", Value="deployment-executor"))),
+            (lambda: response.update(NextToken="more"), lambda: response.pop("NextToken")),
+            (lambda: response["Reservations"][0].update(OwnerId="123456789012"), lambda: response["Reservations"][0].update(OwnerId=ACCOUNT)),
+        ):
+            mutate()
+            with self.assertRaises(ValueError): terminate_deployment_executors(client, "staging-123456")
+            self.assertFalse(calls)
+            restore()
+        with self.assertRaises(ValueError): terminate_deployment_executors(client, "staging-123456", "i-00000000")
+
+    def test_persistent_executor_wait_timeout_never_counts_as_stopped(self):
+        tags = dict(Project="techx", Environment="staging", SessionId="staging-123456", Role="deployment-executor")
+        instance = dict(InstanceId="i-1234567890abcdef0", State=dict(Name="shutting-down"), Tags=[dict(Key=k, Value=v) for k, v in tags.items()])
+        def timeout(**kwargs): raise TimeoutError("still shutting down")
+        client = SimpleNamespace(describe_instances=lambda **kwargs: dict(Reservations=[dict(OwnerId=ACCOUNT, Instances=[instance])]),
+            terminate_instances=lambda **kwargs: None, get_waiter=lambda _: SimpleNamespace(wait=timeout))
+        with self.assertRaises(TimeoutError): terminate_deployment_executors(client, "staging-123456")
+
+    def test_unobserved_launch_cannot_be_hidden_by_an_empty_ec2_read(self):
+        client = SimpleNamespace(describe_instances=lambda **kw: dict(Reservations=[]))
+        with self.assertRaisesRegex(ValueError, "launch outcome is unproven"):
+            terminate_deployment_executors(client, "staging-123456", launch_token="a" * 64)
 
 
 if __name__ == "__main__": unittest.main()

@@ -2,6 +2,8 @@
 import ipaddress
 import re
 
+from automation_budget import approved_budget
+
 ROLE = "arn:aws:iam::058114477594:role/techx-automation-cleanup-executor"
 FIXED = dict(region="us-east-1", project="techx", environment="staging", vpc_cidr="10.52.0.0/16",
              client_vpn_cidr="172.24.0.0/22", domain_name="shop.dinhminhkhoa.id.vn", cleanup_executor_role_arn=ROLE,
@@ -13,9 +15,9 @@ ALLOWED = set(FIXED) | {"availability_zones", "public_access_cidrs", "allow_temp
 
 def validate_variables(variables):
     if set(variables) - ALLOWED: raise ValueError("Unexpected private Terraform variable")
-    budget = variables.get("budget_limit_usd", 80)
-    if type(budget) not in (int, float) or not 1 <= budget <= 80:
-        raise ValueError("Approved staging budget must be between 1 and 80 USD")
+    # Older cleanup snapshots omitted the budget. Preserve deletion recovery;
+    # new deployment sessions require an explicit budget in the coordinator.
+    approved_budget(variables.get("budget_limit_usd", 80))
     for name, value in FIXED.items():
         if name in variables and variables[name] != value: raise ValueError(f"Terraform deployment contract changed: {name}")
     if variables.get("cleanup_executor_role_arn") != ROLE: raise ValueError("Cleanup identity must be preserved")

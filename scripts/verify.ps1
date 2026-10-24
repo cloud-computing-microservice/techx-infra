@@ -54,6 +54,24 @@ python (Join-Path $PSScriptRoot 'test-automation-inputs.py')
 if ($LASTEXITCODE -ne 0) { throw 'Automation deployment input contract regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-coordinator.py')
 if ($LASTEXITCODE -ne 0) { throw 'Lifecycle startup, cleanup-arming and uncertain-response regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-lifecycle-resume.py')
+if ($LASTEXITCODE -ne 0) { throw 'Approved lifecycle resume and typed manager-loader regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-workload-state.py')
+if ($LASTEXITCODE -ne 0) { throw 'Empty workload state initialization and lineage regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-deployment-runtime.py')
+if ($LASTEXITCODE -ne 0) { throw 'Deployment runtime identity, backend, input and saved-plan observation tests failed.' }
+python (Join-Path $PSScriptRoot 'test-deployment-manager.py')
+if ($LASTEXITCODE -ne 0) { throw 'SSM task dispatch, single-consumer handoff and terminal observation tests failed.' }
+python (Join-Path $PSScriptRoot 'test-deployment-executor.py')
+if ($LASTEXITCODE -ne 0) { throw 'Executor launch, placement, readiness and uncertain-response tests failed.' }
+python (Join-Path $PSScriptRoot 'test-deployment-task-loader.py')
+if ($LASTEXITCODE -ne 0) { throw 'Immutable EC2 task admission, result and private diagnostic tests failed.' }
+python (Join-Path $PSScriptRoot 'test-plan-approval.py')
+if ($LASTEXITCODE -ne 0) { throw 'Saved-plan approval context and expiry regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-plan-review-bridge.py')
+if ($LASTEXITCODE -ne 0) { throw 'Private plan review storage and GitHub approval bridge regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-lifecycle-stage.py')
+if ($LASTEXITCODE -ne 0) { throw 'Durable lifecycle stage consumption and uncertain-apply regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-cleanup-schedule.py')
 if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup schedule regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-state-presence.py')
@@ -67,11 +85,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Cloudflare DNS ownership regression tests fail
 & (Join-Path $PSScriptRoot 'test-init-backend.ps1')
 & (Join-Path $PSScriptRoot 'test-iam-contract.ps1')
 & (Join-Path $PSScriptRoot 'test-teardown-contract.ps1')
+& (Join-Path $PSScriptRoot 'test-certificate-cleanup.ps1')
 python (Join-Path $PSScriptRoot 'static-test.py')
 if ($LASTEXITCODE -ne 0) { throw 'Terraform static assertions failed.' }
 python (Join-Path $PSScriptRoot 'test-review-plan.py')
 if ($LASTEXITCODE -ne 0) { throw 'Saved-plan review regression tests failed.' }
 & (Join-Path $PSScriptRoot 'test-inventory.ps1')
+& (Join-Path $PSScriptRoot 'test-cost-estimate.ps1')
 & (Join-Path $PSScriptRoot 'cost-estimate.ps1') -Hours 12 | Out-Null
 & (Join-Path $PSScriptRoot 'security-scan.ps1')
 

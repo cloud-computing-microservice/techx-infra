@@ -139,44 +139,9 @@ try {
 
   if ($presence.managedCount -gt 0) { Invoke-ReviewedTeardown -Stage 'teardown-foundation' -Destroy }
 
-  $certificateArns = @()
-  if (Test-Path -LiteralPath $certificateStatePath) {
-    $certificateState = Get-Content -LiteralPath $certificateStatePath -Raw | ConvertFrom-Json
-    if ($certificateState.environment -ne $Environment -or $certificateState.accountId -ne $ExpectedAccountId -or $certificateState.region -ne $Region) {
-      throw 'Certificate state does not match the selected environment, account, and region.'
-    }
-    $certificateArns += @(
-      $certificateState.publicCertificateArn,
-      $certificateState.clientVpnServerCertificateArn,
-      $certificateState.clientVpnRootCertificateArn
-    ) | Where-Object { $_ }
-  }
-  $publicCertificates = aws acm list-certificates --region $Region --output json | ConvertFrom-Json
-  if ($LASTEXITCODE -ne 0) { throw 'Unable to inventory ACM certificates.' }
-  foreach ($certificate in @($publicCertificates.CertificateSummaryList | Where-Object { $_.DomainName -eq 'shop.dinhminhkhoa.id.vn' })) {
-    $certificateTags = aws acm list-tags-for-certificate --region $Region --certificate-arn $certificate.CertificateArn --output json | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0) { throw "Unable to inspect ACM certificate tags for $($certificate.CertificateArn)." }
-    $projectTag = @($certificateTags.Tags | Where-Object { $_.Key -eq 'Project' -and $_.Value -eq 'techx' }).Count -eq 1
-    $environmentTag = @($certificateTags.Tags | Where-Object { $_.Key -eq 'Environment' -and $_.Value -eq $Environment }).Count -eq 1
-    if ($projectTag -and $environmentTag) { $certificateArns += $certificate.CertificateArn }
-  }
-  $existingCertificateArns = @($publicCertificates.CertificateSummaryList.CertificateArn)
-  foreach ($certificateArn in @($certificateArns | Sort-Object -Unique)) {
-    if ($certificateArn -notmatch "^arn:aws:acm:${Region}:$ExpectedAccountId`:certificate/") {
-      throw "Refusing to delete an ACM certificate outside the approved account/region: $certificateArn"
-    }
-    if ($existingCertificateArns -notcontains $certificateArn) { continue } # Retry after an earlier successful deletion.
-    $certificateTags = aws acm list-tags-for-certificate --region $Region --certificate-arn $certificateArn --output json | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0) { throw "Unable to inspect ACM certificate tags for $certificateArn." }
-    $projectTag = @($certificateTags.Tags | Where-Object { $_.Key -eq 'Project' -and $_.Value -eq 'techx' }).Count -eq 1
-    $environmentTag = @($certificateTags.Tags | Where-Object { $_.Key -eq 'Environment' -and $_.Value -eq $Environment }).Count -eq 1
-    if (-not ($projectTag -and $environmentTag)) {
-      throw "Refusing to delete ACM certificate without matching project and environment tags: $certificateArn"
-    }
-    aws acm delete-certificate --region $Region --certificate-arn $certificateArn
-    if ($LASTEXITCODE -ne 0) { throw "Unable to delete ACM certificate $certificateArn." }
-  }
-  if (Test-Path -LiteralPath $certificateStatePath) { [IO.File]::Delete($certificateStatePath) }
+  . (Join-Path $PSScriptRoot 'certificate-cleanup.ps1')
+  Remove-TechxEnvironmentCertificates -ExpectedAccountId $ExpectedAccountId -Environment $Environment `
+    -Region $Region -StatePath $certificateStatePath | Out-Null
 
   if ($presence.exists) {
     $remainingState = @(terraform "-chdir=$environmentRoot" state list)
@@ -195,6 +160,7 @@ try {
     }
   } while ($true)
 
+  if (Test-Path -LiteralPath $certificateStatePath) { [IO.File]::Delete($certificateStatePath) }
   $inventory | ConvertTo-Json -Depth 8
 }
 finally {

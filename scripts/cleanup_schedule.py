@@ -51,3 +51,19 @@ def register(client, record, execution_version, launcher_arn, role_arn, dlq_arn,
     if existing.get("Arn") != expected_prefix + desired["Name"]:
         raise ValueError("Unexpected cleanup schedule ARN")
     return existing["Arn"]
+
+
+def verify_existing(client, record, execution_version, now=None):
+    """Read-only guard used by the reviewer and each deployment mutation."""
+    desired = definition(record, execution_version,
+        "arn:aws:lambda:us-east-1:058114477594:function:techx-automation-cleanup-launcher",
+        "arn:aws:iam::058114477594:role/techx-automation-scheduler",
+        "arn:aws:sqs:us-east-1:058114477594:techx-automation-cleanup-dlq", now)
+    actual = client.get_schedule(Name=desired["Name"], GroupName=desired["GroupName"])
+    for field in ("State", "ScheduleExpression", "ScheduleExpressionTimezone", "FlexibleTimeWindow", "ActionAfterCompletion", "Target"):
+        if actual.get(field) != desired[field]:
+            raise ValueError("Independent cleanup schedule is missing or differs from the session")
+    if (actual.get("Arn") != record.get("cleanupScheduleArn")
+            or actual.get("Arn") != "arn:aws:scheduler:us-east-1:058114477594:schedule/techx-staging/" + desired["Name"]):
+        raise ValueError("Unexpected independent cleanup schedule")
+    return actual["Arn"]

@@ -14,7 +14,7 @@ from urllib.request import urlopen
 from automation_session import S3SessionStore, claim, transition
 from automation_inputs import validate_variables
 from cleanup_execution import (assert_inventory, delete_session_secrets, fence_session, remove_owned_shop,
-                               restore_cleanup_access, stop_executor, terminate_probes)
+                               restore_cleanup_access, stop_executor, terminate_deployment_executors, terminate_probes)
 from cloudflare_dns import CloudflareDNS, HOST, validate_name_target
 from leased_command import execute
 
@@ -32,6 +32,64 @@ def persist_diagnostics(clients, bucket, session_id, owner, directory):
 def aws_clients():
     import boto3
     return {name: boto3.client(name, region_name="us-east-1") for name in ("s3", "sts", "eks", "codebuild", "ec2", "secretsmanager")}
+
+
+def prepare_takeover(clients, record, owner, bucket):
+    response = clients["s3"].get_object(Bucket=bucket, Key=f"private/staging/{record['sessionId']}/inputs.json", ExpectedBucketOwner="058114477594")
+    body = response["Body"].read(256 * 1024 + 1)
+    if len(body) > 256 * 1024: raise ValueError("Private cleanup snapshot exceeds size policy")
+    private = json.loads(body)
+    if private.get("sessionId") != record["sessionId"] or private.get("schemaVersion") != 1:
+        raise ValueError("Private cleanup snapshot belongs to another session")
+    lease = record.get("lease", {})
+    previous = lease.get("owner")
+    expected_instance = None
+    if previous and previous != owner and lease.get("operation") != "release":
+        match = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", previous)
+        if match:
+            expected_instance = match[1]
+        else:
+            stop_executor(clients["codebuild"], previous, owner)
+    # Do this even when no lease exists: an idle approval-waiting executor still
+    # costs money and a detached remote command may outlive its manager.
+    launch = private.get("deploymentLaunch")
+    token, proof = None, None
+    proof_key = f"cleanup/{record['sessionId']}/executor-proof.json"
+    if launch is not None:
+        token = launch.get("clientToken", "")
+        if not re.fullmatch(r"[a-f0-9]{64}", token): raise ValueError("Invalid executor launch intent")
+        try:
+            result = clients["s3"].get_object(Bucket=bucket, Key=proof_key, ExpectedBucketOwner="058114477594")
+            proof_body = result["Body"].read(16 * 1024 + 1)
+            if len(proof_body) > 16 * 1024: raise ValueError("Oversized executor termination proof")
+            proof = json.loads(proof_body)
+        except clients["s3"].exceptions.NoSuchKey:
+            pass
+        if proof is not None:
+            if (proof.get("schemaVersion") != 1 or proof.get("executionVersion") != record.get("executionVersion")
+                    or proof.get("clientToken") != token or proof.get("terminated") is not True
+                    or not isinstance(proof.get("instanceIds"), list) or not proof["instanceIds"]
+                    or any(not re.fullmatch(r"i-[a-f0-9]{8,17}", item) for item in proof["instanceIds"])
+                    or (private.get("deploymentExecutor", {}).get("instanceId") is not None
+                        and private["deploymentExecutor"]["instanceId"] not in proof["instanceIds"])
+                    or (expected_instance is not None and expected_instance not in proof["instanceIds"])):
+                raise ValueError("Executor termination proof does not match the admitted launch")
+        elif private.get("deploymentExecutor", {}).get("instanceId"):
+            recorded = private["deploymentExecutor"]["instanceId"]
+            if expected_instance is not None and expected_instance != recorded:
+                raise ValueError("Lease executor differs from its private launch snapshot")
+            expected_instance = recorded
+    if token is None:
+        terminate_deployment_executors(clients["ec2"], record["sessionId"], expected_instance)
+    else:
+        observed = terminate_deployment_executors(clients["ec2"], record["sessionId"],
+            None if proof is not None else expected_instance, launch_token=None if proof is not None else token)
+        if proof is None:
+            proof = dict(schemaVersion=1, executionVersion=record["executionVersion"], clientToken=token,
+                         instanceIds=observed["instanceIds"], terminated=True, checkedAt=datetime.now(timezone.utc).isoformat())
+            clients["s3"].put_object(Bucket=bucket, Key=proof_key, ExpectedBucketOwner="058114477594",
+                                    Body=json.dumps(proof).encode(), ContentType="application/json")
+    return fence_session(record, owner, executor_stopped=True)
 
 
 def work(args, clients, record, directory):
@@ -122,10 +180,7 @@ def main():
         persist_diagnostics(clients, args.bucket, session_id, owner, directory)
         return
     lease = current.get("lease", {})
-    stopped = False
-    if lease.get("owner") and lease.get("owner") != owner and lease.get("operation") != "release":
-        stopped = stop_executor(clients["codebuild"], lease["owner"], owner)
-    fenced = fence_session(current, owner, stopped)
+    fenced = prepare_takeover(clients, current, owner, args.bucket)
     store.write(fenced, etag)
     if lease.get("operation") == "release": time.sleep(35)  # Allow the publisher's bounded heartbeat to stop its child.
     command = [sys.executable, str(Path(__file__)), "--execution", str(args.execution),

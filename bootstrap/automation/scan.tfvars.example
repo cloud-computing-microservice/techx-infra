@@ -1,4 +1,5 @@
 # Offline scanner inputs only; this file is not an approval to create resources.
 bucket_name            = "techx-ci-scan-only"
 enable_cleanup_control = true
+enable_plan_approval   = true
 cloudflare_secret_arn  = "arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/automation/cloudflare-ScanOnly"

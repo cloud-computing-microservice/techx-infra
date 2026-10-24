@@ -57,9 +57,10 @@ data "aws_iam_policy_document" "assume" {
 }
 
 resource "aws_iam_role" "order_api" {
-  name               = "${var.name}-order-api"
-  assume_role_policy = data.aws_iam_policy_document.assume.json
-  tags               = var.tags
+  permissions_boundary = var.iam_permissions_boundary_arn
+  name                 = "${var.name}-order-api"
+  assume_role_policy   = data.aws_iam_policy_document.assume.json
+  tags                 = var.tags
 }
 
 data "aws_iam_policy_document" "order_api" {

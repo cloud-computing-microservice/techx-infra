@@ -16,7 +16,7 @@ class CoordinatorTests(unittest.TestCase):
         self.fail_start = False
         self.objects["control/staging/executor-config.json"] = json.dumps(dict(schemaVersion=1,
             imageId="ami-1234567890abcdef0", launchTemplateId="lt-1234567890abcdef0", launchTemplateVersion="1",
-            subnetId="subnet-1234567890abcdef0", securityGroupId="sg-1234567890abcdef0", loaderSha256="a" * 64,
+            subnetId="subnet-1234567890abcdef0", securityGroupId="sg-1234567890abcdef0", loaderSha256="a" * 64, imageBuildSha256="c" * 64,
             documentVersion="1", documentSha256="b" * 64)).encode()
         self.now = datetime.now(timezone.utc)
         self.record = initial_record("staging-123456", {name: "a" * 40 for name in ("techx-infra", "techx-chart", "techx-platform")},

@@ -26,7 +26,7 @@ class ExecutorTests(unittest.TestCase):
         tags = [dict(Key=k, Value=v) for k, v in dict(Project="techx", Environment="automation", Role="deployment-control").items()]
         self.image = dict(ImageId=self.config["imageId"], OwnerId="058114477594", State="available", Architecture="x86_64",
             PlatformDetails="Linux/UNIX", RootDeviceType="ebs", RootDeviceName="/dev/sda1",
-            Tags=[dict(Key=k, Value=v) for k, v in dict(Project="techx", Role="deployment-executor-image", LoaderSha256=self.config["loaderSha256"]).items()])
+            Tags=[dict(Key=k, Value=v) for k, v in dict(Project="techx", Role="deployment-executor-image", LoaderSha256=self.config["loaderSha256"], BuildSha256=self.config["imageBuildSha256"]).items()])
         self.template = dict(ImageId=self.config["imageId"], InstanceType="t3.small", IamInstanceProfile=dict(Arn=PROFILE),
             MetadataOptions=dict(HttpEndpoint="enabled", HttpTokens="required", HttpPutResponseHopLimit=1, InstanceMetadataTags="disabled"),
             NetworkInterfaces=[dict(DeviceIndex=0, AssociatePublicIpAddress=True, DeleteOnTermination=True,

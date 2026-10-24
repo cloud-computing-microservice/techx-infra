@@ -80,10 +80,13 @@ python (Join-Path $PSScriptRoot 'test-automation-bundle.py')
 if ($LASTEXITCODE -ne 0) { throw 'Immutable source bundle regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-automation-tools.py')
 if ($LASTEXITCODE -ne 0) { throw 'Pinned automation toolchain regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-executor-image.py')
+if ($LASTEXITCODE -ne 0) { throw 'Executor image packaging/hash parity regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-cloudflare-dns.py')
 if ($LASTEXITCODE -ne 0) { throw 'Cloudflare DNS ownership regression tests failed.' }
 & (Join-Path $PSScriptRoot 'test-init-backend.ps1')
 & (Join-Path $PSScriptRoot 'test-iam-contract.ps1')
+& (Join-Path $PSScriptRoot 'test-lifecycle-iam-preflight.ps1')
 & (Join-Path $PSScriptRoot 'test-teardown-contract.ps1')
 & (Join-Path $PSScriptRoot 'test-certificate-cleanup.ps1')
 python (Join-Path $PSScriptRoot 'static-test.py')
@@ -100,7 +103,7 @@ foreach ($script in @(
     'domain-vpn-inventory.ps1', 'destroy-domain-vpn-environment.ps1',
     'new-client-vpn-pki.ps1', 'prepare-domain-certificates.ps1',
     'export-client-vpn-profile.ps1', 'suspend-environment.ps1',
-    'resume-environment.ps1', 'deploy-reviewed-environment.ps1'
+    'resume-environment.ps1', 'deploy-reviewed-environment.ps1', 'check-lifecycle-iam.ps1'
   )) {
   $tokens = $null
   $parseErrors = $null

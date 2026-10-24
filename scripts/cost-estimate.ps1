@@ -23,6 +23,8 @@ if ($IncludeAutomation) {
   $fixed.automationPrivateProbe = $Hours * (0.021 + 0.005) + (8 * 0.08 * $Hours / 730)
   # Persistent t3.small executor retains its public /32 across plan approval.
   $fixed.automationDeploymentExecutor = $Hours * (0.021 + 0.005) + (20 * 0.08 * $Hours / 730)
+  $fixed.automationImageBuildAllowance = 2 * (0.021 + 0.005) + (20 * 0.08 * 2 / 730)
+  $fixed.automationAmiSnapshotMonthlyAllowance = 1.00
   $fixed.automationKmsMonthlyAllowance = 1.00
   $fixed.automationStateArtifactsSecretsAndLogs = 2.00
 }

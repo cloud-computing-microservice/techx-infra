@@ -19,7 +19,7 @@ def validate_launch(ec2, config):
         raise ValueError("Executor AMI must be an exact available account-owned Linux amd64 image")
     image_tags = {row["Key"]: row["Value"] for row in images[0].get("Tags", [])}
     if (image_tags.get("Project") != "techx" or image_tags.get("Role") != "deployment-executor-image"
-            or image_tags.get("LoaderSha256") != config["loaderSha256"]):
+            or image_tags.get("LoaderSha256") != config["loaderSha256"] or image_tags.get("BuildSha256") != config["imageBuildSha256"]):
         raise ValueError("Executor AMI does not attest the reviewed bootstrap manifest")
     response = ec2.describe_launch_template_versions(LaunchTemplateId=config["launchTemplateId"], Versions=[config["launchTemplateVersion"]])
     versions = response.get("LaunchTemplateVersions", [])

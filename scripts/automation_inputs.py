@@ -7,7 +7,8 @@ from automation_budget import approved_budget
 ROLE = "arn:aws:iam::058114477594:role/techx-automation-cleanup-executor"
 FIXED = dict(region="us-east-1", project="techx", environment="staging", vpc_cidr="10.52.0.0/16",
              client_vpn_cidr="172.24.0.0/22", domain_name="shop.dinhminhkhoa.id.vn", cleanup_executor_role_arn=ROLE,
-             kubernetes_version="1.35", node_instance_type="t3.medium", node_disk_size_gib=20)
+             kubernetes_version="1.35", node_instance_type="t3.medium", node_disk_size_gib=20,
+             workload_permissions_boundary_arn="arn:aws:iam::058114477594:policy/techx-automation-workload-boundary")
 ALLOWED = set(FIXED) | {"availability_zones", "public_access_cidrs", "allow_temporary_public_access_cidr", "budget_alert_email",
     "enable_domain_vpn_foundation", "enable_domain_vpn_edge", "internal_alb_arn", "public_certificate_arn",
     "client_vpn_server_certificate_arn", "client_vpn_root_certificate_arn", "budget_limit_usd"}

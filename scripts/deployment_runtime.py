@@ -43,6 +43,8 @@ class TerraformRuntime:
         if private.get("sessionId") != execution["sessionId"] or private.get("schemaVersion") != 1:
             raise ValueError("Private input snapshot belongs to another execution")
         validate_variables(private["terraformVars"])
+        if private["terraformVars"].get("workload_permissions_boundary_arn") != "arn:aws:iam::058114477594:policy/techx-automation-workload-boundary":
+            raise ValueError("Automation requires the reviewed workload IAM boundary")
         if private["terraformVars"].get("budget_limit_usd") != execution.get("approvedBudgetUsd"):
             raise ValueError("Private Terraform budget differs from the approved session")
         self.execution, self.private = deepcopy(execution), deepcopy(private)

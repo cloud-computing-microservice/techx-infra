@@ -38,9 +38,9 @@ original approval version/time; different reviewers/runs cannot replace it.
 
 `read_authorized_plan` loads the exact private review, approval and saved-plan
 versions for a worker, checking fresh state/backend/network/source/budget context
-and the plan bytes before returning them. This is not a deployment worker yet.
-Deploy-lease ownership, cleanup scheduling, one-time stage consumption and
-Terraform state locking must still be enforced by the lifecycle executor.
+and the plan bytes before returning them. The bounded lifecycle worker now enforces
+deploy-lease ownership, cleanup scheduling, one-time stage consumption and
+Terraform state locking. Cold bootstrap and service integration remain incomplete.
 No caller-supplied approval JSON is accepted as evidence of a human review.
 
 `enable_plan_approval` defaults false and requires cleanup control. It creates
@@ -64,10 +64,10 @@ FAILED_NEEDS_CLEANUP, never an automatic replay. A cleanup takeover cannot be
 overwritten by an old worker. `apply_saved_plan` runs the existing saved-plan
 policy against the actual private JSON before applying that binary plan.
 
-The worker still has to initialize the correct remote backend, observe real
-state/config/network identity, enforce the exact toolchain and maintain its
-lease. The lifecycle worker/project, certificate/bootstrap stages and IAM for
-deployment are not yet wired. In particular, resuming a CodeBuild job after
+The worker initializes the reviewed remote backend, observes real
+state/config/network identity, enforces the toolchain and maintains its
+lease. Terraform now defines the gated worker/project/IAM below;
+certificate/bootstrap stages and actual service integration still need completion. In particular, resuming a CodeBuild job after
 approval must not copy the planner's public IP: differing observed `/32` values
 require replan. Use a stable deployment executor across plan/review/apply if
 separate CodeBuild executions cannot satisfy this contract.
@@ -160,9 +160,9 @@ immutable-bundle EC2 worker. Its parent holds/renews the deploy lease while the
 child runs, then releases it; waiting for human review holds no worker process
 or lease. A persistent t3.small keeps its public IPv4 across tasks and is included
 separately from the private probe in the cost estimate. Manager/SSM dispatch and
-loaders now exist at source as detailed below. Terraform project/network/roles,
-AMI build/manifest packaging, cold bootstrap and hosted/live integration are
-still required. This is not a complete deploy command yet.
+loaders and gated Terraform project/network/roles now exist at source as
+detailed below. AMI recipe/manifest packaging is implemented; a real image build,
+cold bootstrap and hosted/live integration are still required. This is not a complete deploy command yet.
 
 The worker reads the exact admitted S3 execution version, observes actual EC2
 role/instance/AMI/profile/tags/IMDSv2/egress, and verifies the independent schedule
@@ -221,11 +221,11 @@ review context is used as a substitute for live apply observations.
 
 New admissions require versioned `control/staging/executor-config.json`, pinned
 inside the immutable execution: schemaVersion, imageId, launchTemplateId/version,
-subnetId, securityGroupId, loaderSha256, documentVersion and documentSha256.
-`loaderSha256` identifies the reviewed bootstrap manifest packaged in the AMI.
-The Terraform lifecycle project/roles/control network/document, AMI build and
-manifest packaging are not implemented yet; these source entry points remain
-disabled and do not constitute the complete cold-start deployment workflow.
+subnetId, securityGroupId, loaderSha256, imageBuildSha256, documentVersion and
+documentSha256. `loaderSha256` identifies the reviewed loader manifest;
+`imageBuildSha256` covers all normalized installation assets. Both must match
+the private AMI tags. Source entry points remain disabled and do not yet
+constitute the complete cold-start deployment workflow.
 
 Cleanup reads deploymentLaunch intent. It must observe the exact launch client
 token and await VM termination, storing cleanup-owned executor-proof.json before
@@ -243,3 +243,56 @@ Primary API contracts: [SendCommand](https://docs.aws.amazon.com/systems-manager
 [GetCommandInvocation](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetCommandInvocation.html),
 [SSM parameters](https://docs.aws.amazon.com/systems-manager/latest/userguide/documents-syntax-data-elements-parameters.html)
 and [agent/interpolation requirements](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-troubleshooting.html).
+
+
+### Gated lifecycle infrastructure and executor image
+
+`lifecycle.tf` and `lifecycle-iam.tf` implement the control VPC (172.30.0.0/24),
+public executor subnet with direct IGW, no inbound rules, fixed launch template,
+typed SSM document, versioned/KMS executor config, non-privileged CodeBuild
+manager and environment-bound OIDC dispatcher. The manager can launch only the
+reviewed executor and send only the pinned document. The deployment role creates
+only staging workload roles with the fixed permissions boundary; it cannot
+remove that boundary or change its own IAM policies. Manual staging keeps a null
+boundary by default. Cleanup may remove the boundary from its own workload roles
+when deleting them.
+
+The control network permits HTTPS egress and VPC DNS only. The HTTPS rule has a
+local `AWS-0104` Trivy exception because dynamic AWS endpoints and signed tool
+sources are required without NAT. This is not a global scanner exemption.
+
+Two independent flags default false:
+
+- `enable_executor_image_build`: requires an explicit reviewed Canonical Ubuntu
+  24.04 amd64 parent AMI. It creates an Image Builder pipeline with no schedule,
+  not an image build. A separate authorized operation must start a build. Failed
+  build instances terminate automatically. Private AMIs/snapshots persist and
+  require a separate retention/decommission decision.
+- `enable_lifecycle_control`: requires cleanup, protected plan approval and an
+  explicit account-owned executor AMI whose loader/build digests match source.
+  It does not make cold bootstrap complete or authorize starting a workload.
+
+The recipe installs Terraform 1.15.5, Helm 4.1.4, kubectl 1.35.0, AWS CLI
+2.34.28 and PowerShell 7.6.6. Release hashes are pinned; AWS CLI additionally
+requires its official PGP signature and fixed signer fingerprint. Python wheels
+use `--require-hashes`. Image tests reject SSM Agent versions below 3.3.2746.0,
+missing agents and failed version commands. The disposable Ubuntu verification
+workflow has no OIDC or AWS credentials; passing it proves installation only,
+not AMI boot, SSM connectivity or deployment IAM.
+
+After a reviewed bootstrap apply in a newly authorized window, export outputs
+privately and run resource/context simulations with the permitted dispatcher:
+
+```powershell
+terraform -chdir=bootstrap/automation output -json > bootstrap-outputs.private.json
+./scripts/check-lifecycle-iam.ps1 -BootstrapOutputsFile bootstrap-outputs.private.json
+```
+
+The matrix covers manager launch constraints, workload role boundaries, forbidden
+self/approval writes and fixed-project dispatch. API failures, missing context,
+incomplete resource results and unexpected decisions reject preflight. This is
+simulation evidence only: service behavior, resource policies, SCPs, AMI boot and
+SSM networking still require live acceptance. Keep toggles off until all gates
+in the workspace CI/CD plan are met; an expired demo authorization cannot fund a
+new build/apply. Budget estimates include a build allowance and retained AMI
+snapshot allowance, not a spending stop.

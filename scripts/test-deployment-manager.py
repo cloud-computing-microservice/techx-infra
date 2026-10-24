@@ -25,7 +25,7 @@ class ManagerTests(unittest.TestCase):
         self.record["executionVersion"] = "execution-v1"
         self.config = dict(schemaVersion=1, imageId="ami-1234567890abcdef0", launchTemplateId="lt-1234567890abcdef0",
             launchTemplateVersion="1", subnetId="subnet-1234567890abcdef0", securityGroupId="sg-1234567890abcdef0",
-            loaderSha256="a" * 64, documentVersion="1", documentSha256="b" * 64)
+            loaderSha256="a" * 64, imageBuildSha256="c" * 64, documentVersion="1", documentSha256="b" * 64)
         self.execution = dict(self.record, deploymentConfig=deepcopy(self.config))
         self.instance_id = "i-1234567890abcdef0"
         self.private = dict(schemaVersion=1, sessionId=self.record["sessionId"],

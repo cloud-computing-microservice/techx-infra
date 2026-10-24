@@ -11,6 +11,9 @@ foreach ($budget in @(30, 60, 80)) {
   if ($estimate.fixedAllowances.automationDeploymentExecutor -le 0 -or $estimate.fixedAllowances.automationPrivateProbe -le 0) {
     throw 'Estimator must cover both the persistent deployment executor and the separate private probe.'
   }
+  if ($estimate.fixedAllowances.automationImageBuildAllowance -le 0 -or $estimate.fixedAllowances.automationAmiSnapshotMonthlyAllowance -le 0) {
+    throw 'Estimator must include AMI build and retained snapshot costs.'
+  }
 }
 foreach ($budget in @(1, 0, 81, [double]::NaN, [double]::PositiveInfinity)) {
   $failed = $false

@@ -41,9 +41,10 @@ resource "aws_iam_policy" "this" {
 }
 
 resource "aws_iam_role" "this" {
-  name               = "${var.cluster_name}-aws-load-balancer-controller"
-  assume_role_policy = data.aws_iam_policy_document.assume.json
-  tags               = var.tags
+  permissions_boundary = var.iam_permissions_boundary_arn
+  name                 = "${var.cluster_name}-aws-load-balancer-controller"
+  assume_role_policy   = data.aws_iam_policy_document.assume.json
+  tags                 = var.tags
 }
 
 resource "aws_iam_role_policy_attachment" "this" {

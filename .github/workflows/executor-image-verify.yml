@@ -1,0 +1,46 @@
+name: Verify executor image recipe
+on:
+  push:
+    paths:
+      - bootstrap/automation/**
+      - scripts/install_automation_tools.py
+      - scripts/toolchain-linux-amd64.json
+      - scripts/package_executor_image.py
+      - .github/workflows/executor-image-verify.yml
+  pull_request:
+    paths:
+      - bootstrap/automation/**
+      - scripts/install_automation_tools.py
+      - scripts/toolchain-linux-amd64.json
+      - scripts/package_executor_image.py
+      - .github/workflows/executor-image-verify.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: executor-recipe-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ubuntu-recipe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      POWERSHELL_TELEMETRY_OPTOUT: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Package normalized reviewed bootstrap
+        run: python3 scripts/package_executor_image.py --output "$RUNNER_TEMP/techx-executor-recipe"
+      - name: Install and verify on disposable Ubuntu host
+        run: sudo --preserve-env=POWERSHELL_TELEMETRY_OPTOUT,DOTNET_CLI_TELEMETRY_OPTOUT bash "$RUNNER_TEMP/techx-executor-recipe/install-executor.sh"
+      - name: Verify SDK and bootstrap manifest
+        run: |
+          /opt/techx/venv/bin/python -m pip check
+          cd /opt/techx/bootstrap
+          sha256sum --check SHA256SUMS
+          /opt/techx/venv/bin/python -m compileall -q .
+# This job has no OIDC/AWS secrets and never starts an EC2/Image Builder build.
+# It verifies OS/tool installation; IAM, SSM and a real AMI still require acceptance.

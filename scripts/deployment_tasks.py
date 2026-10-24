@@ -13,7 +13,7 @@ MANAGER = rf"arn:aws:codebuild:us-east-1:{ACCOUNT}:build/techx-automation-lifecy
 TASK_FIELDS = {"schemaVersion", "taskId", "sessionId", "executionVersion", "instanceId", "managerArn",
                "mode", "stage", "attempt", "createdAt", "expiresAt", "expectedPendingPlan"}
 CONFIG_FIELDS = {"schemaVersion", "imageId", "launchTemplateId", "launchTemplateVersion", "subnetId", "securityGroupId",
-                 "loaderSha256", "documentVersion", "documentSha256"}
+                 "loaderSha256", "imageBuildSha256", "documentVersion", "documentSha256"}
 
 
 def executor_config(config):
@@ -21,7 +21,7 @@ def executor_config(config):
         raise ValueError("A complete versioned deployment executor configuration is required")
     for key, pattern in dict(imageId=r"ami-[a-f0-9]{8,17}", launchTemplateId=r"lt-[a-f0-9]{8,17}",
                              subnetId=r"subnet-[a-f0-9]{8,17}", securityGroupId=r"sg-[a-f0-9]{8,17}",
-                             loaderSha256=r"[a-f0-9]{64}", documentSha256=r"[a-f0-9]{64}",
+                             loaderSha256=r"[a-f0-9]{64}", imageBuildSha256=r"[a-f0-9]{64}", documentSha256=r"[a-f0-9]{64}",
                              launchTemplateVersion=r"[1-9][0-9]*", documentVersion=r"[1-9][0-9]*").items():
         if not isinstance(config[key], str) or not re.fullmatch(pattern, config[key]):
             raise ValueError(f"Invalid pinned deployment configuration: {key}")

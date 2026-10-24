@@ -9,9 +9,10 @@ data "aws_iam_policy_document" "cluster_assume" {
 }
 
 resource "aws_iam_role" "cluster" {
-  name               = "${var.cluster_name}-cluster"
-  assume_role_policy = data.aws_iam_policy_document.cluster_assume.json
-  tags               = var.tags
+  permissions_boundary = var.iam_permissions_boundary_arn
+  name                 = "${var.cluster_name}-cluster"
+  assume_role_policy   = data.aws_iam_policy_document.cluster_assume.json
+  tags                 = var.tags
 }
 
 resource "aws_iam_role_policy_attachment" "cluster" {
@@ -63,9 +64,10 @@ data "aws_iam_policy_document" "node_assume" {
 }
 
 resource "aws_iam_role" "node" {
-  name               = "${var.cluster_name}-node"
-  assume_role_policy = data.aws_iam_policy_document.node_assume.json
-  tags               = var.tags
+  permissions_boundary = var.iam_permissions_boundary_arn
+  name                 = "${var.cluster_name}-node"
+  assume_role_policy   = data.aws_iam_policy_document.node_assume.json
+  tags                 = var.tags
 }
 
 locals {

@@ -193,3 +193,12 @@ variable "client_vpn_root_certificate_arn" {
     error_message = "client_vpn_root_certificate_arn must be an ACM certificate ARN in us-east-1."
   }
 }
+variable "workload_permissions_boundary_arn" {
+  description = "Automation-created roles must use the reviewed bootstrap boundary; null preserves manual teardown compatibility."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.workload_permissions_boundary_arn == null || var.workload_permissions_boundary_arn == "arn:aws:iam::058114477594:policy/techx-automation-workload-boundary"
+    error_message = "Only the fixed automation workload boundary is supported."
+  }
+}

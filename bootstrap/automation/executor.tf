@@ -88,7 +88,7 @@ locals {
     }
     identity = {
       Version = "2012-10-17", Statement = [
-        { Effect = "Allow", Action = ["iam:GetRole", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole"], Resource = "arn:aws:iam::058114477594:role/techx-staging-*" },
+        { Effect = "Allow", Action = ["iam:GetRole", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRolePermissionsBoundary", "iam:DeleteRole"], Resource = "arn:aws:iam::058114477594:role/techx-staging-*" },
         { Effect = "Allow", Action = ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions", "iam:DeletePolicyVersion", "iam:DeletePolicy"], Resource = "arn:aws:iam::058114477594:policy/techx-staging-*" },
         { Effect = "Allow", Action = ["iam:GetOpenIDConnectProvider", "iam:ListOpenIDConnectProviderTags", "iam:DeleteOpenIDConnectProvider"], Resource = "arn:aws:iam::058114477594:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/*",
         Condition = { StringEquals = { "aws:ResourceTag/Project" = "techx", "aws:ResourceTag/Environment" = "staging" } } }

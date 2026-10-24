@@ -32,6 +32,24 @@ mock_provider "aws" {
   mock_resource "aws_scheduler_schedule_group" {
     defaults = { arn = "arn:aws:scheduler:us-east-1:058114477594:schedule-group/techx-staging" }
   }
+  mock_data "aws_ami" {
+    defaults = {
+      id               = "ami-1234567890abcdef0", architecture = "x86_64", root_device_type = "ebs", root_device_name = "/dev/sda1",
+      platform_details = "Linux/UNIX", name = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server"
+    }
+  }
+  mock_resource "aws_vpc" { defaults = { id = "vpc-12345678", arn = "arn:aws:ec2:us-east-1:058114477594:vpc/vpc-12345678" } }
+  mock_resource "aws_subnet" { defaults = { id = "subnet-12345678", arn = "arn:aws:ec2:us-east-1:058114477594:subnet/subnet-12345678" } }
+  mock_resource "aws_security_group" { defaults = { id = "sg-12345678", arn = "arn:aws:ec2:us-east-1:058114477594:security-group/sg-12345678" } }
+  mock_resource "aws_launch_template" { defaults = { id = "lt-12345678", arn = "arn:aws:ec2:us-east-1:058114477594:launch-template/lt-12345678", latest_version = 1 } }
+  mock_resource "aws_ssm_document" { defaults = { latest_version = "1", hash_type = "Sha256", hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", arn = "arn:aws:ssm:us-east-1:058114477594:document/techx-automation-deployment-task" } }
+  mock_resource "aws_iam_instance_profile" { defaults = { arn = "arn:aws:iam::058114477594:instance-profile/techx-automation-lifecycle-executor" } }
+  mock_resource "aws_imagebuilder_component" { defaults = { arn = "arn:aws:imagebuilder:us-east-1:058114477594:component/techx-automation-deployment-executor/1.0.0/1" } }
+  mock_resource "aws_imagebuilder_image_recipe" { defaults = { arn = "arn:aws:imagebuilder:us-east-1:058114477594:image-recipe/techx-automation-deployment-executor/1.0.0" } }
+  mock_resource "aws_imagebuilder_infrastructure_configuration" { defaults = { arn = "arn:aws:imagebuilder:us-east-1:058114477594:infrastructure-configuration/techx-automation-deployment-executor" } }
+  mock_resource "aws_imagebuilder_distribution_configuration" { defaults = { arn = "arn:aws:imagebuilder:us-east-1:058114477594:distribution-configuration/techx-automation-deployment-executor" } }
+  mock_resource "aws_imagebuilder_image_pipeline" { defaults = { arn = "arn:aws:imagebuilder:us-east-1:058114477594:image-pipeline/techx-automation-deployment-executor" } }
+  mock_resource "aws_s3_object" { defaults = { arn = "arn:aws:s3:::techx-test-control/bootstrap/executor/fixture.zip" } }
 }
 
 variables {
@@ -41,6 +59,10 @@ variables {
 
 run "control_off_by_default" {
   command = plan
+  assert {
+    condition     = length(aws_codebuild_project.lifecycle) == 0 && length(aws_imagebuilder_image_pipeline.executor) == 0 && length(aws_vpc.executor_control) == 0
+    error_message = "Lifecycle compute/network/image resources must remain disabled by default."
+  }
   assert {
     condition     = length(aws_lambda_function.cleanup_launcher) == 0 && length(aws_scheduler_schedule_group.staging) == 0
     error_message = "Cleanup execution must remain disabled until its executor has been configured."
@@ -169,4 +191,92 @@ run "approval_requires_cleanup" {
     enable_cleanup_control = false
   }
   expect_failures = [var.enable_plan_approval]
+}
+
+run "lifecycle_is_scoped_and_pinned" {
+  command = apply
+  variables {
+    enable_cleanup_control   = true
+    enable_plan_approval     = true
+    enable_lifecycle_control = true
+    executor_ami_id          = "ami-1234567890abcdef0"
+  }
+  override_data {
+    target = data.aws_ami.executor[0]
+    values = {
+      id = "ami-1234567890abcdef0", architecture = "x86_64", root_device_type = "ebs", root_device_name = "/dev/sda1", platform_details = "Linux/UNIX"
+      tags = {
+        Project      = "techx", Role = "deployment-executor-image"
+        LoaderSha256 = sha256(join("", [for name in sort(["automation_bundle.py", "cleanup_launcher.py", "cleanup_loader.py", "deployment_task_loader.py"]) : "${sha256(replace(file(name == "automation_bundle.py" ? "../../scripts/${name}" : name), "\r\n", "\n"))}  ${name}\n"]))
+        BuildSha256  = sha256(jsonencode({ for name in ["automation_bundle.py", "cleanup_launcher.py", "cleanup_loader.py", "deployment_task_loader.py", "install-executor.sh", "install_automation_tools.py", "toolchain-linux-amd64.json", "executor-image-tools.json", "executor-python.lock", "executor-aws-cli-public-key.asc", "verify_executor_ssm.py"] : name => sha256(replace(file(contains(["automation_bundle.py", "install_automation_tools.py", "toolchain-linux-amd64.json"], name) ? "../../scripts/${name}" : name), "\r\n", "\n")) }))
+      }
+    }
+  }
+  assert {
+    condition     = aws_codebuild_project.lifecycle[0].source[0].type == "NO_SOURCE" && !aws_codebuild_project.lifecycle[0].environment[0].privileged_mode && aws_codebuild_project.lifecycle[0].concurrent_build_limit == 1
+    error_message = "Manager must use the immutable loader, no Docker privilege and one build at a time."
+  }
+  assert {
+    condition     = aws_launch_template.executor[0].instance_type == "t3.small" && aws_launch_template.executor[0].metadata_options[0].http_tokens == "required" && aws_launch_template.executor[0].disable_api_stop && aws_launch_template.executor[0].credit_specification[0].cpu_credits == "standard"
+    error_message = "Executor launch must enforce the bounded instance and IMDS/stability controls."
+  }
+  assert {
+    condition = (length(jsondecode(aws_ssm_document.deployment_task[0].content).mainSteps) == 1 &&
+      jsondecode(aws_ssm_document.deployment_task[0].content).parameters.TaskId.interpolationType == "ENV_VAR" &&
+      jsondecode(aws_ssm_document.deployment_task[0].content).parameters.TaskId.allowedPattern == "^[a-f0-9]{32}$" &&
+    keys(jsondecode(aws_ssm_document.deployment_task[0].content).parameters) == ["TaskId"])
+    error_message = "Remote document may accept only the typed TaskId, never a caller-selected shell command."
+  }
+  assert {
+    condition     = length(aws_security_group.executor_control[0].ingress) == 0
+    error_message = "Executor control network must have no inbound rule."
+  }
+  assert {
+    condition     = alltrue([for p in aws_iam_policy.lifecycle_manager : length(p.policy) <= 6144]) && alltrue([for p in aws_iam_policy.deployment_executor : length(p.policy) <= 6144]) && length(aws_iam_policy.workload_boundary[0].policy) <= 6144
+    error_message = "All managed role policies and the workload boundary must fit AWS limits."
+  }
+  assert {
+    condition = alltrue(flatten([for policy in aws_iam_policy.lifecycle_manager : [for statement in jsondecode(policy.policy).Statement :
+      !contains(statement.Action, "eks:CreateCluster") && !contains(statement.Action, "iam:CreateRole")
+    ]]))
+    error_message = "The manager cannot create workload clusters or IAM roles."
+  }
+  assert {
+    condition = alltrue([for statement in jsondecode(aws_iam_policy.deployment_executor["identity"].policy).Statement :
+      statement.Condition.StringEquals["iam:PermissionsBoundary"] == "arn:aws:iam::058114477594:policy/techx-automation-workload-boundary"
+      if contains(statement.Action, "iam:CreateRole")
+    ])
+    error_message = "Executor-created application roles must carry the reviewed boundary."
+  }
+  assert {
+    condition = alltrue(flatten([for policy in aws_iam_policy.deployment_executor : [for statement in jsondecode(policy.policy).Statement :
+      !contains(statement.Action, "iam:PutRolePermissionsBoundary") && !contains(statement.Action, "iam:DeleteRolePermissionsBoundary") && !contains(statement.Action, "*")
+    ]]))
+    error_message = "Deployment cannot remove/change boundaries or grant arbitrary account-admin actions."
+  }
+}
+
+run "lifecycle_requires_dependencies" {
+  command = plan
+  variables {
+    enable_lifecycle_control = true
+    executor_ami_id          = "ami-1234567890abcdef0"
+  }
+  expect_failures = [var.enable_lifecycle_control]
+}
+
+run "image_pipeline_is_manual_and_terminates_failed_builds" {
+  command = apply
+  variables {
+    enable_executor_image_build = true
+    executor_parent_ami_id      = "ami-1234567890abcdef0"
+  }
+  assert {
+    condition     = aws_imagebuilder_infrastructure_configuration.executor[0].terminate_instance_on_failure && length(aws_imagebuilder_image_pipeline.executor[0].schedule) == 0
+    error_message = "Image Builder must be explicitly started and terminate its failed build instance independently of GitHub."
+  }
+  assert {
+    condition     = length(aws_codebuild_project.lifecycle) == 0 && length(aws_s3_object.executor_config) == 0 && length(aws_imagebuilder_image_pipeline.executor) == 1
+    error_message = "Creating the image pipeline must not activate workload deployment or start a build."
+  }
 }

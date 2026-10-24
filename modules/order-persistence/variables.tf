@@ -7,3 +7,8 @@ variable "oidc_provider_url" { type = string }
 variable "service_account_namespace" { type = string }
 variable "service_account_name" { type = string }
 variable "tags" { type = map(string) }
+variable "iam_permissions_boundary_arn" {
+  description = "Optional pre-created workload role boundary for automated staging."
+  type        = string
+  default     = null
+}

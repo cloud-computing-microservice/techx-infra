@@ -405,8 +405,9 @@ before activation. Configure `AWS_CHART_SELECTOR_ROLE_ARN` and
 
 Selection requires an idle PROVISIONING session, APPLIED foundation, exact
 version/hash cold-release receipt and live cleanup schedule. It verifies a merged
-same-repository chart main PR containing only `values-staging.yaml` and
-`releases/staging.json`, plus a human approval of that exact PR head. A later
+same-repository chart main PR changing one or both of `values-staging.yaml` and
+`releases/staging.json`, plus a human approval of that exact PR head. The PR file
+set must equal the full tree diff from the admitted baseline. A later
 change request or latest failed/pending main CI cannot reuse an older green run.
 GitHub responses must be complete, bounded and from the fixed repository.
 
@@ -525,7 +526,9 @@ is rechecked during the worker and before receipt publication, rather than
 accepting a caller-supplied success flag. Release receipts now require the
 `sourceCi` run/source proof; `sourceCiPassed` alone is insufficient.
 
-Only after publishing does the workflow create its chart-scoped App token.
+After publishing, the workflow prepares the chart intent with read-only GitHub
+access. A real diff then obtains a chart-scoped App token; exact baseline reuse
+records its separate review intent without creating an installation token.
 `bootstrap_proposal.py` renders exactly `values-staging.yaml` and
 `releases/staging.json` from the admitted archive and cold manifest. Git blob
 hashes, the unchanged baseline tree and single admitted parent are checked
@@ -551,7 +554,8 @@ GitHub/SSM/CodeBuild failures, latest CI failure, incomplete history, branch
 conflicts, lost responses and lost session CAS. These use controlled services;
 the GitHub App, protected environments, live OIDC and cloud resources are not
 configured/accepted by this source change. Parent lifecycle dispatch, promotion,
-DNS/acceptance and rollback remain due. REST contracts:
+DNS/acceptance and rollback remain due. Zero-diff reuse is described below.
+REST contracts:
 [workflow runs](https://docs.github.com/en/rest/actions/workflow-runs),
 [Git commits](https://docs.github.com/en/rest/git/commits),
 [references](https://docs.github.com/en/rest/git/refs) and
@@ -637,3 +641,38 @@ or PR bypass. Chart adds a fresh approval of its last push. These settings do
 not implement the still-missing promotion/session gate or prove an installation
 token cannot promote after a session closes. No AWS teardown is dispatched by CI
 verification, and live cleanup IAM/network/failure acceptance is still required.
+
+### Exact baseline reuse instead of an empty release PR (source only)
+
+Cold preparation renders both allowed files before any GitHub write. If their
+Git blobs and modes already equal the admitted complete baseline tree, it writes
+a versioned schema-2 `kind: reuse` proposal bound to this session, execution,
+release and tree. There is no branch, commit, PR or implicit selection. A real
+one-file or two-file diff keeps the reviewed release-PR path. Preparation uses a
+read-only GitHub client; only the diff path creates the App token and calls the
+writer. Existing normal proposal retries retain the same head/tree contract.
+
+Run `staging-chart-reuse.yml` for the existing session/execution. Its main-only
+`staging-chart-read` environment assumes `AWS_CHART_READER_ROLE_ARN` and can only
+read the admitted archive/receipts and live cleanup schedule. Preview shows the
+exact baseline, three image digests, source SHAs, budget and unchanged deadlines,
+without the alert email. The main-only `staging-chart-reuse` job requires a real
+human review before assuming the selector role. Its request hash and workflow
+run bind that review to the exact preview, not a prior session's merged PR.
+
+After review, the helper recomputes the preview and requires the same source,
+manifest, proposal version, tree, current chart main and latest passing CI. It
+rechecks workflow/reviewer/CI before writes, and the normal session/deadline/
+schedule/CAS guards remain active. The read-only identity cannot publish. A lost
+session CAS can recover the same immutable selection receipt; it cannot replace
+another release or manufacture a review. Consumers accept this separate schema-2
+proof only at the exact admitted baseline. GitOps still checks Synced/Healthy,
+all three runtime digests and the shared internal ALB before BOOTSTRAPPED.
+
+Controlled-service tests cover producer → reuse intent → fresh human review →
+selection consumption, GitOps bootstrap at that baseline, one-file PR changes,
+changed/failed CI, review withdrawal/cancel, source/main/deadline drift, busy
+sessions, forged preview/receipt data and lost CAS. These do not prove live OIDC,
+review enforcement, GitHub App behavior, runtime or cleanup integration. Parent
+callbacks, promotion/session gates, acceptance/rollback and cloud acceptance
+remain incomplete; both deployment flags stay false.

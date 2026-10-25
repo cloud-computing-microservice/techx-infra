@@ -78,6 +78,8 @@ python (Join-Path $PSScriptRoot 'test-lifecycle-continuation.py')
 if ($LASTEXITCODE -ne 0) { throw 'Protected lifecycle continuation and bounded same-build observation tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-destroy.py')
 if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup dispatch, stale-session and protected inventory evidence tests failed.' }
+python (Join-Path $PSScriptRoot 'test-chart-reuse.py')
+if ($LASTEXITCODE -ne 0) { throw 'Zero-diff chart proposal, human-reviewed reuse and immutable selection tests failed.' }
 python (Join-Path $PSScriptRoot 'test-workload-state.py')
 if ($LASTEXITCODE -ne 0) { throw 'Empty workload state initialization and lineage regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-deployment-runtime.py')

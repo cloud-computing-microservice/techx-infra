@@ -15,6 +15,12 @@ from plan_review_store import ACCOUNT, checksum, read_json
 CHART_REPO = "cloud-computing-microservice/techx-chart"
 INFRA_REPO = "cloud-computing-microservice/techx-infra"
 ALLOWED_FILES = {"values-staging.yaml", "releases/staging.json"}
+REUSE_WORKFLOW = ".github/workflows/staging-chart-reuse.yml"
+REUSE_ENVIRONMENT = "staging-chart-reuse"
+
+
+def reuse_proposal(value):
+    return type(value.get("schemaVersion")) is int and value["schemaVersion"] == 2 and value.get("kind") == "reuse"
 
 
 def sha(value):
@@ -65,13 +71,22 @@ def read_proposal(client, bucket, record, execution, execution_version):
         raise ValueError("Cold chart selection requires the immutable proposal receipt")
     version(ref["versionId"])
     value, _ = read_json(client, bucket, key, ref["versionId"])
-    number = value.get("prNumber")
-    if (checksum(value) != ref["sha256"] or value.get("schemaVersion") != 1 or value.get("sessionId") != record["sessionId"]
+    fields = {"schemaVersion", "sessionId", "executionVersion", "sourceRevisions", "releaseReference", "baselineSha", "headSha", "treeSha"}
+    reuse = reuse_proposal(value)
+    if (checksum(value) != ref["sha256"] or value.get("sessionId") != record["sessionId"]
             or value.get("executionVersion") != execution_version or value.get("sourceRevisions") != execution["sourceRevisions"]
-            or value.get("releaseReference") != record.get("bootstrapRelease") or value.get("baselineSha") != execution["sourceRevisions"]["techx-chart"]
-            or value.get("branch") != f"release/bootstrap-{record['sessionId']}" or type(number) is not int or number < 1
-            or value.get("pullRequest") != f"https://github.com/{CHART_REPO}/pull/{number}"):
+            or value.get("releaseReference") != record.get("bootstrapRelease") or value.get("baselineSha") != execution["sourceRevisions"]["techx-chart"]):
         raise ValueError("Proposal receipt differs from the admitted release/source/PR")
+    if reuse:
+        if set(value) != fields | {"kind"} or value.get("headSha") != value["baselineSha"]:
+            raise ValueError("Reuse proposal must select only the exact admitted baseline without a PR")
+    else:
+        number = value.get("prNumber")
+        if (type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1
+                or set(value) != fields | {"branch", "prNumber", "pullRequest"}
+                or value.get("branch") != f"release/bootstrap-{record['sessionId']}" or type(number) is not int or number < 1
+                or value.get("pullRequest") != f"https://github.com/{CHART_REPO}/pull/{number}"):
+            raise ValueError("Proposal receipt has an invalid release PR identity")
     sha(value.get("headSha"))
     sha(value.get("treeSha"))
     return value
@@ -118,10 +133,11 @@ def provenance(github, chart_sha, pr_number):
         raise ValueError("Chart must come from a merged same-repository main release PR")
     head = sha(pull["head"]["sha"])
     files = github.get(f"pulls/{pr_number}/files?per_page=100")
-    if (not isinstance(files, list) or len(files) != 2 or pull.get("changed_files") != 2
-            or {row.get("filename") for row in files} != ALLOWED_FILES
+    if (not isinstance(files, list) or not 1 <= len(files) <= 2 or type(pull.get("changed_files")) is not int or pull["changed_files"] != len(files)
+            or len({row.get("filename") for row in files}) != len(files)
+            or {row.get("filename") for row in files} - ALLOWED_FILES
             or any(row.get("status") not in ("added", "modified") for row in files)):
-        raise ValueError("Release PR may change only the two release files")
+        raise ValueError("Release PR must change one or two allowed release files")
     reviews = github.get(f"pulls/{pr_number}/reviews?per_page=100")
     if not isinstance(reviews, list): raise ValueError("Chart review history is invalid")
     latest = {}
@@ -139,6 +155,14 @@ def provenance(github, chart_sha, pr_number):
     approved = [row for row in latest.values() if row.get("state") == "APPROVED" and row.get("commit_id") == head
         and row["user"].get("login") != pull.get("user", {}).get("login")]
     if not approved: raise ValueError("The exact chart PR head needs a human approval")
+    ci_run = latest_chart_ci(github, chart_sha)
+    return dict(pullRequest=f"https://github.com/{CHART_REPO}/pull/{pr_number}", prNumber=pr_number,
+        prHeadSha=head, reviewers=sorted({row["user"]["login"] for row in approved}),
+        changedFiles=sorted(row["filename"] for row in files), ciRun=ci_run)
+
+
+def latest_chart_ci(github, chart_sha):
+    sha(chart_sha)
     main = github.get("git/ref/heads/main")
     if main.get("object", {}).get("sha") != chart_sha: raise ValueError("Selected release is no longer chart main")
     response = github.get(f"actions/workflows/verify.yml/runs?head_sha={chart_sha}&per_page=100")
@@ -154,13 +178,11 @@ def provenance(github, chart_sha, pr_number):
     run = max(valid, key=lambda row: row["id"])
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         raise ValueError("The latest chart main CI run must pass")
-    return dict(pullRequest=f"https://github.com/{CHART_REPO}/pull/{pr_number}", prNumber=pr_number,
-        prHeadSha=head, reviewers=sorted({row["user"]["login"] for row in approved}),
-        ciRun=f"https://github.com/{CHART_REPO}/actions/runs/{run['id']}")
+    return f"https://github.com/{CHART_REPO}/actions/runs/{run['id']}"
 
 
-def selection(github, source, record, execution, execution_version, release, chart_sha, pr_number):
-    proof = provenance(github, chart_sha, pr_number)
+def release_tree(github, source, execution, release, chart_sha):
+    """Verify the full tree and exact manifest, including the zero-diff case."""
     baseline_sha = execution["sourceRevisions"]["techx-chart"]
     _, baseline = git_tree(github, baseline_sha)
     tree_sha, chosen = git_tree(github, chart_sha)
@@ -186,9 +208,17 @@ def selection(github, source, record, execution, execution_version, release, cha
         raise ValueError("Merged chart does not select the exact cold-published manifest")
     if github.get("git/ref/heads/main").get("object", {}).get("sha") != chart_sha:
         raise ValueError("Chart main changed during selection checks")
+    return dict(baselineSha=baseline_sha, chartSha=chart_sha, treeSha=tree_sha, changedFiles=sorted(changed))
+
+
+def selection(github, source, record, execution, execution_version, release, chart_sha, pr_number):
+    proof = provenance(github, chart_sha, pr_number)
+    tree = release_tree(github, source, execution, release, chart_sha)
+    if tree["changedFiles"] != proof["changedFiles"]:
+        raise ValueError("Merged PR diff does not match the exact admitted baseline change")
     return dict(schemaVersion=1, sessionId=record["sessionId"], executionVersion=execution_version,
         sourceRevisions=execution["sourceRevisions"], releaseReference=record["bootstrapRelease"], proposalReference=record["bootstrapProposal"],
-        baselineSha=baseline_sha, chartSha=chart_sha, treeSha=tree_sha, provenance=proof)
+        baselineSha=tree["baselineSha"], chartSha=chart_sha, treeSha=tree["treeSha"], provenance=proof)
 
 
 def read_selection(client, bucket, record, execution, execution_version):
@@ -205,7 +235,11 @@ def read_selection(client, bucket, record, execution, execution_version):
         raise ValueError("Selected chart must remain bound to its immutable proposal")
     version(proposal["versionId"])
     value, _ = read_json(client, bucket, key, ref["versionId"])
-    if (checksum(value) != ref["sha256"] or value.get("schemaVersion") != 1 or value.get("sessionId") != record["sessionId"]
+    reuse = reuse_proposal(value)
+    fields = {"schemaVersion", "sessionId", "executionVersion", "sourceRevisions", "releaseReference", "proposalReference", "baselineSha", "chartSha", "treeSha", "provenance"}
+    if (set(value) != fields | ({"kind"} if reuse else set()) or checksum(value) != ref["sha256"] or type(value.get("schemaVersion")) is not int
+            or not (value["schemaVersion"] == 1 and "kind" not in value or reuse)
+            or value.get("sessionId") != record["sessionId"]
             or value.get("executionVersion") != execution_version or value.get("sourceRevisions") != execution["sourceRevisions"]
             or value.get("releaseReference") != record.get("bootstrapRelease") or value.get("proposalReference") != record.get("bootstrapProposal")
             or value.get("baselineSha") != execution["sourceRevisions"]["techx-chart"]):
@@ -213,8 +247,20 @@ def read_selection(client, bucket, record, execution, execution_version):
     sha(value.get("chartSha"))
     sha(value.get("treeSha"))
     proof = value.get("provenance", {})
+    if reuse:
+        if (value["chartSha"] != value["baselineSha"]
+                or set(proof) != {"reviewRun", "reviewer", "previewSha256", "ciRun"}
+                or not re.fullmatch(rf"https://github.com/{re.escape(INFRA_REPO)}/actions/runs/[1-9][0-9]*", proof.get("reviewRun", ""))
+                or not re.fullmatch(r"[A-Za-z0-9-]{1,39}", proof.get("reviewer", ""))
+                or not re.fullmatch(r"[a-f0-9]{64}", proof.get("previewSha256", ""))
+                or not re.fullmatch(rf"https://github.com/{re.escape(CHART_REPO)}/actions/runs/[1-9][0-9]*", proof.get("ciRun", ""))):
+            raise ValueError("Reuse selection is missing exact baseline and human-reviewed preview provenance")
+        return value
     number = proof.get("prNumber")
-    if (type(number) is not int or number < 1 or proof.get("pullRequest") != f"https://github.com/{CHART_REPO}/pull/{number}"
+    if (value["chartSha"] == value["baselineSha"] or type(number) is not int or number < 1
+            or proof.get("pullRequest") != f"https://github.com/{CHART_REPO}/pull/{number}"
+            or not isinstance(proof.get("changedFiles"), list) or not 1 <= len(proof["changedFiles"]) <= 2
+            or proof["changedFiles"] != sorted(set(proof["changedFiles"])) or set(proof["changedFiles"]) - ALLOWED_FILES
             or not re.fullmatch(rf"https://github.com/{re.escape(CHART_REPO)}/actions/runs/[1-9][0-9]*", proof.get("ciRun", ""))
             or not isinstance(proof.get("reviewers"), list) or not proof["reviewers"]
             or any(not isinstance(user, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,39}", user) for user in proof["reviewers"])):

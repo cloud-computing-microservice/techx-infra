@@ -11,20 +11,20 @@ import tempfile
 from automation_budget import validate_estimate
 from automation_session import S3SessionStore, utc, validate
 from bootstrap_publish import archive_loader
-from chart_selection import CHART_REPO, INFRA_REPO, GitHub, read_proposal, read_release, read_selection, selection
+from chart_selection import CHART_REPO, INFRA_REPO, GitHub, latest_chart_ci, read_proposal, read_release, read_selection, reuse_proposal, selection
 from cleanup_schedule import verify_existing
 from plan_review_store import ACCOUNT, checksum, immutable_json, read_json
 
 WORKFLOW = ".github/workflows/staging-chart-select.yml"
 
 
-def verified_selector(github, run_id, execution):
+def verified_selector(github, run_id, execution, *, workflow=WORKFLOW):
     if not re.fullmatch(r"[1-9][0-9]*", str(run_id)): raise ValueError("A real selector workflow run is required")
     run = github.get(f"actions/runs/{run_id}")
     if (run.get("id") != int(run_id) or run.get("status") != "in_progress" or run.get("event") != "workflow_dispatch"
             or type(run.get("run_attempt")) is not int or run["run_attempt"] != 1 or run.get("head_branch") != "main"
             or run.get("head_sha") != execution["sourceRevisions"]["techx-infra"]
-            or run.get("path") not in (WORKFLOW, WORKFLOW + "@main")
+            or run.get("path") not in (workflow, workflow + "@main")
             or any(run.get(key, {}).get("full_name") != INFRA_REPO for key in ("repository", "head_repository"))):
         raise ValueError("Selector must run once on the exact admitted infra SHA from trusted main")
 
@@ -36,10 +36,12 @@ class ChartSelector:
         self.execution, self.version, self.run_id = deepcopy(execution), execution_version, str(run_id)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
+    def expected_identity(self):
+        return f"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-chart-selector/techx-chart-select-{self.run_id}"
+
     def guard(self):
         identity = self.clients["sts"].get_caller_identity()
-        expected = f"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-chart-selector/techx-chart-select-{self.run_id}"
-        if identity.get("Account") != ACCOUNT or identity.get("Arn") != expected:
+        if identity.get("Account") != ACCOUNT or identity.get("Arn") != self.expected_identity():
             raise ValueError("Only the dedicated selector identity for this workflow run may publish")
         record, etag = self.store.read()
         validate(record)
@@ -58,17 +60,32 @@ class ChartSelector:
         verified_selector(infra_github, self.run_id, self.execution)
         release = read_release(self.clients["s3"], self.bucket, record, self.execution, self.version)
         proposal = read_proposal(self.clients["s3"], self.bucket, record, self.execution, self.version)
+        if reuse_proposal(proposal): raise ValueError("Zero-diff reuse requires a separate human-reviewed workflow")
         if proposal["prNumber"] != pr_number: raise ValueError("Selection PR differs from the cold proposal")
         value = selection(chart_github, Path(source), record, self.execution, self.version, release, chart_sha, pr_number)
         if value["provenance"]["prHeadSha"] != proposal["headSha"] or value["treeSha"] != proposal["treeSha"]:
             raise ValueError("Merged chart differs from the immutable proposal head/tree")
-        record, etag = self.guard()
+        def live():
+            verified_selector(infra_github, self.run_id, self.execution)
+            if latest_chart_ci(chart_github, chart_sha) != value["provenance"]["ciRun"]:
+                raise ValueError("Chart CI changed during selection publication")
+        return self.publish_value(value, live)
+
+    def publish_value(self, value, live):
+        """Shared immutable handoff; retries preserve previously proven provenance."""
+        def equivalent(previous):
+            if {key: item for key, item in previous.items() if key != "provenance"} != {key: item for key, item in value.items() if key != "provenance"}:
+                return False
+            return (reuse_proposal(value) or all(previous.get("provenance", {}).get(name) == value["provenance"][name]
+                                                  for name in ("prNumber", "prHeadSha")))
+        record, _ = self.guard()
+        live()
         if (record.get("bootstrapRelease") != value["releaseReference"]
                 or record.get("bootstrapProposal") != value["proposalReference"]):
             raise ValueError("Cold release/proposal changed during chart verification")
         if record.get("bootstrapChart"):
             previous = read_selection(self.clients["s3"], self.bucket, record, self.execution, self.version)
-            if previous["chartSha"] != chart_sha or previous["provenance"]["prNumber"] != pr_number:
+            if not equivalent(previous):
                 raise ValueError("A selected bootstrap chart cannot be replaced")
             return record["bootstrapChart"]
         key = f"chart-selections/staging/{record['sessionId']}/bootstrap.json"
@@ -76,20 +93,20 @@ class ChartSelector:
         # original provenance after freshly verifying the same release/PR.
         listing = self.clients["s3"].list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1, ExpectedBucketOwner=ACCOUNT)
         rows = listing.get("Contents", [])
-        if listing.get("IsTruncated") or any(row.get("Key") != key for row in rows):
+        if listing.get("IsTruncated") is not False or not isinstance(rows, list) or len(rows) > 1 or any(row.get("Key") != key for row in rows):
             raise ValueError("Ambiguous selection receipt lookup")
         if rows:
             previous, object_version = read_json(self.clients["s3"], self.bucket, key)
-            if (any(previous.get(name) != expected for name, expected in value.items() if name != "provenance")
-                    or previous.get("provenance", {}).get("prNumber") != pr_number
-                    or previous.get("provenance", {}).get("prHeadSha") != value["provenance"]["prHeadSha"]):
+            if not equivalent(previous):
                 raise ValueError("An existing selection receipt belongs to another release/PR")
             ref = dict(key=key, versionId=object_version, sha256=checksum(previous))
             read_selection(self.clients["s3"], self.bucket, dict(record, bootstrapChart=ref), self.execution, self.version)
         else:
+            live()
             ref = immutable_json(self.clients["s3"], self.bucket, key, value)
             ref["sha256"] = checksum(value)
         record, etag = self.guard()
+        live()
         if (record.get("bootstrapRelease") != value["releaseReference"] or record.get("bootstrapProposal") != value["proposalReference"]
                 or record.get("bootstrapChart") not in (None, ref)):
             raise ValueError("Selection handoff lost its release/session identity")

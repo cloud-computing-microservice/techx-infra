@@ -1,0 +1,60 @@
+name: Orchestrate admitted staging lifecycle
+on:
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: Existing admitted staging session; does not open a new environment
+        required: true
+        type: string
+      execution_version:
+        description: Exact immutable S3 execution VersionId
+        required: true
+        type: string
+  workflow_run:
+    workflows:
+      - Open reviewed staging session
+    types: [completed]
+permissions:
+  contents: read
+concurrency:
+  group: staging-orchestration
+  cancel-in-progress: false
+jobs:
+  observe:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1 && vars.LIFECYCLE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    environment: staging-lifecycle
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - run: python -m pip install -r scripts/requirements-automation.txt
+      - uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_LIFECYCLE_DISPATCHER_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: '058114477594'
+          role-session-name: techx-lifecycle-${{ github.run_id }}
+          role-duration-seconds: 3600
+      - name: Create platform-only Actions token when configured
+        id: app
+        if: vars.LIFECYCLE_APP_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.LIFECYCLE_APP_ID }}
+          private-key: ${{ secrets.LIFECYCLE_APP_PRIVATE_KEY }}
+          owner: cloud-computing-microservice
+          repositories: techx-platform
+          permission-actions: write
+      - name: Bind callback, observe same work and dispatch only typed successors
+        env:
+          CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
+          GITHUB_TOKEN: ${{ github.token }}
+          LIFECYCLE_APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: python scripts/orchestrate_lifecycle.py

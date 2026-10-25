@@ -343,6 +343,19 @@ run "lifecycle_is_scoped_and_pinned" {
     ]) == 1
     error_message = "Only the cold publisher may write immutable proposal receipts."
   }
+  assert {
+    condition = (length([for statement in data.aws_iam_policy_document.control.statement : statement if
+      statement.sid == "OnlyLifecycleDispatcherCanWriteHandoffs" && statement.effect == "Deny" &&
+      contains(statement.resources, "arn:aws:s3:::techx-test-control/handoffs/staging/*") &&
+      anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
+        contains(condition.values, "arn:aws:iam::058114477594:role/techx-automation-lifecycle-dispatcher")
+      ])
+      ]) == 1 && length(aws_iam_role_policy.handoff_children) == 5 &&
+      alltrue(flatten([for policy in aws_iam_role_policy.handoff_children : [for statement in jsondecode(policy.policy).Statement : [for action in statement.Action :
+        contains(["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket"], action)
+    ]]])))
+    error_message = "Only the dispatcher may write protected handoffs; every child must have read-only receipt access."
+  }
 }
 
 run "lifecycle_requires_dependencies" {

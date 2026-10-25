@@ -14,6 +14,7 @@ from chart_selection import (CHART_REPO, INFRA_REPO, GitHub, REUSE_ENVIRONMENT, 
                              latest_chart_ci, read_proposal, read_release, release_tree, reuse_proposal)
 from plan_review_store import ACCOUNT, checksum, encoded, read_json
 from select_bootstrap_chart import ChartSelector, verified_selector
+from workflow_handoff import guard_child
 
 
 class ChartReuse(ChartSelector):
@@ -91,6 +92,9 @@ def main():
     selector = ChartReuse(clients, S3SessionStore(args.bucket), args.bucket, execution, args.execution_version,
                           os.environ["GITHUB_RUN_ID"], read_only=args.mode == "preview")
     selector.guard()
+    guard_child(clients["s3"], args.bucket, dispatch_id=os.environ.get("TECHX_DISPATCH_ID", ""),
+        repository=INFRA_REPO, workflow="staging-chart-reuse.yml", source_sha=os.environ["GITHUB_SHA"], run_id=os.environ["GITHUB_RUN_ID"],
+        inputs=dict(session_id=args.session_id, execution_version=args.execution_version))
     token = os.environ["GITHUB_TOKEN"]
     chart, infra = GitHub(CHART_REPO, token), GitHub(INFRA_REPO, token)
     with tempfile.TemporaryDirectory(prefix="techx-chart-reuse-") as directory:

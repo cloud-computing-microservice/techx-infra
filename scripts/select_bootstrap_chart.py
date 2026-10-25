@@ -14,6 +14,7 @@ from bootstrap_publish import archive_loader
 from chart_selection import CHART_REPO, INFRA_REPO, GitHub, latest_chart_ci, read_proposal, read_release, read_selection, reuse_proposal, selection
 from cleanup_schedule import verify_existing
 from plan_review_store import ACCOUNT, checksum, immutable_json, read_json
+from workflow_handoff import guard_child
 
 WORKFLOW = ".github/workflows/staging-chart-select.yml"
 
@@ -63,6 +64,7 @@ class ChartSelector:
         if reuse_proposal(proposal): raise ValueError("Zero-diff reuse requires a separate human-reviewed workflow")
         if proposal["prNumber"] != pr_number: raise ValueError("Selection PR differs from the cold proposal")
         value = selection(chart_github, Path(source), record, self.execution, self.version, release, chart_sha, pr_number)
+        value["provenance"]["selectionRun"] = f"https://github.com/{INFRA_REPO}/actions/runs/{self.run_id}"
         if value["provenance"]["prHeadSha"] != proposal["headSha"] or value["treeSha"] != proposal["treeSha"]:
             raise ValueError("Merged chart differs from the immutable proposal head/tree")
         def live():
@@ -129,6 +131,9 @@ def main():
     execution, _ = read_json(clients["s3"], args.bucket, f"executions/{args.session_id}.json", args.execution_version)
     selector = ChartSelector(clients, S3SessionStore(args.bucket), args.bucket, execution, args.execution_version, os.environ["GITHUB_RUN_ID"])
     selector.guard()
+    guard_child(clients["s3"], args.bucket, dispatch_id=os.environ.get("TECHX_DISPATCH_ID", ""),
+        repository=INFRA_REPO, workflow="staging-chart-select.yml", source_sha=os.environ["GITHUB_SHA"], run_id=os.environ["GITHUB_RUN_ID"],
+        inputs=dict(session_id=args.session_id, execution_version=args.execution_version, chart_sha=args.chart_sha, pr_number=str(args.pr_number)))
     token = os.environ["GITHUB_TOKEN"]
     with tempfile.TemporaryDirectory(prefix="techx-chart-select-") as directory:
         root = Path(directory) / "execution"

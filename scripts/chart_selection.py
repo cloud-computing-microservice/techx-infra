@@ -259,6 +259,7 @@ def read_selection(client, bucket, record, execution, execution_version):
     number = proof.get("prNumber")
     if (value["chartSha"] == value["baselineSha"] or type(number) is not int or number < 1
             or proof.get("pullRequest") != f"https://github.com/{CHART_REPO}/pull/{number}"
+            or not re.fullmatch(rf"https://github.com/{re.escape(INFRA_REPO)}/actions/runs/[1-9][0-9]*", proof.get("selectionRun", ""))
             or not isinstance(proof.get("changedFiles"), list) or not 1 <= len(proof["changedFiles"]) <= 2
             or proof["changedFiles"] != sorted(set(proof["changedFiles"])) or set(proof["changedFiles"]) - ALLOWED_FILES
             or not re.fullmatch(rf"https://github.com/{re.escape(CHART_REPO)}/actions/runs/[1-9][0-9]*", proof.get("ciRun", ""))

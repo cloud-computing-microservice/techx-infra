@@ -37,6 +37,14 @@ def environment(record, op):
                 TECHX_MODE=op["mode"], TECHX_PLAN_STAGE=op["stage"], TECHX_PLAN_ATTEMPT=str(op["attempt"]))
 
 
+def dispatch_identity(record, execution_version, op):
+    context = dict(sessionId=record["sessionId"], executionVersion=execution_version, operation=op,
+        predecessor=record.get("lifecycleDispatch", {}).get("id"),
+        pendingPlan=record.get("pendingPlan") if op["mode"] == "apply" else None,
+        bootstrapChart=record.get("bootstrapChart") if op["mode"] == "bootstrap" else None)
+    return hashlib.sha256(encoded(context)).hexdigest()
+
+
 def guard(record, execution, version, now, *, idle=True):
     validate(record)
     executor_config(execution["deploymentConfig"])
@@ -156,11 +164,7 @@ class Dispatcher:
                     raise ValueError("Apply requires its completed planning predecessor")
             elif next_operation(current, previous) != op:
                 raise ValueError("Operation is not the next supported lifecycle edge")
-        context = dict(sessionId=current["sessionId"], executionVersion=self.version, operation=op,
-                       predecessor=current.get("lifecycleDispatch", {}).get("id"),
-                       pendingPlan=current.get("pendingPlan") if op["mode"] == "apply" else None,
-                       bootstrapChart=current.get("bootstrapChart") if op["mode"] == "bootstrap" else None)
-        dispatch_id = hashlib.sha256(encoded(context)).hexdigest()
+        dispatch_id = dispatch_identity(current, self.version, op)
         updated = deepcopy(current)
         updated["lifecycleDispatch"] = dict(id=dispatch_id, operation=op, phase="PREPARED", createdAt=self.clock().isoformat())
         try:

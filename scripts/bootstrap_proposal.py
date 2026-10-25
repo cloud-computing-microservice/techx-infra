@@ -17,7 +17,7 @@ class ChartWriter(GitHub):
 
     def post(self, endpoint, payload):
         if endpoint not in ("git/blobs", "git/trees", "git/commits", "git/refs", "pulls"):
-            raise ValueError("Chart proposal has no merge, ref-update or arbitrary endpoint authority")
+            raise ValueError("Chart proposal does not support this endpoint")
         request = Request(f"https://api.github.com/repos/{CHART_REPO}/{endpoint}", data=encoded(payload), method="POST", headers={
             "Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json", "Content-Type": "application/json",
             "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "techx-bootstrap-proposal"})

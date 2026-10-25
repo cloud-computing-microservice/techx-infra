@@ -534,6 +534,9 @@ for safe retries. The API writer exposes only object creation, a new ref and PR
 creation; no merge, ref update or delete operation exists. An existing branch
 must already identify the exact commit. A lost ref/PR response is reconciled by
 positive reads, and a conflicting or closed PR is never replaced/reopened.
+This restriction belongs to the trusted entry point; the installation token
+still has repository contents/PR write permissions. Main rulesets and promotion
+controls are separate activation requirements, not proven by this helper.
 
 The worker holds the bootstrap heartbeat lease and rechecks session, schedule,
 source CI, manifest and chart main before every external write. Proposal receipts

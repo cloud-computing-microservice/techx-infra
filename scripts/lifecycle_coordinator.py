@@ -14,7 +14,9 @@ from automation_session import utc, validate
 from cleanup_execution import assert_inventory
 from cleanup_schedule import register, verify_existing
 from deployment_tasks import executor_config
+from lifecycle_dispatch import Dispatcher, operation
 from plan_approval import context_for_session, issue_approval
+from plan_approval import version as validate_version
 from plan_review_store import approval_key, checksum, load_review, read_json
 from workload_state import ensure_empty_state
 
@@ -106,12 +108,11 @@ class Coordinator:
             armed = True
             current, etag = self.store.read()
             if current["sessionId"] != record["sessionId"] or current["status"] != "PLANNING": raise ValueError("Session reservation was lost")
-            self.store.write(dict(current, executionVersion=execution_version, cleanupScheduleArn=schedule_arn), etag)
-            result = self.clients["codebuild"].start_build(projectName=PROJECT,
-                idempotencyToken=hashlib.sha256(encoded(pointer)).hexdigest(),
-                environmentVariablesOverride=[dict(name="TECHX_SESSION_ID", value=record["sessionId"], type="PLAINTEXT"),
-                                              dict(name="TECHX_EXECUTION_VERSION", value=execution_version, type="PLAINTEXT")])
-            return dict(pointer, buildId=result["build"]["id"], deadline=record["deadline"], cleanupScheduleArn=schedule_arn)
+            checked = dict(current, executionVersion=execution_version, cleanupScheduleArn=schedule_arn)
+            self.store.write(checked, etag)
+            result = Dispatcher(self.clients, self.store, self.bucket, execution, execution_version,
+                                clock=lambda: now or datetime.now(timezone.utc)).start(checked, operation("prepare", "foundation"), initial=True)
+            return dict(pointer, buildId=result["buildId"], deadline=record["deadline"], cleanupScheduleArn=schedule_arn)
         except BaseException:
             if armed:
                 # StartBuild may have succeeded despite a lost response. Never reopen
@@ -135,6 +136,7 @@ class Coordinator:
         This does not authorize Terraform from a copied plan context or claim a
         workload lease on a hosted runner. The manager/worker repeats guards.
         """
+        clock = (lambda: now) if now is not None else None
         now = now or datetime.now(timezone.utc)
         if self.clients["sts"].get_caller_identity().get("Account") != ACCOUNT:
             raise ValueError("Wrong deployment account")
@@ -170,19 +172,13 @@ class Coordinator:
         previous_terminal(self.clients["ssm"], executor_config(execution["deploymentConfig"]), record)
         current, _ = self.store.read()
         if current != record: raise ValueError("Session changed during approval resume checks")
-        token = hashlib.sha256(encoded(dict(sessionId=session_id, executionVersion=record["executionVersion"],
-                                               review=ref, operation="apply"))).hexdigest()
-        try:
-            result = self.clients["codebuild"].start_build(projectName=PROJECT, idempotencyToken=token,
-                environmentVariablesOverride=[dict(name=name, value=value, type="PLAINTEXT") for name, value in dict(
-                    TECHX_SESSION_ID=session_id, TECHX_EXECUTION_VERSION=record["executionVersion"], TECHX_MODE="apply",
-                    TECHX_PLAN_STAGE=ref["stage"], TECHX_PLAN_ATTEMPT=str(ref["attempt"])).items()])
-            build_id = result["build"]["id"]
-        except BaseException:
-            # A response timeout is not permission to start another build or
-            # reopen an approved stage. Independent cleanup fences any worker.
-            self.clients["lambda"].invoke(FunctionName=LAUNCHER, InvocationType="Event",
-                Payload=encoded(dict(sessionId=session_id, executionVersion=record["executionVersion"], requestedEarly=True)))
-            raise
-        return dict(buildId=build_id, sessionId=session_id, stage=ref["stage"], attempt=ref["attempt"],
-                    executionVersion=record["executionVersion"])
+        return Dispatcher(self.clients, self.store, self.bucket, execution, record["executionVersion"],
+                          clock=clock).start(record, operation("apply", ref["stage"], ref["attempt"]))
+
+    def advance(self, session_id, now=None):
+        record, _ = self.store.read()
+        if record.get("sessionId") != session_id: raise ValueError("Stale lifecycle continuation")
+        validate_version(record.get("executionVersion"))
+        execution, _ = read_json(self.clients["s3"], self.bucket, f"executions/{session_id}.json", record["executionVersion"])
+        return Dispatcher(self.clients, self.store, self.bucket, execution, record["executionVersion"],
+                          clock=(lambda: now) if now else None).advance()

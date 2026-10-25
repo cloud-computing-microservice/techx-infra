@@ -53,7 +53,7 @@ locals {
           "arn:aws:eks:us-east-1:058114477594:addon/techx-staging/*/*",
           "arn:aws:eks:us-east-1:058114477594:access-entry/techx-staging/*"
         ] },
-        { Effect = "Allow", Action = ["codebuild:BatchGetBuilds", "codebuild:StopBuild"], Resource = [
+        { Effect = "Allow", Action = ["codebuild:BatchGetBuilds", "codebuild:StopBuild", "codebuild:ListBuildsForProject"], Resource = [
           local.cleanup_project_arn, "arn:aws:codebuild:us-east-1:058114477594:project/techx-automation-lifecycle"
         ] }
       ]

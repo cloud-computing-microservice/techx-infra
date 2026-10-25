@@ -77,6 +77,7 @@ class ExecutorTests(unittest.TestCase):
         private = self.factory.prepare(observations=1)
         self.assertEqual(private["deploymentExecutor"]["instanceId"], self.f.instance_id)
         self.assertNotIn("lease", self.f.record)
+        self.assertEqual(self.f.record["executorPrepared"], dict(instanceId=self.f.instance_id, imageId=self.config["imageId"], managerArn=self.f.owner))
         self.assertEqual(len(self.launched), 1)
         self.assertEqual(self.factory.prepare(observations=1)["deploymentExecutor"], private["deploymentExecutor"])
         self.assertEqual(len(self.launched), 1)

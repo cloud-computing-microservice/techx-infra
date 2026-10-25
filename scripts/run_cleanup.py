@@ -14,7 +14,7 @@ from urllib.request import urlopen
 from automation_session import S3SessionStore, claim, transition
 from automation_inputs import validate_variables
 from cleanup_execution import (assert_inventory, delete_session_secrets, fence_session, remove_owned_shop,
-                               restore_cleanup_access, stop_executor, terminate_deployment_executors, terminate_probes)
+                               restore_cleanup_access, stop_dispatched_manager, stop_executor, terminate_deployment_executors, terminate_probes)
 from cloudflare_dns import CloudflareDNS, HOST, validate_name_target
 from certificate_recovery import reconcile_certificates
 from secret_recovery import reconcile_secrets
@@ -52,12 +52,13 @@ def prepare_takeover(clients, record, owner, bucket):
     lease = record.get("lease", {})
     previous = lease.get("owner")
     expected_instance = None
-    stopped_managers = set()
+    dispatched = stop_dispatched_manager(clients, bucket, record, owner)
+    stopped_managers = {dispatched} if dispatched else set()
     if previous and previous != owner and lease.get("operation") not in ("release", "bootstrap-publish"):
         match = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", previous)
         if match:
             expected_instance = match[1]
-        else:
+        elif previous not in stopped_managers:
             stop_executor(clients["codebuild"], previous, owner)
             stopped_managers.add(previous)
     # A manager may save launch intent or an instance ID while we stop it.

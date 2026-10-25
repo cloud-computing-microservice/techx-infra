@@ -160,6 +160,15 @@ class ExecutorFactory:
                             raise ValueError("Unexpected SSM managed node")
                         agent = tuple(int(part) for part in info.get("AgentVersion", "0").split("."))
                         if info.get("PingStatus") == "Online" and agent >= (3, 3, 2746, 0):
+                            current, etag = self.manager.current()
+                            if (current.get("lease", {}).get("owner") != self.manager.owner
+                                    or current["lease"].get("epoch") != epoch):
+                                raise ValueError("Executor readiness lost its preparation lease")
+                            checkpoint = dict(instanceId=instance["InstanceId"], imageId=config["imageId"], managerArn=self.manager.owner)
+                            if current.get("executorPrepared") not in (None, checkpoint):
+                                raise ValueError("Executor preparation cannot replace another checkpoint")
+                            current["executorPrepared"] = checkpoint
+                            self.manager.store.write(current, etag)
                             return private
                 self.manager.sleep(5)
             raise TimeoutError("Executor did not become running/SSM-ready in its bounded wait")

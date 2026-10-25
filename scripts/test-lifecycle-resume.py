@@ -34,6 +34,8 @@ class ResumeTests(unittest.TestCase):
         self.f.runtime = self.f.create()
         self.f.flow()
         f = self.f
+        f.execution["costEstimate"] = dict(includesAutomation=True, maximumHours=f.record["maximumHours"], upperBoundUsd=20,
+            approvedBudgetUsd=f.record["approvedBudgetUsd"])
         f.record = release(f.record, f.owner, f.record["lease"]["epoch"])
         self.task_id = "d" * 32
         _, pointer = create_task(f.clients["s3"], f.bucket, f.record, "execution-version", f.instance["InstanceId"],
@@ -50,11 +52,19 @@ class ResumeTests(unittest.TestCase):
         f.objects[f"executions/{f.record['sessionId']}.json"] = encoded(f.execution), "execution-version"
         self.status, self.started, self.cleanup = "Success", [], []
         self.lost_start = False
+        from lifecycle_dispatch import environment, operation, ROLE
+        f.record["lifecycleDispatch"] = dict(id="e" * 64, phase="OBSERVED", buildId=config_fixture.owner.split("build/")[1],
+            operation=operation("plan", "foundation"))
+        self.build = dict(id=f.record["lifecycleDispatch"]["buildId"], arn=config_fixture.owner,
+            projectName="techx-automation-lifecycle", serviceRole=ROLE, buildComplete=True, buildStatus="SUCCEEDED",
+            environment=dict(environmentVariables=[dict(name=k, value=v, type="PLAINTEXT") for k, v in
+                environment(f.record, f.record["lifecycleDispatch"]["operation"]).items()]))
         def start_build(**kw):
             self.started.append(kw)
             if self.lost_start: raise TimeoutError("StartBuild response unknown")
-            return dict(build=dict(id="techx-automation-lifecycle:resume"))
-        f.clients["codebuild"] = SimpleNamespace(start_build=start_build)
+            build_id = "techx-automation-lifecycle:abcdef12"
+            return dict(build=dict(id=build_id, arn=f"arn:aws:codebuild:us-east-1:058114477594:build/{build_id}", projectName="techx-automation-lifecycle"))
+        f.clients["codebuild"] = SimpleNamespace(start_build=start_build, batch_get_builds=lambda **kw: dict(builds=[deepcopy(self.build)]))
         f.clients["lambda"] = SimpleNamespace(invoke=lambda **kw: self.cleanup.append(kw))
         f.clients["ssm"] = SimpleNamespace(get_command_invocation=lambda **kw: dict(CommandId=config_fixture.command_id,
             InstanceId=f.instance["InstanceId"], DocumentName="techx-automation-deployment-task", DocumentVersion="1",
@@ -69,7 +79,10 @@ class ResumeTests(unittest.TestCase):
         result = self.resume()
         self.assertEqual(result["stage"], "foundation")
         self.assertEqual(result["attempt"], 1)
-        self.assertEqual(self.f.record, before)
+        expected = deepcopy(before)
+        expected["lifecycleDispatch"] = deepcopy(self.f.record["lifecycleDispatch"])
+        self.assertEqual(self.f.record, expected)
+        self.assertEqual(self.f.record["lifecycleDispatch"]["operation"], dict(mode="apply", stage="foundation", attempt=1))
         env = {row["name"]: row["value"] for row in self.started[0]["environmentVariablesOverride"]}
         self.assertEqual(env["TECHX_MODE"], "apply")
         self.assertEqual(env["TECHX_EXECUTION_VERSION"], "execution-version")
@@ -105,6 +118,9 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(len(self.cleanup), 1)
         self.assertEqual(self.f.record["pendingPlan"], self.ref)
         self.assertEqual(self.f.record["status"], "PROVISIONING")
+        self.assertEqual(self.f.record["lifecycleDispatch"]["phase"], "CALLING")
+        with self.assertRaises(ValueError): self.resume()
+        self.assertEqual(len(self.started), 1)
 
     def test_loader_accepts_only_typed_operations_and_never_interpolates_a_shell(self):
         infra, directory = Path("/verified/source/techx-infra"), Path("/verified")

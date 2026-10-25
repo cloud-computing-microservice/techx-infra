@@ -476,3 +476,38 @@ The tests use controlled SDK/kubectl responses, not a running Kubernetes cluster
 See [Kubernetes credential plugins](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#client-go-credential-plugins),
 [ALB pod readiness gates](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/deploy/pod_readiness_gate/)
 and [Argo CD declarative setup](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/).
+
+### Existing-session continuation (gated source only)
+
+`staging-continue.yml` accepts only an existing session ID, exact execution
+VersionId and an optional request to resume its separately approved plan. It
+cannot open a new session, select an arbitrary stage or supply approval itself.
+The dedicated dispatcher requires trusted main at the admitted infra SHA, a
+first-attempt real GitHub run and the fixed OIDC role/session name. Keep
+`LIFECYCLE_ENABLED` false until the remaining lifecycle and live gates pass.
+Configure main-only protection for `staging-lifecycle` and
+`AWS_LIFECYCLE_DISPATCHER_ROLE_ARN` before any authorized activation.
+
+`lifecycle_dispatch.py` records PREPARED, then CALLING, before StartBuild, and
+records its exact build ID as OBSERVED. Tokens alone cannot protect a later
+retry: [AWS StartBuild tokens expire after five minutes](https://docs.aws.amazon.com/codebuild/latest/APIReference/API_StartBuild.html).
+A lost response never permits another dispatch. Subsequent transitions require
+the actual project's successful terminal build, expected role/inputs and either
+its executor preparation receipt or the exact successful SSM task and durable
+stage checkpoint. CAS merges preserve worker fields; cleanup takeover wins.
+
+The continuation observes the same build for a bounded 40-minute loop, retaining
+its handle on observation timeout. It can advance preparation to foundation
+plan, an approved apply, selected GitOps bootstrap and edge plan. Plan review,
+cold release, chart selection and DNS/acceptance are explicit waiting states;
+there is no false READY or dispatch to a missing workflow. Opening a session,
+cold publish/proposal callers and the complete end-to-end orchestration remain due.
+
+Cleanup stops the observed manager even when no lease/VM is recorded yet. An
+unknown StartBuild result requires positive recovery by exact session/version/
+operation environment in the fixed project's bounded build history. It checks
+the role/project again, confirms terminal status and caches a cleanup-owned
+receipt before reading the latest launch snapshot. Empty, ambiguous, incomplete
+or truncated observations cannot establish successful cleanup. Pagination omits
+sortOrder because [AWS rejects that override for projects with over 100 builds](https://docs.aws.amazon.com/codebuild/latest/APIReference/API_ListBuildsForProject.html).
+No new session, cloud build or AWS deployment was executed to test this source.

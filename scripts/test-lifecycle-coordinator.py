@@ -50,7 +50,8 @@ class CoordinatorTests(unittest.TestCase):
         def start_build(**kwargs):
             self.events.append("start-build")
             if self.fail_start: raise RuntimeError("Lost StartBuild response")
-            return dict(build=dict(id="lifecycle:123"))
+            build_id = "techx-automation-lifecycle:123abc"
+            return dict(build=dict(id=build_id, arn=f"arn:aws:codebuild:us-east-1:058114477594:build/{build_id}", projectName="techx-automation-lifecycle"))
         clients = {
             "sts": SimpleNamespace(get_caller_identity=lambda: dict(Account="058114477594")),
             "s3": SimpleNamespace(get_object=get_object, put_object=put_object, delete_object=lambda **kwargs: self.objects.pop(kwargs["Key"]), exceptions=SimpleNamespace(NoSuchKey=Missing),
@@ -71,7 +72,8 @@ class CoordinatorTests(unittest.TestCase):
 
     def test_cleanup_is_armed_and_inputs_persisted_before_start_build(self):
         result = self.start()
-        self.assertEqual(result["buildId"], "lifecycle:123")
+        self.assertEqual(result["buildId"], "techx-automation-lifecycle:123abc")
+        self.assertEqual(self.current["lifecycleDispatch"]["phase"], "OBSERVED")
         self.assertLess(self.events.index("schedule"), self.events.index("start-build"))
         self.assertIn("private/staging/staging-123456/inputs.json", self.objects)
         self.assertIn("control/staging/current-execution.json", self.objects)
@@ -88,6 +90,7 @@ class CoordinatorTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): self.start()
         self.assertIn("early-cleanup", self.events)
         self.assertEqual(self.current["status"], "PLANNING")
+        self.assertEqual(self.current["lifecycleDispatch"]["phase"], "CALLING")
 
     def test_existing_session_leftover_resources_or_missing_cost_coverage_block_start(self):
         self.current["status"] = "READY"

@@ -58,6 +58,67 @@ def stop_executor(client, owner, current_owner, sleep=time.sleep):
     raise TimeoutError("Previous infrastructure executor did not stop")
 
 
+def stop_dispatched_manager(clients, bucket, record, owner):
+    """Recover a lost StartBuild response by positive service evidence only."""
+    from lifecycle_dispatch import BUILD, PROJECT, environment, observed_build
+    ref = record.get("lifecycleDispatch")
+    if ref is None: return None  # Historical sessions use their launch/lease proof.
+    if (not isinstance(ref, dict) or not re.fullmatch(r"[a-f0-9]{64}", ref.get("id", ""))
+            or ref.get("phase") not in ("PREPARED", "CALLING", "OBSERVED")):
+        raise ValueError("Invalid lifecycle dispatch recovery intent")
+    expected = environment(record, ref["operation"])
+    if ref["phase"] == "PREPARED": return None  # API call requires a later CAS; parent fencing uses this record's ETag.
+    recovered = dict(ref)
+    if ref["phase"] == "CALLING":
+        proof_key = f"cleanup/{record['sessionId']}/manager-{ref['id']}.json"
+        try:
+            result = clients["s3"].get_object(Bucket=bucket, Key=proof_key, ExpectedBucketOwner=ACCOUNT)
+            body = result["Body"].read(16385)
+            if len(body) > 16384: raise ValueError("Oversized manager recovery receipt")
+            proof = json.loads(body)
+        except clients["s3"].exceptions.NoSuchKey:
+            proof = None
+        if proof is not None:
+            if (proof.get("dispatchId") != ref["id"] or proof.get("executionVersion") != record.get("executionVersion")
+                    or proof.get("terminated") is not True or not re.fullmatch(BUILD, proof.get("buildId", ""))):
+                raise ValueError("Manager recovery receipt differs from the current dispatch")
+            recovered.update(phase="OBSERVED", buildId=proof["buildId"])
+        else:
+            token, seen, matches = None, set(), []
+            for _ in range(5):
+                # AWS rejects sortOrder once a project has over 100 builds;
+                # its default is already descending and supports pagination.
+                args = dict(projectName=PROJECT)
+                if token: args["nextToken"] = token
+                listing = clients["codebuild"].list_builds_for_project(**args)
+                ids = listing.get("ids")
+                if (not isinstance(ids, list) or len(ids) > 100 or any(not re.fullmatch(BUILD, item) for item in ids)
+                        or len(set(ids)) != len(ids) or seen.intersection(ids)):
+                    raise ValueError("Ambiguous lifecycle manager recovery inventory")
+                seen.update(ids)
+                if ids:
+                    response = clients["codebuild"].batch_get_builds(ids=ids)
+                    builds = response.get("builds", [])
+                    if (response.get("buildsNotFound") or len(builds) != len(ids)
+                            or {item.get("id") for item in builds} != set(ids)):
+                        raise ValueError("Manager recovery observations are incomplete")
+                    for build in builds:
+                        rows = [row for row in build.get("environment", {}).get("environmentVariables", []) if row.get("name", "").startswith("TECHX_")]
+                        if len(rows) == len(expected) and {row["name"]: row.get("value") for row in rows} == expected:
+                            matches.append(build["id"])
+                token = listing.get("nextToken")
+                if not token: break
+            if token or len(matches) != 1:
+                raise ValueError("StartBuild outcome remains unproven; empty/ambiguous inventory cannot complete cleanup")
+            recovered.update(phase="OBSERVED", buildId=matches[0])
+    build = observed_build(clients["codebuild"], dict(record, lifecycleDispatch=recovered))
+    stop_executor(clients["codebuild"], build["arn"], owner)
+    if ref["phase"] == "CALLING":
+        clients["s3"].put_object(Bucket=bucket, Key=proof_key, ExpectedBucketOwner=ACCOUNT,
+            Body=json.dumps(dict(dispatchId=ref["id"], executionVersion=record["executionVersion"], buildId=build["id"], terminated=True)).encode())
+    return build["arn"]
+
+
 def remove_owned_shop(client, session_id):
     records = client.records(HOST)
     if not records: return

@@ -68,6 +68,10 @@ python (Join-Path $PSScriptRoot 'test-lifecycle-coordinator.py')
 if ($LASTEXITCODE -ne 0) { throw 'Lifecycle startup, cleanup-arming and uncertain-response regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-resume.py')
 if ($LASTEXITCODE -ne 0) { throw 'Approved lifecycle resume and typed manager-loader regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-lifecycle-dispatch.py')
+if ($LASTEXITCODE -ne 0) { throw 'Lifecycle continuation, manager recovery and single-consumption dispatch tests failed.' }
+python (Join-Path $PSScriptRoot 'test-lifecycle-continuation.py')
+if ($LASTEXITCODE -ne 0) { throw 'Protected lifecycle continuation and bounded same-build observation tests failed.' }
 python (Join-Path $PSScriptRoot 'test-workload-state.py')
 if ($LASTEXITCODE -ne 0) { throw 'Empty workload state initialization and lineage regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-deployment-runtime.py')

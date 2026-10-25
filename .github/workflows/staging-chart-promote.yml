@@ -1,0 +1,111 @@
+name: Review exact cold chart promotion
+on:
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: Existing cold session with an immutable changed-chart proposal
+        required: true
+        type: string
+      execution_version:
+        description: Exact immutable S3 execution VersionId
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: staging-chart-promotion-review
+  cancel-in-progress: false
+env:
+  CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
+  SESSION_ID: ${{ inputs.session_id }}
+  EXECUTION_VERSION: ${{ inputs.execution_version }}
+  PROMOTION_APP_ID: ${{ vars.PROMOTION_APP_ID }}
+  PROMOTION_APP_SLUG: ${{ vars.PROMOTION_APP_SLUG }}
+jobs:
+  preview:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1 && vars.LIFECYCLE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: staging-chart-read
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    outputs:
+      request: ${{ steps.preview.outputs.request }}
+      sha256: ${{ steps.preview.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - run: python -m pip install -r scripts/requirements-automation.txt
+      - name: Configure read-only candidate preview identity
+        uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_CHART_READER_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: '058114477594'
+          role-session-name: techx-chart-read-${{ github.run_id }}
+          role-duration-seconds: 1800
+      - name: Create chart-only read token for candidate and branch-policy evidence
+        id: chart
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.PROMOTION_APP_ID }}
+          private-key: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+          owner: cloud-computing-microservice
+          repositories: techx-chart
+          permission-contents: read
+          permission-pull-requests: read
+          permission-actions: read
+          permission-administration: read
+      - name: Show the exact reviewed candidate, CI, main authority and deadline
+        id: preview
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CHART_READ_TOKEN: ${{ steps.chart.outputs.token }}
+        run: python scripts/review_chart_promotion.py preview
+  approve:
+    needs: preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: staging-chart-promote
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - run: python -m pip install -r scripts/requirements-automation.txt
+      - name: Configure approval-only identity after human review
+        uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_PROMOTION_APPROVER_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: '058114477594'
+          role-session-name: techx-promotion-approve-${{ github.run_id }}
+          role-duration-seconds: 1800
+      - name: Create chart-only read token without merge authority
+        id: chart
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.PROMOTION_APP_ID }}
+          private-key: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+          owner: cloud-computing-microservice
+          repositories: techx-chart
+          permission-contents: read
+          permission-pull-requests: read
+          permission-actions: read
+          permission-administration: read
+      - name: Revalidate the exact preview and write one immutable short-lived approval
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CHART_READ_TOKEN: ${{ steps.chart.outputs.token }}
+          PROMOTION_REQUEST_JSON: ${{ needs.preview.outputs.request }}
+          PROMOTION_REQUEST_SHA256: ${{ needs.preview.outputs.sha256 }}
+        run: python scripts/review_chart_promotion.py approve

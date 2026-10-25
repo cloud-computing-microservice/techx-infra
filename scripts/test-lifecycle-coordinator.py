@@ -14,6 +14,7 @@ class CoordinatorTests(unittest.TestCase):
         self.events, self.objects, self.schedule = [], {}, None
         self.current, self.etag = dict(status="OFF"), "v1"
         self.fail_start = False
+        self.fail_schedule = False
         self.objects["control/staging/executor-config.json"] = json.dumps(dict(schemaVersion=1,
             imageId="ami-1234567890abcdef0", launchTemplateId="lt-1234567890abcdef0", launchTemplateVersion="1",
             subnetId="subnet-1234567890abcdef0", securityGroupId="sg-1234567890abcdef0", loaderSha256="a" * 64, imageBuildSha256="c" * 64,
@@ -46,6 +47,7 @@ class CoordinatorTests(unittest.TestCase):
         def create_schedule(**kwargs):
             self.events.append("schedule")
             self.schedule = dict(kwargs, Arn="arn:aws:scheduler:us-east-1:058114477594:schedule/techx-staging/" + kwargs["Name"])
+            if self.fail_schedule: raise TimeoutError("CreateSchedule response lost")
             return dict(ScheduleArn=self.schedule["Arn"])
         def start_build(**kwargs):
             self.events.append("start-build")
@@ -89,8 +91,18 @@ class CoordinatorTests(unittest.TestCase):
         self.fail_start = True
         with self.assertRaises(RuntimeError): self.start()
         self.assertIn("early-cleanup", self.events)
-        self.assertEqual(self.current["status"], "PLANNING")
+        self.assertEqual(self.current["status"], "FAILED_NEEDS_CLEANUP")
         self.assertEqual(self.current["lifecycleDispatch"]["phase"], "CALLING")
+
+    def test_unknown_schedule_result_retains_recoverable_execution_and_never_reopens_off(self):
+        self.fail_schedule = True
+        with self.assertRaises(TimeoutError): self.start()
+        self.assertNotIn("start-build", self.events)
+        self.assertIn("early-cleanup", self.events)
+        self.assertEqual(self.current["status"], "FAILED_NEEDS_CLEANUP")
+        pointer = json.loads(self.objects["control/staging/current-execution.json"])
+        self.assertEqual(pointer["executionVersion"], self.current["executionVersion"])
+        self.assertIn(f"private/staging/{self.record['sessionId']}/inputs.json", self.objects)
 
     def test_existing_session_leftover_resources_or_missing_cost_coverage_block_start(self):
         self.current["status"] = "READY"

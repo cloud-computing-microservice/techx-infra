@@ -81,7 +81,7 @@ class Coordinator:
         except self.clients["s3"].exceptions.NoSuchKey:
             etag = None
         self.store.write(record, etag)  # CAS reservation; publishers cannot claim PLANNING sessions.
-        armed = False
+        recovery_prepared = False
         try:
             state_identity = ensure_empty_state(self.clients["s3"], self.bucket, inventory)
             payload = bundle_path.read_bytes()
@@ -99,13 +99,20 @@ class Coordinator:
             private = dict(schemaVersion=1, sessionId=record["sessionId"], terraformVars=variables,
                            dnsMutationAttempted=False, validationDnsPlans=[])
             immutable_put(self.clients["s3"], self.bucket, f"private/staging/{record['sessionId']}/inputs.json", encoded(private))
+            pointer = dict(sessionId=record["sessionId"], executionVersion=execution_version)
+            current, etag = self.store.read()
+            if current["sessionId"] != record["sessionId"] or current["status"] != "PLANNING" or current.get("lease"):
+                raise ValueError("Session reservation was lost before cleanup preparation")
+            self.store.write(dict(current, executionVersion=execution_version), etag)
+            recovery_prepared = True
+            # Publish complete recoverable inputs before attempting a schedule.
+            # A lost CreateSchedule response must not reopen OFF or leave a
+            # scheduled cleanup without the current execution VersionId.
+            self.clients["s3"].put_object(Bucket=self.bucket, Key="control/staging/current-execution.json",
+                                          Body=encoded(pointer), ExpectedBucketOwner=ACCOUNT)
             schedule_arn = register(self.clients["scheduler"], record, execution_version, LAUNCHER,
                                     f"arn:aws:iam::{ACCOUNT}:role/techx-automation-scheduler",
                                     f"arn:aws:sqs:us-east-1:{ACCOUNT}:techx-automation-cleanup-dlq", now)
-            pointer = dict(sessionId=record["sessionId"], executionVersion=execution_version)
-            self.clients["s3"].put_object(Bucket=self.bucket, Key="control/staging/current-execution.json",
-                                          Body=encoded(pointer), ExpectedBucketOwner=ACCOUNT)
-            armed = True
             current, etag = self.store.read()
             if current["sessionId"] != record["sessionId"] or current["status"] != "PLANNING": raise ValueError("Session reservation was lost")
             checked = dict(current, executionVersion=execution_version, cleanupScheduleArn=schedule_arn)
@@ -114,16 +121,22 @@ class Coordinator:
                                 clock=lambda: now or datetime.now(timezone.utc)).start(checked, operation("prepare", "foundation"), initial=True)
             return dict(pointer, buildId=result["buildId"], deadline=record["deadline"], cleanupScheduleArn=schedule_arn)
         except BaseException:
-            if armed:
+            if recovery_prepared:
                 # StartBuild may have succeeded despite a lost response. Never reopen
                 # the session; AWS cleanup can fence/stop the actual executor.
+                try:
+                    current, etag = self.store.read()
+                    if current.get("sessionId") == record["sessionId"] and current.get("status") == "PLANNING" and not current.get("lease"):
+                        self.store.write(dict(current, status="FAILED_NEEDS_CLEANUP"), etag)
+                except Exception:
+                    pass  # Cleanup owns fencing; a CAS conflict must not suppress its dispatch.
                 try:
                     self.clients["lambda"].invoke(FunctionName=LAUNCHER, InvocationType="Event",
                         Payload=encoded(dict(pointer, requestedEarly=True)))
                 except Exception:
-                    # The verified one-time schedule and AWS watchdog remain armed.
-                    # Preserve the original startup error for the caller to diagnose.
-                    print("Immediate cleanup dispatch failed; the verified AWS schedule/watchdog remains armed.", file=sys.stderr)
+                    # A schedule may have been created despite a lost response.
+                    # Keep complete inputs/current pointer and the original error.
+                    print("Immediate cleanup dispatch failed; preserve the failed session and reconcile its AWS schedule/watchdog.", file=sys.stderr)
             else:
                 current, etag = self.store.read()
                 if current.get("sessionId") == record["sessionId"] and current.get("status") == "PLANNING" and not current.get("lease"):

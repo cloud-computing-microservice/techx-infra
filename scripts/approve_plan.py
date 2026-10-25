@@ -58,17 +58,17 @@ def verified_run(github, run_id, infra_sha, request, now):
     return f"https://github.com/{REPO}/actions/runs/{run_id}"
 
 
-def verified_reviewer(github, run_id):
+def verified_reviewer(github, run_id, environment=ENVIRONMENT):
     history = github.get(f"actions/runs/{run_id}/approvals")
     if not isinstance(history, list):
         raise ValueError("Invalid GitHub environment review history")
     matching = [row for row in history if any(
-        env.get("name") == ENVIRONMENT and type(env.get("id")) is int and env["id"] > 0
+        env.get("name") == environment and type(env.get("id")) is int and env["id"] > 0
         for env in row.get("environments", []))]
     # A new dispatch is required after rejection or ambiguous/multiple reviews.
     # Reruns are rejected above: history cannot silently approve changed inputs.
     if len(matching) != 1 or matching[0].get("state") != "approved":
-        raise ValueError("Exactly one real staging-apply environment approval is required")
+        raise ValueError(f"Exactly one real {environment} environment approval is required")
     user = matching[0].get("user", {})
     if user.get("type") != "User" or type(user.get("id")) is not int or user["id"] < 1:
         raise ValueError("A human environment reviewer is required")

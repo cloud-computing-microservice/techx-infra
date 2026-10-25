@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: infra-${{ github.ref }}
   cancel-in-progress: true
@@ -49,3 +50,8 @@ jobs:
       - shell: pwsh
         working-directory: techx-infra
         run: ./scripts/verify.ps1
+      - name: Verify read-only GitHub source and approval-history access
+        working-directory: techx-infra
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/probe-github-source-read.py

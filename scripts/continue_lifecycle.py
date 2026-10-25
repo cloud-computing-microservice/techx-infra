@@ -17,6 +17,7 @@ from plan_approval import version
 from plan_review_store import ACCOUNT, read_json
 
 WORKFLOW = ".github/workflows/staging-continue.yml"
+OPEN_WORKFLOW = ".github/workflows/staging-lifecycle.yml"
 
 
 def verified_caller(github, run_id, execution):
@@ -25,9 +26,11 @@ def verified_caller(github, run_id, execution):
     if (run.get("id") != int(run_id) or run.get("status") != "in_progress" or run.get("event") != "workflow_dispatch"
             or type(run.get("run_attempt")) is not int or run["run_attempt"] != 1 or run.get("head_branch") != "main"
             or run.get("head_sha") != execution["sourceRevisions"]["techx-infra"]
-            or run.get("path") not in (WORKFLOW, WORKFLOW + "@main")
+            or run.get("path") not in (WORKFLOW, WORKFLOW + "@main", OPEN_WORKFLOW, OPEN_WORKFLOW + "@main")
             or any(run.get(key, {}).get("full_name") != INFRA_REPO for key in ("repository", "head_repository"))):
         raise ValueError("Continuation must run once from trusted main at the exact admitted infra SHA")
+    if run.get("path") in (OPEN_WORKFLOW, OPEN_WORKFLOW + "@main") and execution.get("sourceAdmission", {}).get("workflowRun") != f"https://github.com/{INFRA_REPO}/actions/runs/{run_id}":
+        raise ValueError("Opening workflow may continue only the execution it admitted")
 
 
 def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, sleep=time.sleep, monotonic=time.monotonic):

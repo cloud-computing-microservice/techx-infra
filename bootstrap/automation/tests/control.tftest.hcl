@@ -225,6 +225,18 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Manager must use the immutable loader, no Docker privilege and one build at a time."
   }
   assert {
+    condition = toset(jsondecode(aws_iam_role.lifecycle_dispatcher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]) == toset([
+      "repo:cloud-computing-microservice/techx-infra:environment:staging-lifecycle", "repo:cloud-computing-microservice/techx-infra:environment:staging-start"
+    ])
+    error_message = "The opener and continuation must use the two protected environment subjects only."
+  }
+  assert {
+    condition = alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.lifecycle_admission_inventory[0].policy).Statement : [for action in statement.Action :
+      can(regex("^[^:]+:(Describe|List|Get)", action))
+    ]]))
+    error_message = "Startup inventory authority must remain read-only."
+  }
+  assert {
     condition     = aws_launch_template.executor[0].instance_type == "t3.small" && aws_launch_template.executor[0].metadata_options[0].http_tokens == "required" && aws_launch_template.executor[0].disable_api_stop && aws_launch_template.executor[0].credit_specification[0].cpu_credits == "standard"
     error_message = "Executor launch must enforce the bounded instance and IMDS/stability controls."
   }

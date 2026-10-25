@@ -1,0 +1,140 @@
+name: Open reviewed staging session
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Acceptance/cleanup policy for this new session
+        required: true
+        default: deploy-test-destroy
+        type: choice
+        options: [deploy-test-destroy, deploy-window]
+      platform_sha:
+        description: Exact current platform main commit with passing CI
+        required: true
+        type: string
+      chart_sha:
+        description: Exact current chart main baseline with passing CI
+        required: true
+        type: string
+      duration_hours:
+        description: Integer 3–24 hours including review, deployment and cleanup
+        required: true
+        default: 4
+        type: number
+      approved_budget_usd:
+        description: New explicit budget (1–80 USD; estimate gate also applies)
+        required: true
+        type: number
+      budget_alert_email:
+        description: Private budget alert recipient (omitted from summary/artifacts)
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: staging-session-opening
+  cancel-in-progress: false
+env:
+  CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
+  CONTROL_KMS_KEY_ARN: ${{ vars.TECHX_KMS_KEY_ARN }}
+jobs:
+  preview:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1 && vars.LIFECYCLE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      request: ${{ steps.preview.outputs.request }}
+      request_sha256: ${{ steps.preview.outputs.request_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: techx-infra
+          persist-credentials: false
+      - name: Preview fixed window and latest source CI without AWS credentials
+        id: preview
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python techx-infra/scripts/start_lifecycle.py preview
+  start:
+    needs: preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      session_id: ${{ steps.admit.outputs.session_id }}
+      execution_version: ${{ steps.admit.outputs.execution_version }}
+    # Main-only deployment protection and required human reviewers are mandatory.
+    # The helper rejects an environment with no real approval history.
+    environment: staging-start
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      START_REQUEST_JSON: ${{ needs.preview.outputs.request }}
+      START_REQUEST_SHA256: ${{ needs.preview.outputs.request_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: techx-infra
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: cloud-computing-microservice/techx-platform
+          ref: ${{ inputs.platform_sha }}
+          path: techx-platform
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: cloud-computing-microservice/techx-chart
+          ref: ${{ inputs.chart_sha }}
+          path: techx-chart
+          persist-credentials: false
+      - name: Install pinned automation SDK
+        run: python -m pip install -r techx-infra/scripts/requirements-automation.txt
+      - name: Configure reviewed opening identity
+        uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_LIFECYCLE_DISPATCHER_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: '058114477594'
+          role-session-name: techx-lifecycle-${{ github.run_id }}
+          role-duration-seconds: 3600
+      - name: Verify approval/storage/inventory and arm cleanup before dispatch
+        id: admit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python techx-infra/scripts/start_lifecycle.py start
+  foundation-plan:
+    needs: start
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    environment: staging-lifecycle
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      SESSION_ID: ${{ needs.start.outputs.session_id }}
+      EXECUTION_VERSION: ${{ needs.start.outputs.execution_version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - run: python -m pip install -r scripts/requirements-automation.txt
+      - uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_LIFECYCLE_DISPATCHER_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: '058114477594'
+          role-session-name: techx-lifecycle-${{ github.run_id }}
+          role-duration-seconds: 3600
+      - name: Observe the admitted manager and prepare exact foundation review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/continue_lifecycle.py --bucket="$CONTROL_BUCKET" \
+            --session-id="$SESSION_ID" --execution-version="$EXECUTION_VERSION"

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from continue_lifecycle import WORKFLOW, drive, verified_caller
+from continue_lifecycle import OPEN_WORKFLOW, WORKFLOW, drive, verified_caller
 
 spec = importlib.util.spec_from_file_location("continuation_dispatch_support", Path(__file__).with_name("test-lifecycle-dispatch.py"))
 support = importlib.util.module_from_spec(spec)
@@ -40,6 +40,14 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(result["reviewReference"], self.f.support.ref)
         coordinator.resume_approved.assert_not_called()
         self.assertFalse(self.f.started)
+
+    def test_opening_workflow_can_continue_only_its_own_immutable_execution(self):
+        self.run["path"] = OPEN_WORKFLOW
+        github = SimpleNamespace(get=lambda endpoint: deepcopy(self.run))
+        execution = deepcopy(self.f.f.execution)
+        with self.assertRaises(ValueError): verified_caller(github, "123", execution)
+        execution["sourceAdmission"] = dict(workflowRun="https://github.com/cloud-computing-microservice/techx-infra/actions/runs/123")
+        verified_caller(github, "123", execution)
 
     def test_observation_limit_preserves_specific_live_build_and_never_restarts(self):
         self.f.support.build.update(buildStatus="IN_PROGRESS", buildComplete=False)

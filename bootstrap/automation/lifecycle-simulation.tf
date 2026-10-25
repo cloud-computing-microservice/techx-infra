@@ -46,6 +46,9 @@ output "lifecycle_iam_simulation_cases_json" {
       principalArn = "${local.simulation_account_prefix}:role/techx-automation-lifecycle-dispatcher"
       cases = [
         { name = "fixed-manager-build", action = "codebuild:StartBuild", expected = "allowed", resources = [local.lifecycle_project_arn] },
+        { name = "read-admission-encryption", action = "s3:GetEncryptionConfiguration", expected = "allowed", resources = [aws_s3_bucket.control.arn] },
+        { name = "read-admission-kms", action = "kms:DescribeKey", expected = "allowed", resources = [aws_kms_key.control.arn] },
+        { name = "read-orphan-origins", action = "cloudfront:ListVpcOrigins", expected = "allowed", resources = ["*"] },
         { name = "no-other-build", action = "codebuild:StartBuild", expected = "denied", resources = ["arn:aws:codebuild:us-east-1:058114477594:project/unrelated-project"] },
         { name = "no-ec2-create", action = "ec2:RunInstances", expected = "denied", resources = ["arn:aws:ec2:us-east-1:058114477594:instance/i-00000000000000000"] }
       ]

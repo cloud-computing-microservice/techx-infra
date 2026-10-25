@@ -68,6 +68,8 @@ python (Join-Path $PSScriptRoot 'test-gitops-bootstrap.py')
 if ($LASTEXITCODE -ne 0) { throw 'GitOps bootstrap verification failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-coordinator.py')
 if ($LASTEXITCODE -ne 0) { throw 'Lifecycle startup, cleanup-arming and uncertain-response regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-lifecycle-admission.py')
+if ($LASTEXITCODE -ne 0) { throw 'Human-reviewed startup, source/backend/window and inventory admission tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-resume.py')
 if ($LASTEXITCODE -ne 0) { throw 'Approved lifecycle resume and typed manager-loader regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-dispatch.py')

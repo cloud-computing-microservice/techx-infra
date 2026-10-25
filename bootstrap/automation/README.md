@@ -556,3 +556,46 @@ DNS/acceptance and rollback remain due. REST contracts:
 [Git commits](https://docs.github.com/en/rest/git/commits),
 [references](https://docs.github.com/en/rest/git/refs) and
 [pull requests](https://docs.github.com/en/rest/pulls/pulls).
+
+### Opening a reviewed session (source only; activation remains disabled)
+
+`staging-lifecycle.yml` has a cloud-free preview, a human-reviewed opening job
+and automatic executor/preparation-to-foundation-plan observation. It accepts
+two exact peer main SHAs, a 3–24-hour window, a new explicit budget and a private
+alert recipient. Infra SHA is the trusted main workflow commit. Every source
+needs its latest passing main CI and must still be main at start. The preview
+shows the conservative source cost model, backend/KMS, fixed UTC and Vietnam
+cleanup/deadline times, and request hash; it omits the email. No private artifact
+is uploaded to GitHub. Approval wait consumes the original window and cannot
+renew it; whole-second UTC timestamps match the independent scheduler.
+
+`start_lifecycle.py` requires real first-attempt run/approval history for
+`staging-start` and the exact dispatcher identity. It rechecks inputs, source CI,
+cost assumptions, clean checkouts, S3 versioning/encryption, enabled customer
+KMS key, all workload inventory arrays, orphan CloudFront origins/functions,
+EKS/VPN logs and recursive/authoritative no-CloudFront DNS proof. Git archive
+output is checksum/extract verified against all three SHAs before reservation.
+The hosted IP is only the initial snapshot; the EC2 planner substitutes its own
+observed stable /32 before generating the separately approved Terraform plan.
+
+Coordinator persists complete execution/private inputs/current pointer before
+attempting the cleanup schedule. A lost schedule response retains a failed,
+recoverable session and requests cleanup, rather than reopening OFF. No manager
+is dispatched without successful schedule readback. The follow-up job can
+continue only the immutable execution admitted by that same opening run, and
+stops at PLAN_APPROVAL (or a bounded observation limit with the same handle).
+It does not imply a completed deployment or automatically approve Terraform.
+
+Required GitHub metadata includes `TECHX_STATE_BUCKET`, `TECHX_KMS_KEY_ARN` and
+`AWS_LIFECYCLE_DISPATCHER_ROLE_ARN`. `staging-start` requires a human reviewer;
+`staging-lifecycle` is a main-only continuation environment. Source IAM admits
+only these two environment subjects and read-only inventory/encryption metadata
+in addition to the fixed manager/scheduler controls. The cloud-free CI probe
+checks token access to all three source APIs and review history; it does not
+prove environment approval, OIDC, AMI/network permissions or AWS acceptance.
+
+With explicit repository-owner authorization, GitHub environments/role metadata
+have been prepared, and `AUTOMATION_ENABLED`/`LIFECYCLE_ENABLED` remain false on
+all three repositories. AWS resources/roles are not created by GitHub settings.
+Destroy/callback orchestration, promotion/rulesets, acceptance/rollback and live
+integration remain required before enabling either gate.

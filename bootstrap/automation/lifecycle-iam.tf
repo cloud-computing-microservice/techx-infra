@@ -203,7 +203,7 @@ resource "aws_iam_role" "lifecycle_dispatcher" {
     Effect = "Allow", Action = "sts:AssumeRoleWithWebIdentity", Principal = { Federated = local.oidc_arn }
     Condition = { StringEquals = {
       "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-      "token.actions.githubusercontent.com:sub" = "repo:cloud-computing-microservice/techx-infra:environment:staging-lifecycle"
+      "token.actions.githubusercontent.com:sub" = ["repo:cloud-computing-microservice/techx-infra:environment:staging-lifecycle", "repo:cloud-computing-microservice/techx-infra:environment:staging-start"]
     } }
   }] })
   max_session_duration = 3600
@@ -214,17 +214,31 @@ resource "aws_iam_role_policy" "lifecycle_dispatcher" {
   name  = "reserve-session-arm-cleanup-dispatch-fixed-manager"
   role  = aws_iam_role.lifecycle_dispatcher[0].name
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Action = ["s3:ListBucket", "s3:GetBucketVersioning"], Resource = aws_s3_bucket.control.arn },
+    { Effect = "Allow", Action = ["s3:ListBucket", "s3:GetBucketVersioning", "s3:GetEncryptionConfiguration"], Resource = aws_s3_bucket.control.arn },
     { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [for prefix in ["automation/staging/session.json", "staging/terraform.tfstate", "staging/terraform.tfstate.tflock", "control/staging/executor-config.json", "executions/*", "bundles/*", "private/staging/*/plans/*/*/request.json", "approvals/staging/*", "releases/staging/*/bootstrap.json", "chart-selections/staging/*/bootstrap.json"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
     { Effect = "Allow", Action = ["s3:PutObject"], Resource = [for prefix in ["automation/staging/session.json", "control/staging/current-execution.json", "executions/*", "bundles/*", "private/staging/*/inputs.json", "staging/terraform.tfstate", "staging/terraform.tfstate.tflock"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
     { Effect = "Allow", Action = ["s3:DeleteObject"], Resource = "${aws_s3_bucket.control.arn}/staging/terraform.tfstate.tflock" },
     { Effect = "Allow", Action = ["kms:Decrypt", "kms:GenerateDataKey"], Resource = aws_kms_key.control.arn, Condition = { StringEquals = { "kms:ViaService" = "s3.us-east-1.amazonaws.com" } } },
+    { Effect = "Allow", Action = ["kms:DescribeKey"], Resource = aws_kms_key.control.arn },
     { Effect = "Allow", Action = ["scheduler:CreateSchedule", "scheduler:GetSchedule"], Resource = "arn:aws:scheduler:us-east-1:058114477594:schedule/techx-staging/cleanup-*" },
     { Effect = "Allow", Action = ["iam:PassRole"], Resource = "arn:aws:iam::058114477594:role/techx-automation-scheduler", Condition = { StringEquals = { "iam:PassedToService" = "scheduler.amazonaws.com" } } },
     { Effect = "Allow", Action = ["codebuild:StartBuild"], Resource = local.lifecycle_project_arn },
     { Effect = "Allow", Action = ["codebuild:BatchGetProjects", "codebuild:BatchGetBuilds"], Resource = [local.lifecycle_project_arn, local.cleanup_project_arn] },
     { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = "*" },
     { Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = "arn:aws:lambda:us-east-1:058114477594:function:techx-automation-cleanup-launcher" }
+  ] })
+}
+
+resource "aws_iam_role_policy" "lifecycle_admission_inventory" {
+  count = var.enable_lifecycle_control ? 1 : 0
+  name  = "read-only-staging-admission-inventory"
+  role  = aws_iam_role.lifecycle_dispatcher[0].name
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["ec2:DescribeInstances", "ec2:DescribeVolumes", "ec2:DescribeVpcs", "ec2:DescribeAddresses", "ec2:DescribeVpcEndpoints", "ec2:DescribeClientVpnEndpoints", "ec2:DescribeClientVpnTargetNetworks", "ec2:DescribeClientVpnConnections", "eks:ListClusters", "iam:ListRoles", "iam:ListPolicies", "secretsmanager:ListSecrets", "tag:GetResources", "cloudfront:ListDistributions", "cloudfront:ListVpcOrigins", "cloudfront:ListFunctions", "route53:ListHostedZonesByName", "logs:DescribeLogGroups"], Resource = "*" },
+    { Effect = "Allow", Action = ["eks:ListNodegroups", "eks:DescribeNodegroup"], Resource = ["arn:aws:eks:us-east-1:058114477594:cluster/techx-staging", "arn:aws:eks:us-east-1:058114477594:nodegroup/techx-staging/*/*"] },
+    { Effect = "Allow", Action = ["cloudfront:ListTagsForResource"], Resource = "arn:aws:cloudfront::058114477594:distribution/*" },
+    { Effect = "Allow", Action = ["route53:ListTagsForResource"], Resource = "arn:aws:route53:::hostedzone/*" },
+    { Effect = "Allow", Action = ["acm:DescribeCertificate"], Resource = "arn:aws:acm:us-east-1:058114477594:certificate/*" }
   ] })
 }
 

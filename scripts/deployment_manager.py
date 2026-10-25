@@ -169,6 +169,9 @@ class DeploymentManager:
         elif mode == "bootstrap" and stage == "gitops":
             from deployment_tasks import validate_bootstrap
             validate_bootstrap(record, attempt)
+        elif mode == "promote" and stage == "chart":
+            from deployment_tasks import validate_promotion
+            validate_promotion(record, attempt)
         elif (mode != "apply" or record.get("stages", {}).get(stage, {}).get("state") != "AWAITING_APPROVAL"
                 or record["stages"][stage].get("attempt") != attempt or record.get("pendingPlan", {}).get("stage") != stage):
             raise ValueError("Task requires a supported plan or pending apply stage")

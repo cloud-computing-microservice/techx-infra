@@ -80,6 +80,28 @@ class TaskLoaderTests(unittest.TestCase):
         self.execute(child)
         self.assertEqual(self.f.record["deploymentTask"]["state"], "SUCCEEDED")
 
+    def test_promotion_loader_selects_fixed_worker_and_requires_exact_merge_receipt_checkpoint(self):
+        from deployment_tasks import create_task
+        self.f.record.pop("deploymentTask")
+        self.f.record.update(status="PROVISIONING", stages=dict(foundation=dict(state="APPLIED")),
+            bootstrapPromotionApproval=dict(key=f"promotion-approvals/staging/{self.f.record['sessionId']}/{'f' * 64}.json", versionId="approval-v1", sha256="e" * 64),
+            bootstrapRelease=dict(key="release", versionId="release-v1", sha256="f" * 64),
+            bootstrapProposal=dict(key="proposal", versionId="proposal-v1", sha256="a" * 64))
+        _, self.pointer = create_task(self.f.clients["s3"], "control-bucket", self.f.record, "execution-v1", self.f.instance_id,
+            self.f.owner, "promote", "chart", 1, "8" * 32, self.f.now)
+        self.f.record["deploymentTask"] = self.pointer
+        def child(command, **kw):
+            self.assertTrue(command[1].endswith("run_chart_promotion.py"))
+            self.assertEqual(command[2], "promote")
+            approval = self.f.record["bootstrapPromotionApproval"]
+            self.f.record["stages"]["chart"] = dict(state="PROMOTED", attempt=1, taskId=self.pointer["taskId"],
+                approvalReference=deepcopy(approval), releaseReference=deepcopy(self.f.record["bootstrapRelease"]),
+                proposalReference=deepcopy(self.f.record["bootstrapProposal"]), chartSha="b" * 40, headSha="c" * 40, treeSha="d" * 40,
+                mergeReceiptReference=dict(key=f"promotions/staging/{self.f.record['sessionId']}/{approval['sha256']}/receipt.json", versionId="merge-v1", sha256="1" * 64))
+            return SimpleNamespace(returncode=0)
+        self.execute(child)
+        self.assertEqual(self.f.record["deploymentTask"]["state"], "SUCCEEDED")
+
     def child_command(self, command, **kw):
         self.assertEqual(self.f.record["deploymentTask"]["state"], "RUNNING")
         self.assertEqual(command[command.index("--task-id") + 1], self.pointer["taskId"])

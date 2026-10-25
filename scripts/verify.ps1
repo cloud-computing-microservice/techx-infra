@@ -84,6 +84,10 @@ python (Join-Path $PSScriptRoot 'test-chart-promotion.py')
 if ($LASTEXITCODE -ne 0) { throw 'Exact cold chart candidate, review, CI, branch authority and promotion race checks failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
+python (Join-Path $PSScriptRoot 'test-github-app-auth.py')
+if ($LASTEXITCODE -ne 0) { throw 'Private GitHub App key/JWT, installation scope and exact merge adapter tests failed.' }
+python (Join-Path $PSScriptRoot 'test-private-chart-promotion.py')
+if ($LASTEXITCODE -ne 0) { throw 'Owned private promotion task, single-call merge recovery and durable checkpoint tests failed.' }
 python (Join-Path $PSScriptRoot 'test-workflow-handoff.py')
 if ($LASTEXITCODE -ne 0) { throw 'Protected GitHub workflow handoff, uncertain-call recovery and child run admission tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-orchestration.py')

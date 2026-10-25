@@ -113,6 +113,17 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(pointer["commandId"], self.command_id)
         self.assertFalse(self.cleanup)
 
+    def test_promotion_dispatch_pins_approval_and_refuses_changed_reference_or_second_attempt(self):
+        self.record.update(status="PROVISIONING", stages=dict(foundation=dict(state="APPLIED")),
+            bootstrapPromotionApproval=dict(key=f"promotion-approvals/staging/{self.record['sessionId']}/{'f' * 64}.json", versionId="approval-v1", sha256="e" * 64))
+        pointer = self.manager.dispatch(self.private, "promote", "chart", 1)
+        task = read_task(self.clients["s3"], "control-bucket", self.record, pointer["taskId"], self.now)
+        self.assertEqual(task["expectedPromotionApproval"], self.record["bootstrapPromotionApproval"])
+        self.assertEqual(pointer["expectedPromotionApproval"], task["expectedPromotionApproval"])
+        self.record["bootstrapPromotionApproval"]["sha256"] = "0" * 64
+        with self.assertRaises(ValueError): read_task(self.clients["s3"], "control-bucket", self.record, pointer["taskId"], self.now)
+        with self.assertRaises(ValueError): self.manager.dispatch(self.private, "promote", "chart", 2)
+
     def test_bootstrap_dispatch_pins_selection_and_refuses_a_second_attempt(self):
         self.record.update(status="PROVISIONING", stages=dict(foundation=dict(state="APPLIED")),
             bootstrapChart=dict(key=f"chart-selections/staging/{self.record['sessionId']}/bootstrap.json", versionId="selection-v1", sha256="c" * 64))

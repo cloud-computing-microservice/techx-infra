@@ -16,6 +16,43 @@ CONFIG_FIELDS = {"schemaVersion", "imageId", "launchTemplateId", "launchTemplate
                  "loaderSha256", "imageBuildSha256", "documentVersion", "documentSha256"}
 
 
+def promotion_reference(record):
+    ref = record.get("bootstrapPromotionApproval", {})
+    prefix = f"promotion-approvals/staging/{record['sessionId']}/"
+    if (not isinstance(ref, dict) or set(ref) != {"key", "versionId", "sha256"}
+            or not isinstance(ref.get("key"), str) or not ref["key"].startswith(prefix)
+            or not re.fullmatch(r"[a-f0-9]{64}\.json", ref["key"][len(prefix):])
+            or not re.fullmatch(r"[a-f0-9]{64}", ref.get("sha256", ""))):
+        raise ValueError("Promotion requires an exact private approval reference")
+    version(ref.get("versionId"))
+    return ref
+
+
+def validate_promotion(record, attempt):
+    if (record.get("status") != "PROVISIONING" or attempt != 1 or record.get("pendingPlan") is not None
+            or record.get("bootstrapChart") or record.get("stages", {}).get("foundation", {}).get("state") != "APPLIED"
+            or any(record.get("stages", {}).get(stage) for stage in ("chart", "gitops", "edge"))):
+        raise ValueError("Promotion requires one unconsumed pre-GitOps cold task")
+    return promotion_reference(record)
+
+
+def validate_promotion_checkpoint(record, task=None):
+    stage = record.get("stages", {}).get("chart", {})
+    ref = stage.get("mergeReceiptReference", {})
+    approval = promotion_reference(record)
+    if (stage.get("state") != "PROMOTED" or stage.get("attempt") != 1 or stage.get("approvalReference") != approval
+            or stage.get("releaseReference") != record.get("bootstrapRelease") or stage.get("proposalReference") != record.get("bootstrapProposal")
+            or not re.fullmatch(r"[a-f0-9]{32}", stage.get("taskId", ""))
+            or any(not re.fullmatch(r"[a-f0-9]{40}", stage.get(key, "")) for key in ("chartSha", "headSha", "treeSha"))
+            or not isinstance(ref, dict) or set(ref) != {"key", "versionId", "sha256"}
+            or ref.get("key") != f"promotions/staging/{record['sessionId']}/{approval['sha256']}/receipt.json"
+            or not re.fullmatch(r"[a-f0-9]{64}", ref.get("sha256", ""))
+            or task is not None and (stage["taskId"] != task["taskId"] or stage["approvalReference"] != task.get("expectedPromotionApproval"))):
+        raise ValueError("Promotion has no exact durable task/approval/merge receipt checkpoint")
+    version(ref.get("versionId"))
+    return stage
+
+
 def bootstrap_reference(record):
     ref = record.get("bootstrapChart", {})
     if (not isinstance(ref, dict) or set(ref) != {"key", "versionId", "sha256"}
@@ -60,6 +97,7 @@ def executor_config(config):
 def validate_task(task, record, now):
     validate(record)
     fields = TASK_FIELDS | ({"expectedBootstrapChart"} if isinstance(task, dict) and task.get("mode") == "bootstrap" else set())
+    if isinstance(task, dict) and task.get("mode") == "promote": fields |= {"expectedPromotionApproval"}
     if not isinstance(task, dict) or set(task) != fields or task["schemaVersion"] != 1:
         raise ValueError("Unsupported deployment task schema")
     if not re.fullmatch(r"[a-f0-9]{32}", task["taskId"]) or not re.fullmatch(MANAGER, task["managerArn"]):
@@ -72,11 +110,13 @@ def validate_task(task, record, now):
         raise ValueError("Task does not belong to the active admitted session")
     if not utc(task["createdAt"]) <= now < utc(task["expiresAt"]) <= utc(record["cleanupStartAt"]):
         raise ValueError("Task expired or enters the cleanup window")
-    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops")}
+    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart")}
             or type(task["attempt"]) is not int or task["attempt"] < 1):
         raise ValueError("Unsupported deployment task action")
     if task["mode"] == "bootstrap" and task["expectedBootstrapChart"] != bootstrap_reference(record):
         raise ValueError("Bootstrap task selection changed after dispatch")
+    if task["mode"] == "promote" and (task["attempt"] != 1 or task["expectedPromotionApproval"] != promotion_reference(record)):
+        raise ValueError("Promotion task approval changed after dispatch")
     if task["mode"] == "apply":
         pending = task["expectedPendingPlan"]
         if (not isinstance(pending, dict) or record.get("pendingPlan") != pending
@@ -95,11 +135,13 @@ def create_task(client, bucket, record, execution_version, instance_id, owner, m
                 expectedPendingPlan=deepcopy(record.get("pendingPlan")) if mode == "apply" else None)
     if mode == "bootstrap":
         task["expectedBootstrapChart"] = deepcopy(validate_bootstrap(record, attempt))
+    if mode == "promote": task["expectedPromotionApproval"] = deepcopy(validate_promotion(record, attempt))
     validate_task(task, record, now)
     ref = immutable_json(client, bucket, f"control/staging/tasks/{task_id}.json", task)
     pointer = dict(taskId=task_id, instanceId=instance_id, managerArn=owner, mode=mode, stage=stage, attempt=attempt,
                    reference=dict(ref, sha256=checksum(task)), state="DISPATCHING")
     if mode == "bootstrap": pointer["expectedBootstrapChart"] = deepcopy(task["expectedBootstrapChart"])
+    if mode == "promote": pointer["expectedPromotionApproval"] = deepcopy(task["expectedPromotionApproval"])
     return task, pointer
 
 
@@ -109,7 +151,8 @@ def read_task(client, bucket, record, task_id, now):
     if (pointer.get("taskId") != task_id or not re.fullmatch(r"[a-f0-9]{32}", task_id)
             or ref.get("key") != f"control/staging/tasks/{task_id}.json"):
         raise ValueError("Task is not the current deployment handoff")
-    task, _ = read_json(client, bucket, ref["key"], ref.get("versionId"))
+    version(ref.get("versionId"))
+    task, _ = read_json(client, bucket, ref["key"], ref["versionId"])
     if checksum(task) != ref.get("sha256"):
         raise ValueError("Task intent checksum changed")
     validate_task(task, record, now)
@@ -117,6 +160,8 @@ def read_task(client, bucket, record, task_id, now):
         raise ValueError("Task pointer differs from immutable intent")
     if task["mode"] == "bootstrap" and pointer.get("expectedBootstrapChart") != task["expectedBootstrapChart"]:
         raise ValueError("Bootstrap pointer differs from immutable selection intent")
+    if task["mode"] == "promote" and pointer.get("expectedPromotionApproval") != task["expectedPromotionApproval"]:
+        raise ValueError("Promotion pointer differs from immutable approval intent")
     return task
 
 
@@ -138,7 +183,9 @@ def validate_result(record, task):
     stage = record.get("stages", {}).get(task["stage"], {})
     if stage.get("attempt") != task["attempt"]:
         raise ValueError("Remote task did not complete its expected stage attempt")
-    if task["mode"] == "bootstrap":
+    if task["mode"] == "promote":
+        validate_promotion_checkpoint(record, task)
+    elif task["mode"] == "bootstrap":
         validate_gitops_checkpoint(record)
         if stage.get("selectionReference") != task.get("expectedBootstrapChart"):
             raise ValueError("Bootstrap completed a different chart selection")

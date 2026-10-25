@@ -373,6 +373,23 @@ run "lifecycle_is_scoped_and_pinned" {
     ]))
     error_message = "Only a protected promotion-approver may write grants; it cannot mutate session, workload or GitHub."
   }
+  assert {
+    condition = (length([for statement in data.aws_iam_policy_document.control.statement : statement if
+      statement.sid == "OnlyPrivateExecutorCanWritePromotionCalls" && statement.effect == "Deny" &&
+      contains(statement.resources, "arn:aws:s3:::techx-test-control/promotions/staging/*") &&
+      anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
+        contains(condition.values, "arn:aws:iam::058114477594:role/techx-automation-lifecycle-executor")
+      ])
+      ]) == 1 && length(aws_iam_role_policy.private_promotion) == 1 &&
+      alltrue([for statement in jsondecode(aws_iam_role_policy.private_promotion[0].policy).Statement :
+        statement.Resource == "arn:aws:s3:::techx-test-control/promotions/staging/*" if contains(statement.Action, "s3:PutObject")
+        ]) && alltrue([for statement in jsondecode(aws_iam_role_policy.private_promotion[0].policy).Statement :
+        toset(statement.Resource) == toset(["arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/automation/promotion-app-??????", "arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/automation/lifecycle-app-??????"]) &&
+        statement.Condition.StringEquals["aws:ResourceTag/Role"] == "github-app" && statement.Condition.StringEquals["aws:ResourceTag/Environment"] == "automation"
+        if contains(statement.Action, "secretsmanager:GetSecretValue")
+    ]))
+    error_message = "Only the owned executor writes merge calls and reads the two fixed tagged App keys; grants stay separate."
+  }
 }
 
 run "lifecycle_requires_dependencies" {

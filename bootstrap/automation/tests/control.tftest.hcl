@@ -60,7 +60,7 @@ variables {
 run "control_off_by_default" {
   command = plan
   assert {
-    condition     = length(aws_codebuild_project.lifecycle) == 0 && length(aws_imagebuilder_image_pipeline.executor) == 0 && length(aws_vpc.executor_control) == 0 && length(aws_iam_role.chart_selector) == 0
+    condition     = length(aws_codebuild_project.lifecycle) == 0 && length(aws_imagebuilder_image_pipeline.executor) == 0 && length(aws_vpc.executor_control) == 0 && length(aws_iam_role.chart_selector) == 0 && length(aws_iam_role.destroy_dispatcher) == 0
     error_message = "Lifecycle compute/network/image resources must remain disabled by default."
   }
   assert {
@@ -82,6 +82,17 @@ run "cleanup_control_is_project_scoped" {
   variables {
     enable_cleanup_control = true
     enable_plan_approval   = true
+  }
+  assert {
+    condition = (length(aws_iam_role.destroy_dispatcher) == 1 &&
+      jsondecode(aws_iam_role.destroy_dispatcher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-infra:environment:staging-destroy" &&
+      alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.destroy_dispatcher[0].policy).Statement : [for action in statement.Action :
+        contains(["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket", "kms:Decrypt", "lambda:InvokeFunction", "codebuild:BatchGetBuilds"], action)
+      ]])) &&
+      alltrue([for statement in jsondecode(aws_iam_role_policy.destroy_dispatcher[0].policy).Statement :
+        !contains(statement.Action, "lambda:InvokeFunction") || statement.Resource == "arn:aws:lambda:us-east-1:058114477594:function:techx-automation-cleanup-launcher"
+    ]))
+    error_message = "Cleanup request must remain available without deploy control, trusting only its main-only environment, read-only evidence and the fixed launcher."
   }
   assert {
     condition     = length(aws_iam_role.plan_review) == 2

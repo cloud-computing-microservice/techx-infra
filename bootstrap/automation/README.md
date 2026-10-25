@@ -597,5 +597,43 @@ prove environment approval, OIDC, AMI/network permissions or AWS acceptance.
 With explicit repository-owner authorization, GitHub environments/role metadata
 have been prepared, and `AUTOMATION_ENABLED`/`LIFECYCLE_ENABLED` remain false on
 all three repositories. AWS resources/roles are not created by GitHub settings.
-Destroy/callback orchestration, promotion/rulesets, acceptance/rollback and live
-integration remain required before enabling either gate.
+Independent cleanup can now be requested as described below. Callback
+orchestration, promotion/session gates, acceptance/rollback and live integration
+remain required before enabling either deployment gate.
+
+### Independent teardown request (source only; not deployed to AWS)
+
+`staging-destroy.yml` takes an existing `session_id` and immutable
+`execution_version`. It deliberately remains available when deployment flags are
+false or the original deadline has passed. The `staging-destroy` environment
+must allow only main; it needs no additional review delay. A dedicated
+`AWS_DESTROY_DISPATCHER_ROLE_ARN` can invoke only the fixed AWS cleanup launcher
+and read scoped execution, build and inventory evidence. It cannot write state,
+start CodeBuild directly, access Cloudflare credentials or delete resources.
+The role is defined when cleanup control is enabled, independently of deploy
+control. No role is created by repository metadata alone.
+
+The caller must be the actual first-attempt manual workflow on current infra
+main. The admitted workload infra commit may be older, so a trusted cleanup fix
+can still tear down that exact old session. Current session, execution VersionId
+and immutable scope must match before dispatch and during observation. The
+launcher and worker retain their own session, ownership and executor-fencing
+checks. Neither an expired budget window nor disabling deploy grants permission
+to touch a different session.
+
+The helper invokes Lambda once with SDK mutation retries disabled. Lost/error
+responses are `DISPATCH_UNCERTAIN`, never an automatic second request or claimed
+completion. A running build is observed for up to 40 minutes at the same handle;
+`CLEANUP_RUNNING` means inventory has not yet been verified. Successful completion
+requires the exact cleanup project/role/session/backend, terminal successful
+CodeBuild, a cleanup-owned completion marker, its original inventory bytes/hash,
+all 19 empty inventory groups and the matching DESTROYED session checkpoint.
+Existing complete evidence is read-only. A DESTROYED checkpoint missing its
+marker needs reconciliation; this workflow does not repair or fabricate it.
+
+Repository main protection has also been read back on all three repos: PR and
+up-to-date required Actions checks, including administrators, no force/delete
+or PR bypass. Chart adds a fresh approval of its last push. These settings do
+not implement the still-missing promotion/session gate or prove an installation
+token cannot promote after a session closes. No AWS teardown is dispatched by CI
+verification, and live cleanup IAM/network/failure acceptance is still required.

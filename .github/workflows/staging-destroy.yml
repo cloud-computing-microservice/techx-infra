@@ -1,0 +1,59 @@
+name: Request independent staging teardown
+on:
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: Exact existing admitted staging session to destroy
+        required: true
+        type: string
+      execution_version:
+        description: Exact immutable S3 execution VersionId (keep this for recovery)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: staging-cleanup-observation
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    # Do not couple teardown to deployment flags or an unexpired budget window.
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    environment: staging-destroy
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
+      SESSION_ID: ${{ inputs.session_id }}
+      EXECUTION_VERSION: ${{ inputs.execution_version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate fixed existing-session scope
+        run: |
+          python - <<'PY'
+          import os, re
+          assert re.fullmatch(r'staging-[A-Za-z0-9-]{1,64}', os.environ['SESSION_ID'])
+          assert re.fullmatch(r'[A-Za-z0-9_./+=-]{1,1024}', os.environ['EXECUTION_VERSION'])
+          PY
+      - name: Install pinned SDK dependencies
+        run: python -m pip install -r scripts/requirements-automation.txt
+      - name: Configure cleanup-request-only identity
+        uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_DESTROY_DISPATCHER_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: '058114477594'
+          role-session-name: techx-destroy-${{ github.run_id }}
+          role-duration-seconds: 3600
+      - name: Request and observe AWS cleanup (read result before claiming completion)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/destroy_lifecycle.py --bucket="$CONTROL_BUCKET" --session-id="$SESSION_ID" --execution-version="$EXECUTION_VERSION"

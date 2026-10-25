@@ -1,0 +1,9 @@
+# Offline scanner inputs only; this file is not an approval to create resources.
+bucket_name            = "techx-ci-scan-only"
+enable_cleanup_control = true
+enable_plan_approval   = true
+enable_lifecycle_control = true
+enable_executor_image_build = true
+executor_ami_id = "ami-1234567890abcdef0"
+executor_parent_ami_id = "ami-1234567890abcdef0"
+cloudflare_secret_arn  = "arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/automation/cloudflare-ScanOnly"

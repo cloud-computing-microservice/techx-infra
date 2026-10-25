@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: infra-${{ github.ref }}
   cancel-in-progress: true
@@ -16,13 +17,28 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           path: techx-infra
+      - name: Resolve reviewed peer revisions
+        id: peers
+        working-directory: techx-infra
+        run: |
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          peers = json.loads(Path('.github/integration-revisions.json').read_text())
+          assert set(peers) == {'techx-platform', 'techx-chart'}
+          assert all(isinstance(sha, str) and re.fullmatch(r'[a-f0-9]{40}', sha) for sha in peers.values())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"platform={peers['techx-platform']}\nchart={peers['techx-chart']}\n")
+          PY
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: cloud-computing-microservice/techx-platform
+          ref: ${{ steps.peers.outputs.platform }}
           path: techx-platform
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: cloud-computing-microservice/techx-chart
+          ref: ${{ steps.peers.outputs.chart }}
           path: techx-chart
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1 (Node 24)
         with:
@@ -30,4 +46,12 @@ jobs:
           terraform_wrapper: false
       - shell: pwsh
         working-directory: techx-infra
+        run: python -m pip install -r scripts/requirements-automation.txt
+      - shell: pwsh
+        working-directory: techx-infra
         run: ./scripts/verify.ps1
+      - name: Verify read-only GitHub source and approval-history access
+        working-directory: techx-infra
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/probe-github-source-read.py

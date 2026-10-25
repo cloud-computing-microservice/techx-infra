@@ -99,7 +99,9 @@ $requiredActions = if ($Stage -eq 'foundation') {
 } else {
   @('cloudfront:UpdateDistribution', 'cloudfront:UpdateFunction', 'cloudfront:PublishFunction', 'eks:UpdateClusterConfig', 'iam:UpdateOpenIDConnectProviderThumbprint')
 }
-$simulation = aws iam simulate-principal-policy --policy-source-arn $identity.Arn --action-names $requiredActions --output json | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'iam-contract.ps1')
+$simulationArn = Get-SimulationPrincipalArn $identity
+$simulation = aws iam simulate-principal-policy --policy-source-arn $simulationArn --action-names $requiredActions --output json | ConvertFrom-Json
 $denied = @($simulation.EvaluationResults | Where-Object { $_.EvalDecision -ne 'allowed' })
 if ($denied.Count -gt 0) { throw "Permission simulation did not allow: $($denied.EvalActionName -join ', ')" }
 

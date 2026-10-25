@@ -1,0 +1,14 @@
+{
+  "awscli": {
+    "version": "2.34.28",
+    "url": "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.34.28.zip",
+    "sha256": "030bb6d81b7dbbd6ab9d2a2f0fb3aa4a0aaa4335964bf4d0c8aee1af103f2025",
+    "signatureUrl": "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.34.28.zip.sig",
+    "signerFingerprint": "FB5DB77FD5C118B80511ADA8A6310ACC4672475C"
+  },
+  "powershell": {
+    "version": "7.6.6",
+    "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/powershell-7.6.6-linux-x64.tar.gz",
+    "sha256": "ddbc4a2d113bbd46d283cfedcbcd117a70caefd7673f41f2b4e0000badf103bc"
+  }
+}

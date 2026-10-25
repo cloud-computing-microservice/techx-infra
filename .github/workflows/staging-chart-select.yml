@@ -1,0 +1,73 @@
+name: Select bootstrap chart
+on:
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: Exact active staging session
+        required: true
+        type: string
+      execution_version:
+        description: Immutable S3 execution VersionId
+        required: true
+        type: string
+      chart_sha:
+        description: Exact merged chart main commit
+        required: true
+        type: string
+      pr_number:
+        description: Reviewed release PR merged at that commit
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: staging-chart-selection
+  cancel-in-progress: false
+jobs:
+  select:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.LIFECYCLE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: staging-chart-select
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      SESSION_ID: ${{ inputs.session_id }}
+      EXECUTION_VERSION: ${{ inputs.execution_version }}
+      CHART_SHA: ${{ inputs.chart_sha }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate typed selection inputs
+        run: |
+          python - <<'PY'
+          import os, re
+          assert re.fullmatch(r'staging-[A-Za-z0-9-]{1,64}', os.environ['SESSION_ID'])
+          assert re.fullmatch(r'[a-f0-9]{40}', os.environ['CHART_SHA'])
+          assert re.fullmatch(r'[1-9][0-9]{0,9}', os.environ['PR_NUMBER'])
+          assert re.fullmatch(r'[A-Za-z0-9_./+=-]{1,1024}', os.environ['EXECUTION_VERSION'])
+          PY
+      - name: Configure scoped selector identity
+        uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_CHART_SELECTOR_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: "058114477594"
+          role-session-name: techx-chart-select-${{ github.run_id }}
+          role-duration-seconds: 1800
+      - name: Install reviewed SDK dependencies
+        run: python -m pip install -r scripts/requirements-automation.txt
+      - name: Verify and select immutable chart revision
+        env:
+          CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/select_bootstrap_chart.py --bucket "$CONTROL_BUCKET" \
+            --session-id "$SESSION_ID" --execution-version "$EXECUTION_VERSION" \
+            --chart-sha "$CHART_SHA" --pr-number "$PR_NUMBER"

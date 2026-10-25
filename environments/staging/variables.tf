@@ -104,6 +104,16 @@ variable "addon_versions" {
   }
 }
 
+variable "budget_limit_usd" {
+  description = "Approved budget for this staging session; alerts do not stop spending."
+  type        = number
+  default     = 80
+  validation {
+    condition     = var.budget_limit_usd >= 1 && var.budget_limit_usd <= 80
+    error_message = "budget_limit_usd must be between 1 and 80 USD."
+  }
+}
+
 variable "budget_alert_email" {
   type      = string
   default   = null
@@ -181,5 +191,14 @@ variable "client_vpn_root_certificate_arn" {
   validation {
     condition     = var.client_vpn_root_certificate_arn == "" || can(regex("^arn:aws:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]+$", var.client_vpn_root_certificate_arn))
     error_message = "client_vpn_root_certificate_arn must be an ACM certificate ARN in us-east-1."
+  }
+}
+variable "workload_permissions_boundary_arn" {
+  description = "Automation-created roles must use the reviewed bootstrap boundary; null preserves manual teardown compatibility."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.workload_permissions_boundary_arn == null || var.workload_permissions_boundary_arn == "arn:aws:iam::058114477594:policy/techx-automation-workload-boundary"
+    error_message = "Only the fixed automation workload boundary is supported."
   }
 }

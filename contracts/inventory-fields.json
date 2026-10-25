@@ -1,0 +1,6 @@
+[
+  "clusters", "nodeGroups", "loadBalancerArns", "clientVpn", "cloudFront",
+  "privateHostedZones", "ecrRepositories", "dynamodbTables", "dynamodbVpcEndpoints",
+  "orderApiIamRoles", "acmCertificates", "ec2Instances", "ebsVolumes", "vpcs",
+  "publicAddresses", "iamRoles", "iamPolicies", "vpcEndpoints", "secrets"
+]

@@ -11,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $scanner = & (Join-Path $PSScriptRoot 'resolve-trivy.ps1')
 $targets = @(
+  (Join-Path $root 'bootstrap/automation'),
   (Join-Path $root 'environments/demo'),
   (Join-Path $root 'environments/staging'),
   (Join-Path $root 'modules/client-vpn'),
@@ -24,7 +25,11 @@ $targets = @(
   (Join-Path $root 'modules/vpc')
 )
 foreach ($target in $targets) {
-  $scanOutput = & $scanner config --severity HIGH,CRITICAL --exit-code 1 --ignorefile (Join-Path $root '.trivyignore') --skip-dirs '.terraform,.terraform-helm,.plans,.claude,.codex' --skip-version-check $target 2>&1
+  $extra = @()
+  if ($target -eq (Join-Path $root 'bootstrap/automation')) {
+    $extra = @('--tf-vars', (Join-Path $target 'scan.tfvars.example'))
+  }
+  $scanOutput = & $scanner config --severity HIGH,CRITICAL --exit-code 1 --ignorefile (Join-Path $root '.trivyignore') --skip-dirs '.terraform,.terraform-helm,.plans,.claude,.codex' --skip-version-check @extra $target 2>&1
   $scanExit = $LASTEXITCODE
   $scanOutput | Out-Host
   if (($scanOutput -join "`n") -match 'Module will be skipped|older than minimum trivy version') { throw 'Security scan skipped policy coverage; update the pinned scanner.' }

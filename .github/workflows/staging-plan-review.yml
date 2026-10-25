@@ -1,0 +1,90 @@
+name: Review a saved staging plan
+on:
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: Existing lifecycle session ID
+        required: true
+        type: string
+      stage:
+        description: Saved plan stage
+        required: true
+        type: choice
+        options: [foundation, edge]
+      plan_attempt:
+        description: Stage plan attempt from lifecycle output
+        required: true
+        type: string
+      request_version:
+        description: Exact private review request S3 VersionId
+        required: true
+        type: string
+      request_sha256:
+        description: Review request checksum from lifecycle output
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: staging-plan-review-${{ inputs.session_id }}-${{ inputs.stage }}
+  cancel-in-progress: false
+env:
+  TECHX_SESSION_ID: ${{ inputs.session_id }}
+  TECHX_PLAN_STAGE: ${{ inputs.stage }}
+  TECHX_PLAN_ATTEMPT: ${{ inputs.plan_attempt }}
+  TECHX_REQUEST_VERSION: ${{ inputs.request_version }}
+  TECHX_REQUEST_SHA256: ${{ inputs.request_sha256 }}
+  TECHX_STATE_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
+jobs:
+  preview:
+    if: vars.LIFECYCLE_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: staging-plan-read
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_READER_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: '058114477594'
+          role-session-name: techx-plan-preview-${{ github.run_id }}
+      - run: python -m pip install -r scripts/requirements-automation.txt
+      - name: Show exact sanitized plan before environment review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/approve_plan.py preview
+  approve:
+    needs: preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Configure required human reviewers and main-only deployment protection.
+    # An unprotected environment has no review history and fails closed in code.
+    environment: staging-apply
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_APPROVER_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: '058114477594'
+          role-session-name: techx-plan-approve-${{ github.run_id }}
+      - run: python -m pip install -r scripts/requirements-automation.txt
+      - name: Verify real review and store immutable approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/approve_plan.py approve

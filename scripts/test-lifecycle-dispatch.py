@@ -81,6 +81,8 @@ class DispatchTests(unittest.TestCase):
         self.applied()
         self.assertEqual(self.dispatcher.advance()["waiting"], "COLD_RELEASE")
         self.f.record["bootstrapRelease"] = dict(key="fixture")
+        self.assertEqual(self.dispatcher.advance()["waiting"], "CHART_PROPOSAL")
+        self.f.record["bootstrapProposal"] = dict(key="fixture")
         self.assertEqual(self.dispatcher.advance()["waiting"], "CHART_SELECTION")
         self.assertFalse(self.started)
 
@@ -197,7 +199,7 @@ class DispatchTests(unittest.TestCase):
 
     def test_bootstrap_revalidates_immutable_receipts_before_startbuild(self):
         self.applied()
-        self.f.record.update(bootstrapRelease=dict(key="release"), bootstrapChart=dict(
+        self.f.record.update(bootstrapRelease=dict(key="release"), bootstrapProposal=dict(key="proposal"), bootstrapChart=dict(
             key=f"chart-selections/staging/{self.f.record['sessionId']}/bootstrap.json", versionId="selection-v1", sha256="d" * 64))
         with patch("chart_selection.read_release", side_effect=ValueError("invalid cold receipt")) as release:
             with self.assertRaises(ValueError): self.dispatcher.advance()

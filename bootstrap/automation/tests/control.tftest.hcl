@@ -283,7 +283,8 @@ run "lifecycle_is_scoped_and_pinned" {
     condition = (length(aws_iam_role.bootstrap_publisher) == 1 &&
       jsondecode(aws_iam_role.bootstrap_publisher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-platform:environment:staging-bootstrap" &&
       alltrue([for statement in jsondecode(aws_iam_role_policy.bootstrap_publisher_control[0].policy).Statement :
-      statement.Resource == "arn:aws:s3:::techx-test-control/releases/staging/*/bootstrap.json" if contains(statement.Action, "s3:PutObject")])
+        toset(statement.Resource) == toset(["arn:aws:s3:::techx-test-control/releases/staging/*/bootstrap.json", "arn:aws:s3:::techx-test-control/proposals/staging/*/bootstrap.json"])
+      if contains(statement.Action, "s3:PutObject")])
     )
     error_message = "Cold publish needs a separate protected OIDC subject and a scoped immutable receipt prefix."
   }
@@ -301,6 +302,13 @@ run "lifecycle_is_scoped_and_pinned" {
       contains(statement.resources, "arn:aws:s3:::techx-test-control/chart-selections/staging/*")
     ]) == 1
     error_message = "A bucket deny must reserve chart-selection writes for the selector role."
+  }
+  assert {
+    condition = length([for statement in data.aws_iam_policy_document.control.statement : statement if
+      statement.sid == "OnlyBootstrapPublisherCanWriteProposals" && statement.effect == "Deny" &&
+      contains(statement.resources, "arn:aws:s3:::techx-test-control/proposals/staging/*")
+    ]) == 1
+    error_message = "Only the cold publisher may write immutable proposal receipts."
   }
 }
 

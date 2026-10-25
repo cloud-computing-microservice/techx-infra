@@ -500,8 +500,9 @@ The continuation observes the same build for a bounded 40-minute loop, retaining
 its handle on observation timeout. It can advance preparation to foundation
 plan, an approved apply, selected GitOps bootstrap and edge plan. Plan review,
 cold release, chart selection and DNS/acceptance are explicit waiting states;
-there is no false READY or dispatch to a missing workflow. Opening a session,
-cold publish/proposal callers and the complete end-to-end orchestration remain due.
+there is no false READY or dispatch to a missing workflow. The separate cold
+publish/proposal caller is described below; opening a session and the complete
+end-to-end orchestration remain due.
 
 Cleanup stops the observed manager even when no lease/VM is recorded yet. An
 unknown StartBuild result requires positive recovery by exact session/version/
@@ -511,3 +512,44 @@ receipt before reading the latest launch snapshot. Empty, ambiguous, incomplete
 or truncated observations cannot establish successful cleanup. Pagination omits
 sortOrder because [AWS rejects that override for projects with over 100 builds](https://docs.aws.amazon.com/codebuild/latest/APIReference/API_ListBuildsForProject.html).
 No new session, cloud build or AWS deployment was executed to test this source.
+
+### Cold publish workflow and chart proposal (gated source only)
+
+Platform's `bootstrap-staging.yml` uses the existing `staging-bootstrap` role,
+typed session/execution inputs and a full reviewed `AUTOMATION_INFRA_SHA`. Its
+helper checks its own clean Git root/HEAD, the real first-attempt platform main
+workflow at the admitted SHA and the latest complete passing `verify.yml` run.
+It also verifies the exact preceding lifecycle manager and SSM stage; an active
+manager, unknown source/CI or another lease cannot start publication. Source CI
+is rechecked during the worker and before receipt publication, rather than
+accepting a caller-supplied success flag. Release receipts now require the
+`sourceCi` run/source proof; `sourceCiPassed` alone is insufficient.
+
+Only after publishing does the workflow create its chart-scoped App token.
+`bootstrap_proposal.py` renders exactly `values-staging.yaml` and
+`releases/staging.json` from the admitted archive and cold manifest. Git blob
+hashes, the unchanged baseline tree and single admitted parent are checked
+before creating `release/bootstrap-<session>`. Commit metadata is deterministic
+for safe retries. The API writer exposes only object creation, a new ref and PR
+creation; no merge, ref update or delete operation exists. An existing branch
+must already identify the exact commit. A lost ref/PR response is reconciled by
+positive reads, and a conflicting or closed PR is never replaced/reopened.
+
+The worker holds the bootstrap heartbeat lease and rechecks session, schedule,
+source CI, manifest and chart main before every external write. Proposal receipts
+at `proposals/staging/<session>/bootstrap.json` are version/hash pinned in the
+session; a bucket deny reserves writes for the bootstrap role. Selector reads
+that receipt, then requires the actual merged PR head and resulting tree to
+match it as well as human review and main CI. Cleanup or a moved main closes
+the operation. No PR is merged and neither publisher nor selector marks READY.
+
+Contract tests cover producer-to-selector handoff, different PR/merge SHAs,
+GitHub/SSM/CodeBuild failures, latest CI failure, incomplete history, branch
+conflicts, lost responses and lost session CAS. These use controlled services;
+the GitHub App, protected environments, live OIDC and cloud resources are not
+configured/accepted by this source change. Parent lifecycle dispatch, promotion,
+DNS/acceptance and rollback remain due. REST contracts:
+[workflow runs](https://docs.github.com/en/rest/actions/workflow-runs),
+[Git commits](https://docs.github.com/en/rest/git/commits),
+[references](https://docs.github.com/en/rest/git/refs) and
+[pull requests](https://docs.github.com/en/rest/pulls/pulls).

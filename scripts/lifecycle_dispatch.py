@@ -104,6 +104,7 @@ def next_operation(record, previous):
         if previous != operation("apply", "foundation", foundation["attempt"]):
             raise ValueError("Cold bootstrap requires the completed foundation apply")
         if not record.get("bootstrapRelease"): return dict(waiting="COLD_RELEASE")
+        if not record.get("bootstrapProposal"): return dict(waiting="CHART_PROPOSAL")
         if not record.get("bootstrapChart"): return dict(waiting="CHART_SELECTION")
         validate_bootstrap(record, 1)
         return operation("bootstrap", "gitops")

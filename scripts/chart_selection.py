@@ -6,8 +6,10 @@ import json
 from pathlib import PurePosixPath
 import re
 from urllib.request import Request, urlopen
+from bootstrap_provenance import PLATFORM_REPO, validate_proof
 
 from automation_session import utc
+from plan_approval import version
 from plan_review_store import ACCOUNT, checksum, read_json
 
 CHART_REPO = "cloud-computing-microservice/techx-chart"
@@ -23,14 +25,14 @@ def sha(value):
 
 class GitHub:
     def __init__(self, repo, token):
-        if repo not in (CHART_REPO, INFRA_REPO) or not token:
+        if repo not in (CHART_REPO, INFRA_REPO, PLATFORM_REPO) or not token:
             raise ValueError("A scoped read-only GitHub token and fixed repository are required")
         self.repo, self.token = repo, token
 
     def get(self, endpoint):
         request = Request(f"https://api.github.com/repos/{self.repo}/{endpoint}", headers={
             "Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "techx-chart-selector"})
+            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "techx-automation"})
         with urlopen(request, timeout=30) as response:
             if response.headers.get("Link"): raise ValueError("Paginated chart provenance is not accepted")
             payload = response.read(2 * 1024 * 1024 + 1)
@@ -44,13 +46,35 @@ def read_release(client, bucket, record, execution, execution_version):
     if (not isinstance(ref, dict) or set(ref) != {"key", "versionId", "sha256"} or ref.get("key") != key
             or not re.fullmatch(r"[a-f0-9]{64}", ref.get("sha256", ""))):
         raise ValueError("Cold release must have an exact immutable reference")
+    version(ref["versionId"])
     artifact, _ = read_json(client, bucket, key, ref["versionId"])
     if (checksum(artifact) != ref["sha256"] or artifact.get("schemaVersion") != 1
             or artifact.get("sessionId") != record["sessionId"] or artifact.get("executionVersion") != execution_version
             or artifact.get("sourceRevisions") != execution["sourceRevisions"] or artifact.get("sourceCiPassed") is not True
             or artifact.get("manifest", {}).get("commit") != execution["sourceRevisions"]["techx-platform"]):
         raise ValueError("Cold release differs from the admitted source/session")
+    validate_proof(artifact.get("sourceCi"), execution)
     return artifact
+
+
+def read_proposal(client, bucket, record, execution, execution_version):
+    ref = record.get("bootstrapProposal", {})
+    key = f"proposals/staging/{record['sessionId']}/bootstrap.json"
+    if (not isinstance(ref, dict) or set(ref) != {"key", "versionId", "sha256"} or ref.get("key") != key
+            or not re.fullmatch(r"[a-f0-9]{64}", ref.get("sha256", ""))):
+        raise ValueError("Cold chart selection requires the immutable proposal receipt")
+    version(ref["versionId"])
+    value, _ = read_json(client, bucket, key, ref["versionId"])
+    number = value.get("prNumber")
+    if (checksum(value) != ref["sha256"] or value.get("schemaVersion") != 1 or value.get("sessionId") != record["sessionId"]
+            or value.get("executionVersion") != execution_version or value.get("sourceRevisions") != execution["sourceRevisions"]
+            or value.get("releaseReference") != record.get("bootstrapRelease") or value.get("baselineSha") != execution["sourceRevisions"]["techx-chart"]
+            or value.get("branch") != f"release/bootstrap-{record['sessionId']}" or type(number) is not int or number < 1
+            or value.get("pullRequest") != f"https://github.com/{CHART_REPO}/pull/{number}"):
+        raise ValueError("Proposal receipt differs from the admitted release/source/PR")
+    sha(value.get("headSha"))
+    sha(value.get("treeSha"))
+    return value
 
 
 def git_tree(github, commit_sha):
@@ -163,7 +187,7 @@ def selection(github, source, record, execution, execution_version, release, cha
     if github.get("git/ref/heads/main").get("object", {}).get("sha") != chart_sha:
         raise ValueError("Chart main changed during selection checks")
     return dict(schemaVersion=1, sessionId=record["sessionId"], executionVersion=execution_version,
-        sourceRevisions=execution["sourceRevisions"], releaseReference=record["bootstrapRelease"],
+        sourceRevisions=execution["sourceRevisions"], releaseReference=record["bootstrapRelease"], proposalReference=record["bootstrapProposal"],
         baselineSha=baseline_sha, chartSha=chart_sha, treeSha=tree_sha, provenance=proof)
 
 
@@ -173,10 +197,18 @@ def read_selection(client, bucket, record, execution, execution_version):
     if (not isinstance(ref, dict) or set(ref) != {"key", "versionId", "sha256"} or ref.get("key") != key
             or not re.fullmatch(r"[a-f0-9]{64}", ref.get("sha256", ""))):
         raise ValueError("Bootstrap chart must have an exact protected selection reference")
+    version(ref["versionId"])
+    proposal = record.get("bootstrapProposal", {})
+    if (not isinstance(proposal, dict) or set(proposal) != {"key", "versionId", "sha256"}
+            or proposal.get("key") != f"proposals/staging/{record['sessionId']}/bootstrap.json"
+            or not re.fullmatch(r"[a-f0-9]{64}", proposal.get("sha256", ""))):
+        raise ValueError("Selected chart must remain bound to its immutable proposal")
+    version(proposal["versionId"])
     value, _ = read_json(client, bucket, key, ref["versionId"])
     if (checksum(value) != ref["sha256"] or value.get("schemaVersion") != 1 or value.get("sessionId") != record["sessionId"]
             or value.get("executionVersion") != execution_version or value.get("sourceRevisions") != execution["sourceRevisions"]
-            or value.get("releaseReference") != record.get("bootstrapRelease") or value.get("baselineSha") != execution["sourceRevisions"]["techx-chart"]):
+            or value.get("releaseReference") != record.get("bootstrapRelease") or value.get("proposalReference") != record.get("bootstrapProposal")
+            or value.get("baselineSha") != execution["sourceRevisions"]["techx-chart"]):
         raise ValueError("Chart selection belongs to another release/execution")
     sha(value.get("chartSha"))
     sha(value.get("treeSha"))

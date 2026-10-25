@@ -16,7 +16,7 @@ resource "aws_iam_role_policy" "chart_selector" {
   name  = "verify-release-write-protected-chart-selection"
   role  = aws_iam_role.chart_selector[0].name
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [for prefix in ["executions/*", "bundles/*", "automation/staging/session.json", "releases/staging/*/bootstrap.json", "chart-selections/staging/*/bootstrap.json"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
+    { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [for prefix in ["executions/*", "bundles/*", "automation/staging/session.json", "releases/staging/*/bootstrap.json", "proposals/staging/*/bootstrap.json", "chart-selections/staging/*/bootstrap.json"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.control.arn,
     Condition = { StringLike = { "s3:prefix" = ["chart-selections/staging/*/bootstrap.json"] } } },
     { Effect = "Allow", Action = ["s3:PutObject"], Resource = ["${aws_s3_bucket.control.arn}/automation/staging/session.json", "${aws_s3_bucket.control.arn}/chart-selections/staging/*/bootstrap.json"] },

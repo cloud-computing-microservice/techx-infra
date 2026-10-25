@@ -10,7 +10,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from chart_selection import CHART_REPO, INFRA_REPO, read_selection, selection
+from chart_selection import CHART_REPO, INFRA_REPO, read_proposal, read_release, read_selection, selection
 from cleanup_schedule import definition
 from lifecycle_coordinator import initial_record
 from plan_review_store import ACCOUNT, checksum
@@ -84,10 +84,19 @@ class SelectionTests(unittest.TestCase):
             head_sha="d" * 40, path=WORKFLOW, repository=dict(full_name=INFRA_REPO), head_repository=dict(full_name=INFRA_REPO))
         self.infra = SimpleNamespace(get=lambda _: deepcopy(self.infra_run))
         self.release = dict(schemaVersion=1, sessionId=self.record["sessionId"], executionVersion="exec-v1",
-            sourceRevisions=self.execution["sourceRevisions"], manifest=self.manifest, sourceCiPassed=True)
+            sourceRevisions=self.execution["sourceRevisions"], manifest=self.manifest, sourceCiPassed=True,
+            sourceCi=dict(repository="cloud-computing-microservice/techx-platform", platformSha="c" * 40, infraSha="d" * 40,
+                workflowRunId=100, ciRunId=99))
         self.release_key = f"releases/staging/{self.record['sessionId']}/bootstrap.json"
         self.record["bootstrapRelease"] = dict(key=self.release_key, versionId="v1", sha256=checksum(self.release))
         self.objects = {self.release_key: json.dumps(self.release).encode()}
+        self.proposal = dict(schemaVersion=1, sessionId=self.record["sessionId"], executionVersion="exec-v1",
+            sourceRevisions=self.execution["sourceRevisions"], releaseReference=deepcopy(self.record["bootstrapRelease"]),
+            baselineSha="a" * 40, branch=f"release/bootstrap-{self.record['sessionId']}", headSha="f" * 40, treeSha=self.selected_tree,
+            prNumber=7, pullRequest=f"https://github.com/{CHART_REPO}/pull/7")
+        proposal_key = f"proposals/staging/{self.record['sessionId']}/bootstrap.json"
+        self.objects[proposal_key] = json.dumps(self.proposal).encode()
+        self.record["bootstrapProposal"] = dict(key=proposal_key, versionId="v1", sha256=checksum(self.proposal))
         self.writes = []
         def get(**kw): return dict(VersionId="v1", Body=io.BytesIO(self.objects[kw["Key"]]))
         def put(**kw):
@@ -216,6 +225,36 @@ class SelectionTests(unittest.TestCase):
         ref = self.select()
         self.assertEqual(self.record["bootstrapChart"], ref)
         self.assertEqual(len(self.writes), 1)
+
+    def test_missing_or_different_proposal_head_cannot_select_an_equivalent_release_pr(self):
+        ref = self.record.pop("bootstrapProposal")
+        with self.assertRaisesRegex(ValueError, "proposal receipt"): self.select()
+        self.record["bootstrapProposal"] = ref
+        value = json.loads(self.objects[ref["key"]])
+        value["headSha"] = "0" * 40
+        self.objects[ref["key"]] = json.dumps(value).encode()
+        self.record["bootstrapProposal"]["sha256"] = checksum(value)
+        with self.assertRaisesRegex(ValueError, "immutable proposal"): self.select()
+        self.assertFalse(self.writes)
+
+    def test_null_object_versions_are_not_allowed_to_fall_back_to_latest(self):
+        for field, reader in (("bootstrapRelease", read_release), ("bootstrapProposal", read_proposal)):
+            old = self.record[field]["versionId"]
+            self.record[field]["versionId"] = None
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                reader(self.clients["s3"], "control-bucket", self.record, self.execution, "exec-v1")
+            self.record[field]["versionId"] = old
+        self.select()
+        self.record["bootstrapChart"]["versionId"] = None
+        with self.assertRaises(ValueError): read_selection(self.clients["s3"], "control-bucket", self.record, self.execution, "exec-v1")
+
+    def test_caller_success_boolean_without_real_source_proof_is_not_a_release(self):
+        artifact = deepcopy(self.release)
+        artifact.pop("sourceCi")
+        self.objects[self.release_key] = json.dumps(artifact).encode()
+        self.record["bootstrapRelease"]["sha256"] = checksum(artifact)
+        with self.assertRaisesRegex(ValueError, "source/CI provenance"): self.select()
+        self.assertFalse(self.writes)
 
 
 if __name__ == "__main__": unittest.main()

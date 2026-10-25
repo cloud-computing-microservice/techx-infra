@@ -11,7 +11,7 @@ import tempfile
 from automation_budget import validate_estimate
 from automation_session import S3SessionStore, utc, validate
 from bootstrap_publish import archive_loader
-from chart_selection import CHART_REPO, INFRA_REPO, GitHub, read_release, read_selection, selection
+from chart_selection import CHART_REPO, INFRA_REPO, GitHub, read_proposal, read_release, read_selection, selection
 from cleanup_schedule import verify_existing
 from plan_review_store import ACCOUNT, checksum, immutable_json, read_json
 
@@ -57,10 +57,15 @@ class ChartSelector:
         record, _ = self.guard()
         verified_selector(infra_github, self.run_id, self.execution)
         release = read_release(self.clients["s3"], self.bucket, record, self.execution, self.version)
+        proposal = read_proposal(self.clients["s3"], self.bucket, record, self.execution, self.version)
+        if proposal["prNumber"] != pr_number: raise ValueError("Selection PR differs from the cold proposal")
         value = selection(chart_github, Path(source), record, self.execution, self.version, release, chart_sha, pr_number)
+        if value["provenance"]["prHeadSha"] != proposal["headSha"] or value["treeSha"] != proposal["treeSha"]:
+            raise ValueError("Merged chart differs from the immutable proposal head/tree")
         record, etag = self.guard()
-        if record.get("bootstrapRelease") != value["releaseReference"]:
-            raise ValueError("Cold release changed during chart verification")
+        if (record.get("bootstrapRelease") != value["releaseReference"]
+                or record.get("bootstrapProposal") != value["proposalReference"]):
+            raise ValueError("Cold release/proposal changed during chart verification")
         if record.get("bootstrapChart"):
             previous = read_selection(self.clients["s3"], self.bucket, record, self.execution, self.version)
             if previous["chartSha"] != chart_sha or previous["provenance"]["prNumber"] != pr_number:
@@ -85,7 +90,8 @@ class ChartSelector:
             ref = immutable_json(self.clients["s3"], self.bucket, key, value)
             ref["sha256"] = checksum(value)
         record, etag = self.guard()
-        if record.get("bootstrapRelease") != value["releaseReference"] or record.get("bootstrapChart") not in (None, ref):
+        if (record.get("bootstrapRelease") != value["releaseReference"] or record.get("bootstrapProposal") != value["proposalReference"]
+                or record.get("bootstrapChart") not in (None, ref)):
             raise ValueError("Selection handoff lost its release/session identity")
         updated = deepcopy(record)
         updated["bootstrapChart"] = ref

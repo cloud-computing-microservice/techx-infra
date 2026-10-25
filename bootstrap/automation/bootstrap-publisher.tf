@@ -25,9 +25,10 @@ resource "aws_iam_role_policy" "bootstrap_publisher_control" {
   name  = "read-admitted-bundle-write-cold-release-receipt"
   role  = aws_iam_role.bootstrap_publisher[0].name
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [for prefix in ["executions/*", "bundles/*", "releases/staging/*/bootstrap.json"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
-    { Effect = "Allow", Action = ["s3:PutObject"], Resource = "${aws_s3_bucket.control.arn}/releases/staging/*/bootstrap.json" },
+    { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [for prefix in ["executions/*", "bundles/*", "releases/staging/*/bootstrap.json", "proposals/staging/*/bootstrap.json"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
+    { Effect = "Allow", Action = ["s3:PutObject"], Resource = [for prefix in ["releases/staging/*/bootstrap.json", "proposals/staging/*/bootstrap.json"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
     { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = "*" },
+    { Effect = "Allow", Action = ["codebuild:BatchGetBuilds"], Resource = local.lifecycle_project_arn },
     { Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = "arn:aws:lambda:us-east-1:058114477594:function:techx-automation-cleanup-launcher" }
   ] })
 }

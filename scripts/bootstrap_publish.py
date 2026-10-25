@@ -15,8 +15,10 @@ import sys
 
 from automation_budget import validate_estimate
 from automation_session import utc, validate
+from bootstrap_provenance import publisher_proof, validate_proof
 from cleanup_schedule import verify_existing
-from plan_review_store import checksum, immutable_json
+from lifecycle_dispatch import completed_manager, operation
+from plan_review_store import checksum, immutable_json, read_json
 
 ACCOUNT = "058114477594"
 OWNER = r"cloud-computing-microservice/techx-platform:[0-9]+:[0-9]+"
@@ -36,7 +38,7 @@ def archive_loader(client, bucket, session, execution_version, directory):
 
 class ColdPublisher:
     def __init__(self, clients, store, bucket, execution, execution_version, owner, epoch, *,
-                 clock=None, run=subprocess.run, load=archive_loader):
+                 github, clock=None, run=subprocess.run, load=archive_loader):
         if not re.fullmatch(OWNER, owner) or not execution_version or type(epoch) is not int or epoch < 1:
             raise ValueError("Cold publishing needs a fixed GitHub runner owner and lease epoch")
         validate(execution)
@@ -44,6 +46,26 @@ class ColdPublisher:
         self.execution, self.version, self.owner, self.epoch = deepcopy(execution), execution_version, owner, epoch
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.run, self.load = run, load
+        self.github, self.proof = github, None
+
+    def admission(self, record):
+        """Read-only preflight, also used before claiming the hosted lease."""
+        validate(record)
+        for key in ("sessionId", "account", "region", "environment", "sourceRevisions", "deadline", "cleanupStartAt", "approvedBudgetUsd", "maximumHours", "action"):
+            if record.get(key) != self.execution.get(key):
+                raise ValueError("Current session differs from the immutable cold-start execution")
+        if (record.get("executionVersion") != self.version or record["status"] != "PROVISIONING"
+                or self.clock() >= utc(record["cleanupStartAt"]) or record.get("pendingPlan") is not None
+                or record.get("stages", {}).get("edge") or record.get("stages", {}).get("gitops") or record.get("bootstrapChart")):
+            raise ValueError("Cold publishing requires the applied pre-GitOps foundation")
+        foundation = record.get("stages", {}).get("foundation", {})
+        previous = completed_manager(self.clients, self.execution, record)
+        if previous != operation("apply", "foundation", foundation.get("attempt")):
+            raise ValueError("Cold publishing requires the actual completed foundation manager")
+        verify_existing(self.clients["scheduler"], record, self.version, self.clock())
+        validate_estimate(record, self.execution["costEstimate"])
+        self.proof = publisher_proof(self.github, self.execution, self.owner)
+        return record
 
     def guard(self):
         identity = self.clients["sts"].get_caller_identity()
@@ -51,30 +73,15 @@ class ColdPublisher:
                 or not identity["Arn"].endswith(f"/techx-bootstrap-{self.owner.split(':')[1]}")):
             raise ValueError("Cold publishing requires its dedicated OIDC role")
         record, etag = self.store.read()
-        validate(record)
-        for key in ("sessionId", "account", "region", "environment", "sourceRevisions", "deadline", "cleanupStartAt", "approvedBudgetUsd", "maximumHours", "action"):
-            if record.get(key) != self.execution.get(key):
-                raise ValueError("Current session differs from the immutable cold-start execution")
         lease = record.get("lease", {})
-        if (record.get("executionVersion") != self.version or record["status"] != "PROVISIONING"
-                or lease.get("operation") != "bootstrap-publish" or lease.get("owner") != self.owner or lease.get("epoch") != self.epoch
-                or utc(lease["expiresAt"]) <= self.clock() or self.clock() >= utc(record["cleanupStartAt"])
-                or record.get("pendingPlan") is not None or record.get("stages", {}).get("edge")):
+        if (lease.get("operation") != "bootstrap-publish" or lease.get("owner") != self.owner or lease.get("epoch") != self.epoch
+                or utc(lease["expiresAt"]) <= self.clock()):
             raise ValueError("Cold publishing is not the owned pre-edge bootstrap operation")
-        foundation = record.get("stages", {}).get("foundation", {})
-        task = record.get("deploymentTask", {})
-        if (foundation.get("state") != "APPLIED" or type(foundation.get("stateSerial")) is not int or foundation["stateSerial"] < 1
-                or not re.fullmatch(r"[a-f0-9-]{36}", foundation.get("stateLineage", ""))
-                or not re.fullmatch(r"[a-f0-9]{64}", foundation.get("savedPlanSha256", ""))
-                or (task.get("state"), task.get("mode"), task.get("stage"), task.get("attempt")) !=
-                   ("SUCCEEDED", "apply", "foundation", foundation.get("attempt"))):
-            raise ValueError("Foundation apply has no matching committed/terminal task receipt")
-        result = self.clients["ssm"].get_command_invocation(CommandId=task["commandId"], InstanceId=task["instanceId"])
-        if (result.get("CommandId") != task["commandId"] or result.get("InstanceId") != task["instanceId"]
-                or result.get("Status") != "Success" or result.get("ResponseCode") != 0):
-            raise ValueError("Foundation SSM command is not confirmed terminal and successful")
-        verify_existing(self.clients["scheduler"], record, self.version, self.clock())
-        validate_estimate(record, self.execution["costEstimate"])
+        # Only our verified hosted lease is excluded from the preceding remote
+        # task's terminal-result check; another owner can never be ignored.
+        idle = deepcopy(record)
+        idle.pop("lease")
+        self.admission(idle)
         return record, etag
 
     def source(self, directory):
@@ -131,12 +138,17 @@ Invoke-TechxEcrPublish -SourceRoot $SourceRoot -SourceSha $SourceSha -ExpectedAc
         validator.validate_manifest(manifest)
         if manifest["commit"] != sha:
             raise ValueError("Published manifest does not identify the admitted platform source")
-        artifact = dict(schemaVersion=1, sessionId=self.execution["sessionId"], executionVersion=self.version,
-            sourceRevisions=self.execution["sourceRevisions"], manifest=manifest, sourceCiPassed=True)
         self.guard()
+        artifact = dict(schemaVersion=1, sessionId=self.execution["sessionId"], executionVersion=self.version,
+            sourceRevisions=self.execution["sourceRevisions"], manifest=manifest, sourceCiPassed=True, sourceCi=deepcopy(self.proof))
         key = f"releases/staging/{self.execution['sessionId']}/bootstrap.json"
-        ref = immutable_json(self.clients["s3"], self.bucket, key, artifact)
-        ref["sha256"] = checksum(artifact)
+        def equivalent(existing, proposed):
+            validate_proof(existing.get("sourceCi"), self.execution)
+            return {key: value for key, value in existing.items() if key != "sourceCi"} == {
+                key: value for key, value in proposed.items() if key != "sourceCi"}
+        ref = immutable_json(self.clients["s3"], self.bucket, key, artifact, equivalent=equivalent)
+        stored, _ = read_json(self.clients["s3"], self.bucket, key, ref["versionId"])
+        ref["sha256"] = checksum(stored)
         record, etag = self.guard()
         if record.get("bootstrapRelease") not in (None, ref):
             raise ValueError("An existing cold release reference cannot be replaced")

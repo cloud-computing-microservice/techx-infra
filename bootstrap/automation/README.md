@@ -726,3 +726,68 @@ chart PR or its main CI is an explicit wait, not skipped review or a successful
 deployment. The cloud-free API probe at run 40180370141 verified the response
 contract under the owner's GH account; it did not exercise an installation
 token, protected review or AWS. Do not enable either deployment flag yet.
+
+### Cold promotion candidate and private review (source only)
+
+`chart_promotion.py` verifies the exact open cold-release PR against its
+immutable release/proposal references. The full candidate tree must contain
+only the one or two allowed release-file changes, render the exact three
+digests and retain the admitted baseline as its sole parent. It requires
+current human approval of that head and the latest real candidate PR CI run;
+pending CI/mergeability remains pending, and a newer failed run cannot fall
+back to an old success. Main, PR, CI, reviews, session, schedule and cleanup
+window are checked again after external reads. The default post-merge selector
+still requires the chosen commit to be main; candidate checks are explicit.
+
+The policy also requires enforced admin protection, strict `manifests` from
+GitHub Actions, human review of the last push, stale-review dismissal and no
+review bypass. Main push restrictions must allow only the actual dedicated
+promotion App ID/slug, with no human, team or proposal-publisher exception.
+Current repository protection does **not** yet satisfy this App-only condition;
+no fictitious App or restriction has been configured. This check is stronger
+than observing a previously green status. See GitHub's
+[protected branch rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+and [protection API](https://docs.github.com/en/rest/branches/branch-protection).
+
+`staging-chart-promote.yml` is an explicit **review-only** entry point, not a
+merge or deployment workflow. Configure `PROMOTION_APP_ID`,
+`PROMOTION_APP_SLUG` and `PROMOTION_APP_PRIVATE_KEY` on infra for a separate
+chart installation; both jobs request contents, pull requests, Actions and
+administration **read** only. Preview uses `staging-chart-read`; approval uses
+a new main-only `staging-chart-promote` environment with a real required human
+reviewer and `AWS_PROMOTION_APPROVER_ROLE_ARN`. The dedicated AWS role may read
+the candidate/session/archive/schedule and write only
+`promotion-approvals/staging/<session>/<preview-sha256>.json`. It cannot write
+session state, start builds, mutate infrastructure or merge a PR. A bucket deny
+reserves grant writes for that role.
+
+The grant includes the exact preview/checksum, workflow run and human reviewer.
+After the environment review, all candidate checks run again. Grants last at
+most 15 minutes and expire at least three minutes before cleanup starts. A new
+review produces a different immutable key because the preview binds its run;
+an old grant is never extended or overwritten. The grant is an authorization
+input for a future owned private task, not a claim that promotion occurred.
+
+`authorize_promotion()` validates an exact private grant VersionId/checksum,
+expiry, successful first-attempt review run and actual human environment
+approval, then repeats candidate verification under an owned private deploy
+lease. It does not acquire that lease, prove the EC2 task identity or merge.
+The future verified task loader must supply those boundaries; the review role
+cannot stand in for the owned executor. Missing/null versions, stale candidate
+CI, withdrawn approval and cleanup fencing fail before authority is returned.
+
+The private merge task, grant-consumer task wiring, one-use merge intent/recovery,
+controller handoff and chart-main callback still require implementation. Merge
+must run on the owned private executor so independent cleanup can stop the
+process before fencing the deployment lease. Do not add a runner merge step
+or enable lifecycle/release flags to skip that dependency. READY-session
+promotion, App setup/enforcement, actual review/token/OIDC/race acceptance,
+DNS/acceptance and rollback remain incomplete.
+
+GitHub preparation readback is recorded in
+`.tmp/cicd-promotion-github-settings-proof.json`: `staging-chart-promote` is
+main-only with required human reviewer MinhKhoa2209 and admin bypass disabled;
+only the future AWS role ARN metadata was set. No AWS role was created or
+assumed. The organization has zero installed Apps at this checkpoint, so App
+credentials and App-only main restrictions remain unconfigured. Both deployment
+flags stay false; preparing an environment is not runtime acceptance.

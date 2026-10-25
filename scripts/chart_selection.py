@@ -138,8 +138,18 @@ def provenance(github, chart_sha, pr_number):
             or {row.get("filename") for row in files} - ALLOWED_FILES
             or any(row.get("status") not in ("added", "modified") for row in files)):
         raise ValueError("Release PR must change one or two allowed release files")
-    reviews = github.get(f"pulls/{pr_number}/reviews?per_page=100")
+    reviewers = human_approvals(pull, github.get(f"pulls/{pr_number}/reviews?per_page=100"))
+    ci_run = latest_chart_ci(github, chart_sha)
+    return dict(pullRequest=f"https://github.com/{CHART_REPO}/pull/{pr_number}", prNumber=pr_number,
+        prHeadSha=head, reviewers=reviewers,
+        changedFiles=sorted(row["filename"] for row in files), ciRun=ci_run)
+
+
+def human_approvals(pull, reviews):
+    """Latest human decisions on the exact head, shared before and after merge."""
     if not isinstance(reviews, list): raise ValueError("Chart review history is invalid")
+    if len(reviews) > 100: raise ValueError("Complete bounded chart review history is required")
+    head = sha(pull.get("head", {}).get("sha"))
     latest = {}
     decisions = [row for row in reviews if row.get("state") not in ("COMMENTED", "PENDING")]
     for review in sorted(decisions, key=lambda row: utc(row["submitted_at"])):
@@ -155,10 +165,7 @@ def provenance(github, chart_sha, pr_number):
     approved = [row for row in latest.values() if row.get("state") == "APPROVED" and row.get("commit_id") == head
         and row["user"].get("login") != pull.get("user", {}).get("login")]
     if not approved: raise ValueError("The exact chart PR head needs a human approval")
-    ci_run = latest_chart_ci(github, chart_sha)
-    return dict(pullRequest=f"https://github.com/{CHART_REPO}/pull/{pr_number}", prNumber=pr_number,
-        prHeadSha=head, reviewers=sorted({row["user"]["login"] for row in approved}),
-        changedFiles=sorted(row["filename"] for row in files), ciRun=ci_run)
+    return sorted({row["user"]["login"] for row in approved})
 
 
 def latest_chart_ci(github, chart_sha):
@@ -181,7 +188,7 @@ def latest_chart_ci(github, chart_sha):
     return f"https://github.com/{CHART_REPO}/actions/runs/{run['id']}"
 
 
-def release_tree(github, source, execution, release, chart_sha):
+def release_tree(github, source, execution, release, chart_sha, *, candidate=False):
     """Verify the full tree and exact manifest, including the zero-diff case."""
     baseline_sha = execution["sourceRevisions"]["techx-chart"]
     _, baseline = git_tree(github, baseline_sha)
@@ -206,7 +213,8 @@ def release_tree(github, source, execution, release, chart_sha):
     actual_manifest = json.loads(blob(github, chosen["releases/staging.json"]["sha"]).decode("utf-8-sig"))
     if actual != expected or actual_manifest != manifest:
         raise ValueError("Merged chart does not select the exact cold-published manifest")
-    if github.get("git/ref/heads/main").get("object", {}).get("sha") != chart_sha:
+    expected_main = baseline_sha if candidate else chart_sha
+    if github.get("git/ref/heads/main").get("object", {}).get("sha") != expected_main:
         raise ValueError("Chart main changed during selection checks")
     return dict(baselineSha=baseline_sha, chartSha=chart_sha, treeSha=tree_sha, changedFiles=sorted(changed))
 

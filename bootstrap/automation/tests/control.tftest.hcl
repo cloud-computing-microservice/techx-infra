@@ -356,6 +356,23 @@ run "lifecycle_is_scoped_and_pinned" {
     ]]])))
     error_message = "Only the dispatcher may write protected handoffs; every child must have read-only receipt access."
   }
+  assert {
+    condition = (length([for statement in data.aws_iam_policy_document.control.statement : statement if
+      statement.sid == "OnlyPromotionApproverCanWritePromotionApprovals" && statement.effect == "Deny" &&
+      contains(statement.resources, "arn:aws:s3:::techx-test-control/promotion-approvals/staging/*") &&
+      anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
+        contains(condition.values, "arn:aws:iam::058114477594:role/techx-automation-promotion-approver")
+      ])
+      ]) == 1 && length(aws_iam_role.promotion_approver) == 1 &&
+      jsondecode(aws_iam_role.promotion_approver[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-infra:environment:staging-chart-promote" &&
+      alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.promotion_approver[0].policy).Statement : [for action in statement.Action :
+        contains(["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "scheduler:GetSchedule", "kms:Decrypt", "kms:GenerateDataKey"], action)
+      ]])) &&
+      alltrue([for statement in jsondecode(aws_iam_role_policy.promotion_approver[0].policy).Statement :
+        statement.Resource == "arn:aws:s3:::techx-test-control/promotion-approvals/staging/*/*.json" if contains(statement.Action, "s3:PutObject")
+    ]))
+    error_message = "Only a protected promotion-approver may write grants; it cannot mutate session, workload or GitHub."
+  }
 }
 
 run "lifecycle_requires_dependencies" {

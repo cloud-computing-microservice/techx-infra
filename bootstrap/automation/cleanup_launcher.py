@@ -55,17 +55,34 @@ def launch(event, s3, codebuild, now=None):
             return {"status": "already-destroyed", "sessionId": session_id}
         raise ValueError("Invalid cleanup completion marker")
     # Reuse an in-flight cleanup. Do not start a second worker if its status is unknown.
-    builds = codebuild.list_builds_for_project(projectName=project, sortOrder="DESCENDING").get("ids", [])
-    if builds:
-        statuses = codebuild.batch_get_builds(ids=builds[:20])
-        if statuses.get("buildsNotFound") or {b.get("id") for b in statuses.get("builds", [])} != set(builds[:20]):
+    token, seen, running = None, set(), []
+    for _ in range(5):
+        # Omit sortOrder: AWS rejects the override above 100 project builds.
+        args = dict(projectName=project)
+        if token: args["nextToken"] = token
+        page = codebuild.list_builds_for_project(**args)
+        builds = page.get("ids")
+        if (not isinstance(builds, list) or len(builds) > 100 or len(set(builds)) != len(builds)
+                or any(not isinstance(item, str) or not item for item in builds) or seen.intersection(builds)):
+            raise ValueError("Cleanup build inventory could not be verified")
+        seen.update(builds)
+        statuses = codebuild.batch_get_builds(ids=builds) if builds else {"builds": []}
+        if (statuses.get("buildsNotFound") or len(statuses.get("builds", [])) != len(builds)
+                or {b.get("id") for b in statuses.get("builds", [])} != set(builds)):
             raise ValueError("Cleanup build status could not be verified")
         for build in statuses.get("builds", []):
             values = {item["name"]: item.get("value") for item in build.get("environment", {}).get("environmentVariables", [])}
             if build.get("buildStatus") == "IN_PROGRESS":
                 if values.get("TECHX_SESSION_ID") == session_id and values.get("TECHX_EXECUTION_VERSION") == version:
-                    return {"status": "running", "buildId": build["id"], "sessionId": session_id}
-                raise ValueError("Another staging cleanup is still running")
+                    running.append(build["id"])
+                else:
+                    raise ValueError("Another staging cleanup is still running")
+            elif build.get("buildStatus") not in ("SUCCEEDED", "FAILED", "FAULT", "STOPPED", "TIMED_OUT"):
+                raise ValueError("Unknown cleanup build status")
+        token = page.get("nextToken")
+        if not token: break
+    if token or len(running) > 1: raise ValueError("Cleanup build inventory is truncated or ambiguous")
+    if running: return {"status": "running", "buildId": running[0], "sessionId": session_id}
     result = codebuild.start_build(
         projectName=project,
         idempotencyToken=hashlib.sha256(f"{session_id}:{version}:{int(now.timestamp()) // 300}".encode()).hexdigest(),

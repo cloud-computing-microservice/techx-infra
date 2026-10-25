@@ -67,6 +67,39 @@ class LauncherTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): module.launch(self.event, self.s3, self.codebuild, self.now)
         self.assertFalse(self.started)
 
+    def test_more_than_100_builds_are_observed_and_active_cleanup_on_later_page_is_reused(self):
+        pages, batches = [], []
+        terminal = [dict(id=f"cleanup:{i}", buildStatus="SUCCEEDED") for i in range(100)]
+        active = dict(id="cleanup:100", buildStatus="IN_PROGRESS", environment=dict(environmentVariables=[
+            dict(name="TECHX_SESSION_ID", value=self.event["sessionId"]),
+            dict(name="TECHX_EXECUTION_VERSION", value=self.event["executionVersion"])]))
+        all_builds = {item["id"]: item for item in [*terminal, active]}
+        def listing(**kw):
+            self.assertNotIn("sortOrder", kw)
+            pages.append(kw.get("nextToken"))
+            if not kw.get("nextToken"): return dict(ids=[item["id"] for item in terminal], nextToken="page2")
+            return dict(ids=[active["id"]])
+        def batch(**kw):
+            batches.append(len(kw["ids"]))
+            return dict(builds=[all_builds[item] for item in kw["ids"]])
+        self.codebuild.list_builds_for_project, self.codebuild.batch_get_builds = listing, batch
+        self.assertEqual(module.launch(self.event, self.s3, self.codebuild, self.now)["buildId"], active["id"])
+        self.assertEqual(pages, [None, "page2"])
+        self.assertEqual(batches, [100, 1])
+        self.assertFalse(self.started)
+
+    def test_truncated_or_duplicate_inventory_and_unknown_status_never_start_compute(self):
+        self.codebuild.list_builds_for_project = lambda **kw: dict(ids=[], nextToken="more")
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            module.launch(self.event, self.s3, self.codebuild, self.now)
+        self.codebuild.list_builds_for_project = lambda **kw: dict(ids=["cleanup:123", "cleanup:123"])
+        with self.assertRaises(ValueError): module.launch(self.event, self.s3, self.codebuild, self.now)
+        self.codebuild.list_builds_for_project = lambda **kw: dict(ids=["cleanup:123"])
+        self.builds = [dict(id="cleanup:123", buildStatus="UNKNOWN")]
+        with self.assertRaisesRegex(ValueError, "Unknown"):
+            module.launch(self.event, self.s3, self.codebuild, self.now)
+        self.assertFalse(self.started)
+
     def test_off_or_verified_completion_does_not_start_compute(self):
         self.assertEqual(module.launch(dict(watchdog=True), self.s3, self.codebuild, self.now)["status"], "off")
         self.completion = dict(executionVersion=self.event["executionVersion"], inventoryEmpty=True, artifactSha256="a" * 64)

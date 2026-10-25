@@ -17,11 +17,25 @@ spec.loader.exec_module(support)
 
 class GitOpsTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = support.SelectionTests()
-        self.fixture.setUp()
+        self.configure()
+
+    def configure(self, reuse=False):
+        if reuse:
+            reuse_spec = importlib.util.spec_from_file_location("gitops_reuse_fixture", Path(__file__).with_name("test-chart-reuse.py"))
+            reuse_support = importlib.util.module_from_spec(reuse_spec)
+            reuse_spec.loader.exec_module(reuse_support)
+            self.fixture = reuse_support.ReuseTests()
+            self.fixture.setUp()
+            self.fixture.approve(self.fixture.preview())
+            self.f = self.fixture.f
+        else:
+            self.fixture = support.SelectionTests()
+            self.fixture.setUp()
+            self.f = self.fixture
+            self.f.select()
         self.addCleanup(self.fixture.doCleanups)
-        self.f = f = self.fixture
-        f.select()
+        f = self.f
+        self.selected_sha = json.loads(f.objects[f.record["bootstrapChart"]["key"]])["chartSha"]
         self.instance = "i-1234567890abcdef0"
         self.owner = f"arn:aws:ec2:us-east-1:{ACCOUNT}:instance/{self.instance}"
         self.task_id = "3" * 32
@@ -103,7 +117,7 @@ class GitOpsTests(unittest.TestCase):
             self.objects[(kind, metadata["name"], metadata.get("namespace"))] = deepcopy(value)
             if kind == "application":
                 self.objects[(kind, metadata["name"], metadata.get("namespace"))]["status"] = dict(
-                    sync=dict(status="Synced", revision="b" * 40), health=dict(status="Healthy"))
+                    sync=dict(status="Synced", revision=self.selected_sha), health=dict(status="Healthy"))
         elif args[:2] == ["get", "pods"]: value = dict(items=self.pods)
         elif args[:2] == ["get", "targetgroupbindings.elbv2.k8s.aws"]:
             value = dict(items=[dict(spec=dict(serviceRef=dict(name="frontend"), targetType="ip"))])
@@ -128,6 +142,17 @@ class GitOpsTests(unittest.TestCase):
         self.assertTrue(all("s" * 64 not in json.dumps(args) for args, _ in self.calls))
         ns = self.objects[("namespace", "techx-staging", None)]
         self.assertTrue(all(ns["metadata"]["labels"][key] == value for key, value in NAMESPACE_LABELS.items()))
+
+    def test_human_reviewed_reuse_reaches_gitops_checkpoint_at_admitted_baseline(self):
+        self.configure(reuse=True)
+        self.perform()
+        stage = validate_gitops_checkpoint(self.f.record)
+        self.assertEqual(stage["chartSha"], self.f.execution["sourceRevisions"]["techx-chart"])
+        self.assertEqual(stage["chartSha"], "a" * 40)
+        app = self.objects[("application", "techx-staging", "argocd")]
+        self.assertEqual(app["spec"]["source"]["targetRevision"], "a" * 40)
+        self.assertEqual(stage["state"], "BOOTSTRAPPED")
+        self.assertEqual(self.f.record["status"], "PROVISIONING")
 
     def test_cannot_start_without_selected_chart_or_after_edge(self):
         self.f.record.pop("bootstrapChart")

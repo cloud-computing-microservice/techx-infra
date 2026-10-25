@@ -68,6 +68,6 @@ jobs:
           CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python scripts/select_bootstrap_chart.py --bucket "$CONTROL_BUCKET" \
-            --session-id "$SESSION_ID" --execution-version "$EXECUTION_VERSION" \
-            --chart-sha "$CHART_SHA" --pr-number "$PR_NUMBER"
+          python scripts/select_bootstrap_chart.py --bucket="$CONTROL_BUCKET" \
+            --session-id="$SESSION_ID" --execution-version="$EXECUTION_VERSION" \
+            --chart-sha="$CHART_SHA" --pr-number="$PR_NUMBER"

@@ -133,6 +133,24 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.select(), ref)
         self.assertEqual(len(self.writes), 1)
 
+    def test_one_changed_release_file_is_valid_when_full_baseline_diff_matches(self):
+        base = self.chart_data[f"git/trees/{self.base_tree}?recursive=1"]["tree"]
+        chosen = self.chart_data[f"git/trees/{self.selected_tree}?recursive=1"]["tree"]
+        new_values = next(row for row in chosen if row["path"] == "values-staging.yaml")
+        next(row for row in base if row["path"] == "values-staging.yaml").update(sha=new_values["sha"])
+        (self.source / "techx-chart/values-staging.yaml").write_bytes(self.blobs[new_values["sha"]])
+        self.chart_data["pulls/7"]["changed_files"] = 1
+        self.chart_data["pulls/7/files?per_page=100"] = [dict(filename="releases/staging.json", status="modified")]
+        self.select()
+        selected = read_selection(self.clients["s3"], "control-bucket", self.record, self.execution, "exec-v1")
+        self.assertEqual(selected["provenance"]["changedFiles"], ["releases/staging.json"])
+
+    def test_partial_pr_file_claim_cannot_hide_another_baseline_change(self):
+        self.chart_data["pulls/7"]["changed_files"] = 1
+        self.chart_data["pulls/7/files?per_page=100"] = [dict(filename="releases/staging.json", status="modified")]
+        with self.assertRaisesRegex(ValueError, "exact admitted baseline"): self.select()
+        self.assertFalse(self.writes)
+
     def test_latest_failed_ci_cannot_fall_back_to_an_old_green_run(self):
         runs = self.chart_data["actions/workflows/verify.yml/runs?head_sha=" + "b" * 40 + "&per_page=100"]
         newer = dict(runs["workflow_runs"][0], id=12, conclusion="failure")

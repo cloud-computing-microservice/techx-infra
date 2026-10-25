@@ -34,7 +34,9 @@ def main():
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--owner", required=True)
     parser.add_argument("--worker", action="store_true")
-    parser.add_argument("--propose-chart", action="store_true")
+    chart_mode = parser.add_mutually_exclusive_group()
+    chart_mode.add_argument("--propose-chart", action="store_true")
+    chart_mode.add_argument("--prepare-chart", action="store_true")
     parser.add_argument("--directory", type=Path)
     args = parser.parse_args()
     if not re.fullmatch(r"staging-[A-Za-z0-9-]{1,64}", args.session_id): raise ValueError("Invalid cold session")
@@ -60,10 +62,17 @@ def main():
         record, _ = store.read()
         publisher = ColdPublisher(clients, store, args.bucket, execution, args.execution_version, args.owner,
             record.get("lease", {}).get("epoch"), github=github)
-        if args.propose_chart:
+        if args.propose_chart or args.prepare_chart:
             from bootstrap_proposal import ChartProposal, ChartWriter
+            from chart_selection import CHART_REPO
             source = publisher.source(args.directory / "archive").parent
-            result = ChartProposal(publisher, ChartWriter(os.environ["GH_TOKEN"])).perform(source)
+            chart = GitHub(CHART_REPO, os.environ["GITHUB_TOKEN"]) if args.prepare_chart else ChartWriter(os.environ["GH_TOKEN"])
+            result = ChartProposal(publisher, chart).perform(source, prepare_only=args.prepare_chart)
+            if args.prepare_chart:
+                if result.get("kind") not in ("reuse", "pull-request"): raise ValueError("Unknown chart preparation result")
+                if os.environ.get("GITHUB_OUTPUT"):
+                    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                        output.write("proposal_kind=" + result["kind"] + "\n")
         else:
             result = publisher.perform(args.directory)
         print(json.dumps(result, sort_keys=True))
@@ -73,15 +82,16 @@ def main():
         claim(current, args.owner, "bootstrap-publish")
         ColdPublisher(clients, store, args.bucket, execution, args.execution_version, args.owner, 1,
                       github=github).admission(current)
-        if args.propose_chart:
+        if args.propose_chart or args.prepare_chart:
             from chart_selection import read_release
             read_release(clients["s3"], args.bucket, current, execution, args.execution_version)
         try:
             with tempfile.TemporaryDirectory(prefix="techx-cold-publish-") as directory:
-                command = [sys.executable, str(Path(__file__).resolve()), "--session-id", args.session_id,
-                    "--execution-version", args.execution_version, "--bucket", args.bucket, "--owner", args.owner,
+                command = [sys.executable, str(Path(__file__).resolve()), "--session-id=" + args.session_id,
+                    "--execution-version=" + args.execution_version, "--bucket=" + args.bucket, "--owner=" + args.owner,
                     "--worker", "--directory", str(Path(directory) / "run")]
                 if args.propose_chart: command.append("--propose-chart")
+                if args.prepare_chart: command.append("--prepare-chart")
                 execute(store, args.owner, "bootstrap-publish", args.session_id, command)
         except BaseException:
             clients["lambda"].invoke(FunctionName=f"arn:aws:lambda:us-east-1:{ACCOUNT}:function:techx-automation-cleanup-launcher",

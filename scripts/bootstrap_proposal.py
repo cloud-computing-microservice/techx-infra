@@ -1,4 +1,4 @@
-"""Propose only the two cold-release files; never merge or move an existing ref."""
+"""Propose allowed cold-release changes, or record exact baseline reuse for review."""
 from copy import deepcopy
 import hashlib
 import importlib.util
@@ -77,7 +77,7 @@ class ChartProposal:
             raise ValueError("Existing proposal belongs to a different source/base or is no longer open")
         return dict(prNumber=number, pullRequest=row["html_url"])
 
-    def perform(self, source):
+    def perform(self, source, *, prepare_only=False):
         record, _ = self.guard()
         tree_sha, baseline = git_tree(self.github, self.baseline)
         values = (source / "techx-chart/values-staging.yaml").read_bytes()
@@ -90,6 +90,16 @@ class ChartProposal:
         files = {"values-staging.yaml": module.render_values(values.decode("utf-8-sig"), manifest).encode(),
                  "releases/staging.json": (json.dumps(manifest, indent=2) + "\n").encode()}
         expected, entries = deepcopy(baseline), []
+        for name, data in files.items():
+            expected[name] = dict(sha=blob_sha(data), mode=baseline.get(name, {}).get("mode", "100644"))
+        if expected == baseline:
+            # GitHub cannot create a useful PR with no diff. Preserve a typed
+            # immutable intent instead; a separate human-reviewed selector must
+            # authorize reuse for this new session, never a prior session's PR.
+            return self.persist(tree_sha, self.baseline, dict(kind="reuse"))
+        if prepare_only:
+            self.guard()
+            return dict(kind="pull-request")
         for name in sorted(ALLOWED_FILES):
             digest = blob_sha(files[name])
             result = self.write("git/blobs", dict(content=files[name].decode(), encoding="utf-8"))
@@ -130,10 +140,15 @@ class ChartProposal:
                 if self.pull(commit_sha) is None: raise
             pull = self.pull(commit_sha)
             if pull is None: raise ValueError("Pull request creation remains unproven")
-        record, etag = self.guard()
-        value = dict(schemaVersion=1, sessionId=record["sessionId"], executionVersion=self.publisher.version,
+        return self.persist(new_tree, commit_sha, pull)
+
+    def persist(self, tree_sha, head_sha, disposition):
+        record, _ = self.guard()
+        reuse = disposition == dict(kind="reuse")
+        value = dict(schemaVersion=2 if reuse else 1, sessionId=record["sessionId"], executionVersion=self.publisher.version,
             sourceRevisions=self.publisher.execution["sourceRevisions"], releaseReference=self.release_ref,
-            baselineSha=self.baseline, branch=self.branch, headSha=commit_sha, treeSha=new_tree, **pull)
+            baselineSha=self.baseline, headSha=head_sha, treeSha=tree_sha, **disposition)
+        if not reuse: value["branch"] = self.branch
         key = f"proposals/staging/{record['sessionId']}/bootstrap.json"
         ref = immutable_json(self.publisher.clients["s3"], self.publisher.bucket, key, value)
         stored, _ = read_json(self.publisher.clients["s3"], self.publisher.bucket, key, ref["versionId"])
@@ -143,4 +158,4 @@ class ChartProposal:
         updated = deepcopy(record)
         updated["bootstrapProposal"] = ref
         self.publisher.store.write(updated, etag)
-        return dict(reference=ref, **pull)
+        return dict(reference=ref, **disposition)

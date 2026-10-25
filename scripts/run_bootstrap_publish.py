@@ -53,6 +53,10 @@ def main():
     verified_checkout(Path(__file__).parents[1], execution["sourceRevisions"]["techx-infra"])
     github = GitHub(PLATFORM_REPO, os.environ["GITHUB_TOKEN"])
     publisher_proof(github, execution, args.owner)
+    from workflow_handoff import guard_child
+    guard_child(clients["s3"], args.bucket, dispatch_id=os.environ.get("TECHX_DISPATCH_ID", ""),
+        repository=PLATFORM_REPO, workflow="bootstrap-staging.yml", source_sha=os.environ["GITHUB_SHA"], run_id=os.environ["GITHUB_RUN_ID"],
+        inputs=dict(session_id=args.session_id, execution_version=args.execution_version))
     store = S3SessionStore(args.bucket)
     current, _ = store.read()
     if current.get("sessionId") != args.session_id or current.get("executionVersion") != args.execution_version:

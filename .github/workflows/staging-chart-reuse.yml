@@ -1,7 +1,13 @@
 name: Review exact baseline chart reuse
+run-name: ${{ inputs.dispatch_id != '' && format('TechX handoff {0}', inputs.dispatch_id) || github.workflow }}
 on:
   workflow_dispatch:
     inputs:
+      dispatch_id:
+        description: Reserved orchestration identity; leave blank for a manual reuse review
+        default: ''
+        required: false
+        type: string
       session_id:
         description: Existing cold-start session with a zero-diff proposal receipt
         required: true
@@ -17,6 +23,7 @@ concurrency:
   group: staging-chart-selection
   cancel-in-progress: false
 env:
+  TECHX_DISPATCH_ID: ${{ inputs.dispatch_id }}
   CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
   SESSION_ID: ${{ inputs.session_id }}
   EXECUTION_VERSION: ${{ inputs.execution_version }}
@@ -85,3 +92,13 @@ jobs:
           REUSE_REQUEST_SHA256: ${{ needs.preview.outputs.sha256 }}
         run: |
           python scripts/reuse_bootstrap_chart.py approve --bucket="$CONTROL_BUCKET" --session-id="$SESSION_ID" --execution-version="$EXECUTION_VERSION"
+  notify:
+    needs: [preview, approve]
+    if: always() && vars.LIFECYCLE_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/staging-wakeup.yml
+    with:
+      session_id: ${{ inputs.session_id }}
+      execution_version: ${{ inputs.execution_version }}

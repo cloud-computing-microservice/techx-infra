@@ -1,7 +1,13 @@
 name: Select bootstrap chart
+run-name: ${{ inputs.dispatch_id != '' && format('TechX handoff {0}', inputs.dispatch_id) || github.workflow }}
 on:
   workflow_dispatch:
     inputs:
+      dispatch_id:
+        description: Reserved orchestration identity; leave blank for a manual selection
+        default: ''
+        required: false
+        type: string
       session_id:
         description: Exact active staging session
         required: true
@@ -35,6 +41,7 @@ jobs:
       pull-requests: read
       id-token: write
     env:
+      TECHX_DISPATCH_ID: ${{ inputs.dispatch_id }}
       SESSION_ID: ${{ inputs.session_id }}
       EXECUTION_VERSION: ${{ inputs.execution_version }}
       CHART_SHA: ${{ inputs.chart_sha }}
@@ -71,3 +78,13 @@ jobs:
           python scripts/select_bootstrap_chart.py --bucket="$CONTROL_BUCKET" \
             --session-id="$SESSION_ID" --execution-version="$EXECUTION_VERSION" \
             --chart-sha="$CHART_SHA" --pr-number="$PR_NUMBER"
+  notify:
+    needs: select
+    if: always() && vars.LIFECYCLE_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/staging-wakeup.yml
+    with:
+      session_id: ${{ inputs.session_id }}
+      execution_version: ${{ inputs.execution_version }}

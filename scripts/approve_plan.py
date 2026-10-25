@@ -135,6 +135,16 @@ def main():
         versionId=os.environ["TECHX_REQUEST_VERSION"], sha256=os.environ["TECHX_REQUEST_SHA256"])
     import boto3
     clients = {name: boto3.client(name, region_name="us-east-1") for name in ("s3", "sts", "scheduler")}
+    execution_version = os.environ.get("TECHX_EXECUTION_VERSION", "")
+    if execution_version:
+        current, _ = read_json(clients["s3"], os.environ["TECHX_STATE_BUCKET"], "automation/staging/session.json")
+        if current.get("sessionId") != session or current.get("executionVersion") != execution_version:
+            raise ValueError("Review wakeup version differs from the current admitted execution")
+    from workflow_handoff import guard_child
+    guard_child(clients["s3"], os.environ["TECHX_STATE_BUCKET"], dispatch_id=os.environ.get("TECHX_DISPATCH_ID", ""),
+        repository=REPO, workflow="staging-plan-review.yml", source_sha=os.environ["GITHUB_SHA"], run_id=os.environ["GITHUB_RUN_ID"],
+        inputs=dict(session_id=session, stage=stage, plan_attempt=attempt_text,
+                    request_version=ref["versionId"], request_sha256=ref["sha256"], execution_version=execution_version))
     result = process(clients, GitHub(os.environ["GH_TOKEN"]), os.environ["TECHX_STATE_BUCKET"], ref,
                      os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_SHA"], approve=args.mode == "approve")
     summary = Path(os.environ["GITHUB_STEP_SUMMARY"])

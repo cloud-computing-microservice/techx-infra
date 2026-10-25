@@ -676,3 +676,53 @@ sessions, forged preview/receipt data and lost CAS. These do not prove live OIDC
 review enforcement, GitHub App behavior, runtime or cleanup integration. Parent
 callbacks, promotion/session gates, acceptance/rollback and cloud acceptance
 remain incomplete; both deployment flags stay false.
+
+### Admitted lifecycle orchestration and protected workflow handoffs (source only)
+
+`staging-orchestrate.yml` observes the existing session after the protected
+opening workflow completes. Review, selection and reuse children explicitly
+dispatch a wakeup from a final cloud-free reusable job; the platform publisher
+does the same with an infra-only App token. This avoids depending on a chain
+beyond GitHub's three-level `workflow_run` limit. The controller accepts only
+the opening admission or its current protected handoff receipt. Manual wakeups accept only the existing session/execution
+version, never a stage, plan, budget or new deployment request. An unfinished
+opening actor, unrelated callback, closed session or different source cannot
+start successor work. All orchestrator runs share a non-cancelling concurrency
+group; this does not replace the S3/service guards.
+
+The controller dispatches the exact private-plan review, consumes its actual
+successful run and protected approval, then resumes the exact apply once. It
+can dispatch the cold platform workflow, reviewed baseline reuse or selection
+of an already merged release, then continue manager/GitOps/edge-plan work.
+Observation is bounded across the entire job; its same manager/workflow handle
+is retained on timeout. A real failed/cancelled bound workflow requests AWS
+cleanup. No callback-provided conclusion or success boolean authorizes apply.
+
+The workflow API uses the 2026-03-10 [dispatch response](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
+with a run ID and fixed-repository URLs. Protected S3 intent/calling/receipt
+objects precede and bind that call. Only the dispatcher can write their prefix;
+plan-reader/approver, publisher and selectors have read-only receipt access.
+The session pointer alone cannot reopen a consumed call. A lost POST or receipt
+response is recovered only by the protected receipt or one actual first-attempt
+main run with the exact dispatch identity; absent, ambiguous or incomplete
+history never permits another POST. Children wait for a receipt binding their
+own run ID and exact inputs before any mutation. Explicit manual workflows
+retain their existing approval/session gates.
+
+Infra's own token needs Actions write for these same-repository dispatches.
+Configure `LIFECYCLE_APP_ID`/`LIFECYCLE_APP_PRIVATE_KEY` on infra and platform,
+with an installation allowing Actions write on those two repositories; tokens
+are minted for only the destination repository. Opening verifies both grants
+before AWS reservation. This app is separate from chart proposal contents/PR
+write authority. The platform's final notification job uses no AWS credentials
+and sends only an existing-session wakeup, including after publish failure when
+GitHub schedules that job. The destination observes its own protected child run.
+GitHub cancellation/notification delivery still require live failure acceptance;
+the independently armed AWS cleanup never depends on a callback succeeding.
+
+Normal chart promotion, chart-main post-merge wakeup, DNS/acceptance, rollback,
+App configuration and live OIDC/cleanup integration remain unfinished. A pending
+chart PR or its main CI is an explicit wait, not skipped review or a successful
+deployment. The cloud-free API probe at run 40180370141 verified the response
+contract under the owner's GH account; it did not exercise an installation
+token, protected review or AWS. Do not enable either deployment flag yet.

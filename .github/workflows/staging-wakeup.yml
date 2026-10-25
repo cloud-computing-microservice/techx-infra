@@ -1,0 +1,30 @@
+name: Wake existing staging controller
+on:
+  workflow_call:
+    inputs:
+      session_id:
+        required: true
+        type: string
+      execution_version:
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: write
+jobs:
+  notify:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.execution_version != '' && vars.LIFECYCLE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Wake admitted execution without AWS credentials or a stage input
+        env:
+          SESSION_ID: ${{ inputs.session_id }}
+          EXECUTION_VERSION: ${{ inputs.execution_version }}
+          GITHUB_TOKEN: ${{ github.token }}
+          LIFECYCLE_APP_TOKEN: ${{ github.token }}
+        run: python scripts/wake_lifecycle.py

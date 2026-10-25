@@ -80,6 +80,10 @@ python (Join-Path $PSScriptRoot 'test-lifecycle-destroy.py')
 if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup dispatch, stale-session and protected inventory evidence tests failed.' }
 python (Join-Path $PSScriptRoot 'test-chart-reuse.py')
 if ($LASTEXITCODE -ne 0) { throw 'Zero-diff chart proposal, human-reviewed reuse and immutable selection tests failed.' }
+python (Join-Path $PSScriptRoot 'test-workflow-handoff.py')
+if ($LASTEXITCODE -ne 0) { throw 'Protected GitHub workflow handoff, uncertain-call recovery and child run admission tests failed.' }
+python (Join-Path $PSScriptRoot 'test-lifecycle-orchestration.py')
+if ($LASTEXITCODE -ne 0) { throw 'Automatic lifecycle observation, review consumption and callback binding tests failed.' }
 python (Join-Path $PSScriptRoot 'test-workload-state.py')
 if ($LASTEXITCODE -ne 0) { throw 'Empty workload state initialization and lineage regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-deployment-runtime.py')

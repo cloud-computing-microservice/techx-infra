@@ -57,6 +57,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python techx-infra/scripts/start_lifecycle.py preview
+      - name: Verify platform Actions authorization before any AWS reservation
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.LIFECYCLE_APP_ID }}
+          private-key: ${{ secrets.LIFECYCLE_APP_PRIVATE_KEY }}
+          owner: cloud-computing-microservice
+          repositories: techx-platform
+          permission-actions: write
+      - name: Verify infra callback Actions authorization before any AWS reservation
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.LIFECYCLE_APP_ID }}
+          private-key: ${{ secrets.LIFECYCLE_APP_PRIVATE_KEY }}
+          owner: cloud-computing-microservice
+          repositories: techx-infra
+          permission-actions: write
   start:
     needs: preview
     runs-on: ubuntu-24.04

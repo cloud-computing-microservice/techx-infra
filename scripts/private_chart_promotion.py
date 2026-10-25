@@ -47,6 +47,9 @@ class PrivateChartPromotion:
             raise ValueError("Promotion is not this executor's exact claimed private task")
         if hasattr(self, "approval_ref") and promotion_reference(record) != self.approval_ref:
             raise ValueError("Promotion approval was superseded")
+        if hasattr(self, "request") and any(record.get(field) != self.request[reference] for field, reference in
+                (("bootstrapRelease", "releaseReference"), ("bootstrapProposal", "proposalReference"))):
+            raise ValueError("Promotion release/proposal was superseded")
         return record
 
     def window(self, approval):
@@ -108,7 +111,9 @@ class PrivateChartPromotion:
     def checkpoint(self, receipt, ref, request):
         self.guard()
         current, etag = self.control.owned(self.runtime.execution["sessionId"], self.owner, self.epoch)
-        if promotion_reference(current) != self.approval_ref or current.get("deploymentTask", {}).get("taskId") != self.task_id:
+        if (promotion_reference(current) != self.approval_ref or current.get("deploymentTask", {}).get("taskId") != self.task_id
+                or current["deploymentTask"].get("state") != "RUNNING"
+                or current.get("bootstrapRelease") != request["releaseReference"] or current.get("bootstrapProposal") != request["proposalReference"]):
             raise ValueError("Merge checkpoint lost its exact task/approval")
         value = dict(state="PROMOTED", attempt=1, taskId=self.task_id, approvalReference=self.approval_ref,
             releaseReference=request["releaseReference"], proposalReference=request["proposalReference"],
@@ -127,6 +132,8 @@ class PrivateChartPromotion:
         self.approval_ref = deepcopy(promotion_reference(record))
         approval, _ = read_json(self.runtime.clients["s3"], self.runtime.bucket, self.approval_ref["key"], self.approval_ref["versionId"])
         if checksum(approval) != self.approval_ref["sha256"]: raise ValueError("Private promotion approval checksum changed")
+        self.request = deepcopy(approval["request"])
+        self.guard()
         self.prefix = f"promotions/staging/{record['sessionId']}/{self.approval_ref['sha256']}"
         self.chart, self.infra = self.clients(self.runtime, approval["request"]["branchPolicy"], self.clock)
         expected = dict(schemaVersion=1, sessionId=record["sessionId"], executionVersion=self.version, sourceRevisions=self.runtime.execution["sourceRevisions"],

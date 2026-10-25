@@ -29,7 +29,7 @@ class PrivatePromotionTests(unittest.TestCase):
             "arn:aws:codebuild:us-east-1:058114477594:build/techx-automation-lifecycle:12345678-abcd", "promote", "chart", 1, self.task_id, f.now)
         f.record["deploymentTask"] = dict(pointer, state="RUNNING")
         self.calls, self.executors = [], []
-        self.lost_merge = self.lost_marker = self.cleanup_in_merge = False
+        self.lost_merge = self.lost_marker = self.cleanup_in_merge = self.swap_release_in_marker = False
         old_put = f.clients["s3"].put_object
         def put(**kw):
             if not kw["Key"].startswith("promotions/"): return old_put(**kw)
@@ -38,6 +38,8 @@ class PrivatePromotionTests(unittest.TestCase):
             f.objects[kw["Key"]] = kw["Body"]
             f.writes.append(kw["Key"])
             if self.lost_marker and kw["Key"].endswith("/calling.json"): raise TimeoutError("Lost S3 marker response")
+            if self.swap_release_in_marker and kw["Key"].endswith("/calling.json"):
+                f.record["bootstrapRelease"]["sha256"] = "0" * 64
             return dict(VersionId="v1")
         f.clients["s3"].put_object = put
         def merge(number, head, title, message):
@@ -172,6 +174,11 @@ class PrivatePromotionTests(unittest.TestCase):
         self.f.record["stages"]["foundation"]["attempt"] = 1
         self.assertEqual(next_operation(self.f.record, operation("apply", "foundation")), operation("promote", "chart"))
         with self.assertRaises(ValueError): next_operation(self.f.record, operation("plan", "foundation"))
+
+    def test_release_change_after_the_call_marker_is_caught_before_merge(self):
+        self.swap_release_in_marker = True
+        with self.assertRaisesRegex(ValueError, "release/proposal was superseded"): self.perform()
+        self.assertFalse(self.calls)
 
 
 if __name__ == "__main__": unittest.main()

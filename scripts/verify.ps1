@@ -90,6 +90,8 @@ python (Join-Path $PSScriptRoot 'test-chart-callback.py')
 if ($LASTEXITCODE -ne 0) { throw 'Chart callback scope, current proposal and delayed continuation tests failed.' }
 python (Join-Path $PSScriptRoot 'test-github-app-auth.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private GitHub App key/JWT, installation scope and exact merge adapter tests failed.' }
+python (Join-Path $PSScriptRoot 'test-promotion-authority.py')
+if ($LASTEXITCODE -ne 0) { throw 'Opening promotion App, maximum permissions, read-token policy and revocation tests failed.' }
 python (Join-Path $PSScriptRoot 'test-private-chart-promotion.py')
 if ($LASTEXITCODE -ne 0) { throw 'Owned private promotion task, single-call merge recovery and durable checkpoint tests failed.' }
 python (Join-Path $PSScriptRoot 'test-workflow-handoff.py')

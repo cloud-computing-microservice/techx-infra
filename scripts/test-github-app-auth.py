@@ -157,6 +157,25 @@ class AppAuthTests(unittest.TestCase):
         with self.assertRaises(TimeoutError): api(f"/repos/{CHART_REPO}/pulls/7/merge", "fixture-token", dict(sha="a" * 40), method="PUT", open_url=lost)
         self.assertEqual(len(count), 1)
 
+    def test_204_is_accepted_only_for_revoking_the_callers_installation_token(self):
+        class HTTP:
+            status = 204
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self, size): return b""
+        calls = []
+        def open_url(request, **kwargs):
+            calls.append(request)
+            return HTTP()
+        self.assertIsNone(api("/installation/token", "fixture-token", method="DELETE", open_url=open_url))
+        self.assertEqual(calls[0].method, "DELETE")
+        with self.assertRaises(ValueError): api("/installation/token", "fixture-token", open_url=open_url)
+        with self.assertRaises(ValueError): api(f"/repos/{CHART_REPO}/pulls/7/merge", "fixture-token", method="DELETE", open_url=open_url)
+        HTTP.status = 200
+        with self.assertRaisesRegex(ValueError, "revocation was not acknowledged"):
+            api("/installation/token", "fixture-token", method="DELETE", open_url=open_url)
+
     def test_real_openssl_rs256_jwt_verifies_and_does_not_leave_a_private_key(self):
         with tempfile.TemporaryDirectory() as directory:
             key = subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"], check=True, capture_output=True).stdout

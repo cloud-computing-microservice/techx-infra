@@ -16,6 +16,7 @@ from chart_selection import (ALLOWED_FILES, CHART_REPO, INFRA_REPO, git_tree,
 from cleanup_schedule import verify_existing
 from plan_approval import version
 from plan_review_store import checksum
+from promotion_authority import admitted
 
 LIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 
@@ -139,6 +140,9 @@ class ColdPromotionChecks:
         proposal = read_proposal(self.clients["s3"], self.bucket, record, self.execution, self.version)
         if reuse_proposal(proposal): raise ValueError("Zero-diff baseline reuse has its own human review, not a merge")
         policy = protection(github, app_id, app_slug)
+        expected = admitted(self.execution)
+        if policy != {key: expected[key] for key in ("appId", "appSlug", "policySha256")}:
+            raise ValueError("Promotion App or branch policy differs from the human-reviewed opening authority")
         pull, files = pull_identity(github, proposal)
         tree = release_tree(github, source, self.execution, release, proposal["headSha"], candidate=True)
         commit = github.get(f"git/commits/{proposal['headSha']}")

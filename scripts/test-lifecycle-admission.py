@@ -26,6 +26,8 @@ class AdmissionTests(unittest.TestCase):
         self.f.setUp()
         self.addCleanup(self.f.doCleanups)
         self.sources = {"techx-infra": "a" * 40, "techx-platform": "b" * 40, "techx-chart": "c" * 40}
+        self.promotion = dict(schemaVersion=1, repository=REPOS["techx-chart"], appId=12345,
+            appSlug="techx-promotion", installationId=67890, policySha256="e" * 64)
         self.inputs = dict(action="deploy-test-destroy", platform_sha="b" * 40, chart_sha="c" * 40,
             duration_hours="4", approved_budget_usd="60", budget_alert_email="owner@example.invalid")
         self.run_data = dict(id=100, status="in_progress", event="workflow_dispatch", run_attempt=1, head_branch="main", head_sha="a" * 40,
@@ -80,6 +82,7 @@ class AdmissionTests(unittest.TestCase):
             path.write_bytes(b"source; archive extraction is independently tested")
             return "b" * 64
         self.flow = StartWorkflow(self.githubs, 100, "a" * 40, self.f.directory.name, clients=self.clients,
+            promotion_check=lambda: deepcopy(self.promotion),
             store=self.f.coordinator.store, bucket="control-bucket", kms_key=self.kms, clock=lambda: self.f.now, run=process,
             checkout=lambda *args: self.checkouts.append(args), bundle_pack=pack,
             bundle_extract=lambda *args: deepcopy(self.sources), open_url=lambda *args, **kw: io.BytesIO(b"8.8.8.8\n"))
@@ -103,6 +106,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(set(self.packed[0]), set(REPOS))
         self.assertEqual({name: value[1] for name, value in self.packed[0].items()}, self.sources)
         self.assertEqual(self.f.current["sourceAdmission"]["reviewer"], "reviewer")
+        self.assertEqual(self.f.current["sourceAdmission"]["promotionAuthority"], request["promotionAuthority"])
         self.assertEqual(self.f.current["deadline"], request["record"]["deadline"])
         self.assertEqual(result["deadline"], request["record"]["deadline"])
 
@@ -207,6 +211,33 @@ class AdmissionTests(unittest.TestCase):
         self.flow.run = lambda command, **kw: (_ for _ in ()).throw(subprocess.CalledProcessError(1, command,
             stderr=b"Estimated upper bound exceeds the approved budget."))
         with self.assertRaisesRegex(ValueError, "upper bound exceeds"): self.flow.preview(self.inputs)
+        self.assertFalse(self.f.events)
+
+    def test_opening_review_binds_public_app_authority_and_rejects_a_changed_app_before_aws_reads(self):
+        request = self.flow.preview(self.inputs)
+        self.assertEqual(request["promotionAuthority"], self.promotion)
+        self.promotion["installationId"] += 1
+        def forbidden(): raise AssertionError("No AWS identity read may precede rejected App authority")
+        self.clients["sts"].get_caller_identity = forbidden
+        with self.assertRaisesRegex(ValueError, "changed after opening preview"): self.start(request)
+        self.assertFalse(self.f.events)
+        self.assertFalse(self.packed)
+
+    def test_app_policy_changed_during_preparation_blocks_reservation_and_build(self):
+        request = self.flow.preview(self.inputs)
+        count = 0
+        def changed():
+            nonlocal count
+            count += 1
+            return deepcopy(self.promotion) if count == 1 else dict(self.promotion, policySha256="f" * 64)
+        self.flow.promotion_check = changed
+        with self.assertRaisesRegex(ValueError, "changed before reservation"): self.start(request)
+        self.assertEqual(count, 2)
+        self.assertFalse(self.f.events)
+
+    def test_missing_or_private_bearing_preflight_proof_cannot_publish_an_opening_preview(self):
+        self.flow.promotion_check = lambda: dict(self.promotion, privateKey="never-public")
+        with self.assertRaisesRegex(ValueError, "public promotion authority"): self.flow.preview(self.inputs)
         self.assertFalse(self.f.events)
 
 

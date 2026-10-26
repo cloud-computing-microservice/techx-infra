@@ -16,6 +16,7 @@ from automation_session import utc
 from cleanup_execution import assert_inventory
 from lifecycle_coordinator import ACCOUNT, Coordinator, initial_record
 from plan_review_store import checksum
+from promotion_authority import authority
 from run_bootstrap_publish import verified_checkout
 
 REPOS = {name: f"cloud-computing-microservice/{name}" for name in ("techx-infra", "techx-chart", "techx-platform")}
@@ -79,11 +80,13 @@ def source_checks(githubs, sources):
 
 
 class StartWorkflow:
-    def __init__(self, githubs, run_id, infra_sha, workspace, *, clients=None, store=None, bucket=None, kms_key=None,
+    def __init__(self, githubs, run_id, infra_sha, workspace, *, promotion_check, clients=None, store=None, bucket=None, kms_key=None,
                  clock=None, run=subprocess.run, checkout=verified_checkout, bundle_pack=pack, bundle_extract=extract, open_url=urlopen):
         self.githubs, self.run_id, self.infra_sha = githubs, str(run_id), infra_sha
         self.workspace, self.clients, self.store, self.bucket = Path(workspace).resolve(), clients, store, bucket
         self.kms_key = kms_key
+        if not callable(promotion_check): raise ValueError("A live promotion authority preflight is mandatory")
+        self.promotion_check = promotion_check
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.run, self.checkout, self.pack, self.extract, self.open_url = run, checkout, bundle_pack, bundle_extract, open_url
 
@@ -107,11 +110,12 @@ class StartWorkflow:
         start_run(self.githubs["techx-infra"], self.run_id, self.infra_sha, now)
         sources = {"techx-infra": self.infra_sha, "techx-platform": values["platform_sha"], "techx-chart": values["chart_sha"]}
         checks = source_checks(self.githubs, sources)
+        promotion = authority(self.promotion_check())
         record = initial_record(f"staging-gh-{self.run_id}", sources, values["duration_hours"], values["budget_alert_email"], values["action"],
                                 utc(now.isoformat()).replace(microsecond=0), approved_budget_usd=values["approved_budget_usd"])
         estimate = self.estimate(record)
         record.pop("budgetAlertEmail")
-        return dict(schemaVersion=1, record=record, sourceChecks=checks, costEstimate=estimate, backend=self.backend(),
+        return dict(schemaVersion=2, record=record, sourceChecks=checks, costEstimate=estimate, backend=self.backend(), promotionAuthority=promotion,
                     workflowRun=f"https://github.com/{REPOS['techx-infra']}/actions/runs/{self.run_id}")
 
     def backend(self):
@@ -152,8 +156,8 @@ class StartWorkflow:
 
     def start(self, inputs, request, request_sha256):
         values, now = typed_inputs(inputs), self.clock()
-        if (not isinstance(request, dict) or set(request) != {"schemaVersion", "record", "sourceChecks", "costEstimate", "workflowRun", "backend"}
-                or type(request["schemaVersion"]) is not int or request["schemaVersion"] != 1 or not isinstance(request["record"], dict)):
+        if (not isinstance(request, dict) or set(request) != {"schemaVersion", "record", "sourceChecks", "costEstimate", "workflowRun", "backend", "promotionAuthority"}
+                or type(request["schemaVersion"]) is not int or request["schemaVersion"] != 2 or not isinstance(request["record"], dict)):
             raise ValueError("A complete immutable preview is required")
         if checksum(request) != request_sha256: raise ValueError("Start request differs from the preview shown to the reviewer")
         public = request["record"]
@@ -177,6 +181,9 @@ class StartWorkflow:
         checks = source_checks(self.githubs, sources)
         reviewer = verified_reviewer(self.githubs["techx-infra"], self.run_id, ENVIRONMENT)
         if not isinstance(reviewer, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,39}", reviewer): raise ValueError("Invalid human opening reviewer")
+        promotion = authority(request["promotionAuthority"])
+        if authority(self.promotion_check()) != promotion:
+            raise ValueError("Promotion authority changed after opening preview; a new review is required")
         identity = self.clients["sts"].get_caller_identity()
         if (identity.get("Account") != ACCOUNT or identity.get("Arn") !=
                 f"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-lifecycle-dispatcher/techx-lifecycle-{self.run_id}"):
@@ -201,7 +208,7 @@ class StartWorkflow:
             ip = ipaddress.ip_address(stream.read(128).decode().strip())
         if ip.version != 4 or not ip.is_global: raise ValueError("Opening runner needs an observed global IPv4")
         record["sourceAdmission"] = dict(requestSha256=request_sha256, workflowRun=request["workflowRun"], reviewer=reviewer,
-            previewChecks=request["sourceChecks"], startChecks=checks, inventorySha256=checksum(inventory))
+            previewChecks=request["sourceChecks"], startChecks=checks, inventorySha256=checksum(inventory), promotionAuthority=promotion)
         with tempfile.TemporaryDirectory(prefix="techx-start-") as directory:
             bundle = Path(directory) / "source.tar.gz"
             digest = self.pack({name: (self.workspace / name, sha) for name, sha in sources.items()}, bundle)
@@ -209,5 +216,7 @@ class StartWorkflow:
             # Last read-only checks precede reservation; CodeBuild cannot start
             # until Coordinator has versioned inputs and a verified AWS schedule.
             source_checks(self.githubs, sources)
+            if authority(self.promotion_check()) != promotion:
+                raise ValueError("Promotion authority changed before reservation; no session may start")
             if self.clock() + timedelta(minutes=30) >= utc(record["cleanupStartAt"]): raise ValueError("Opening window expired during preparation")
             return Coordinator(self.clients, self.store, self.bucket).start(record, bundle, inventory, estimate, str(ip))

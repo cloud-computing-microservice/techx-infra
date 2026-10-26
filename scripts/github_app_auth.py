@@ -31,6 +31,10 @@ def api(path, token, payload=None, *, method=None, open_url=None):
     opener = open_url or build_opener(NoRedirect()).open
     with opener(request, timeout=30) as response:
         raw = response.read(LIMIT + 1)
+        if path == "/installation/token" and method == "DELETE":
+            if response.status != 204 or raw != b"" or response.headers.get("Link"):
+                raise ValueError("Installation token revocation was not acknowledged; do not retry blindly")
+            return None
         if response.status not in (200, 201) or response.headers.get("Link") or len(raw) > LIMIT:
             raise ValueError("GitHub returned incomplete or unverified evidence; do not repeat a mutation")
     return json.loads(raw)

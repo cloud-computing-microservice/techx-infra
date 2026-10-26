@@ -9,6 +9,7 @@ from automation_session import S3SessionStore, utc
 from chart_selection import GitHub
 from lifecycle_admission import REPOS, StartWorkflow
 from plan_review_store import checksum
+from promotion_authority import from_environment
 
 
 def main():
@@ -29,7 +30,8 @@ def main():
             for name in ("s3", "sts", "scheduler", "codebuild", "lambda", "cloudfront", "logs", "kms")}
         kwargs["store"] = S3SessionStore(kwargs["bucket"])
     githubs = {name: GitHub(repo, os.environ["GITHUB_TOKEN"]) for name, repo in REPOS.items()}
-    workflow = StartWorkflow(githubs, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_SHA"], Path(__file__).parents[2], **kwargs)
+    workflow = StartWorkflow(githubs, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_SHA"], Path(__file__).parents[2],
+        promotion_check=lambda: from_environment(Path(os.environ.get("RUNNER_TEMP", "."))), **kwargs)
     if args.mode == "preview":
         request = workflow.preview(inputs)
         digest = checksum(request)

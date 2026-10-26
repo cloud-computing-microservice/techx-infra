@@ -51,6 +51,12 @@ class Orchestrator:
                 raise ValueError("Cold release did not come from the dispatched platform workflow")
         elif op == "review-promotion":
             self.consume_promotion(record, intent, run, source_run)
+        elif op == "accept-public":
+            from public_acceptance_contract import read_public_receipt
+            receipt = read_public_receipt(d.clients["s3"], d.bucket, record, d.version)
+            if (receipt["workflowRun"] != source_run or receipt["dispatchId"] != intent["dispatchId"]
+                    or record["stages"]["exposure"] != intent["predecessor"]["stages"]["exposure"]):
+                raise ValueError("Public acceptance did not come from the exact dispatched predecessor/run")
         else:
             read_release(d.clients["s3"], d.bucket, record, d.execution, d.version)
             selected = read_selection(d.clients["s3"], d.bucket, record, d.execution, d.version)
@@ -106,6 +112,7 @@ class Orchestrator:
         record, _ = d.current()
         waiting = result["waiting"]
         if waiting == "PLAN_APPROVAL": return target_for("review-plan", record, d.execution)
+        if waiting == "PUBLIC_ACCEPTANCE": return target_for("accept-public", record, d.execution)
         if waiting in ("COLD_RELEASE", "CHART_PROPOSAL"):
             if waiting == "CHART_PROPOSAL":
                 raise ValueError("A completed cold workflow must publish both release and proposal evidence")

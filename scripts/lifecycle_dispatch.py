@@ -138,7 +138,10 @@ def next_operation(record, previous):
             return operation("activate", "exposure")
         if previous == operation("activate", "exposure"):
             validate_exposure_checkpoint(record)
-            return dict(waiting="ACCEPTANCE")
+            if not stages.get("publicAcceptance"): return dict(waiting="PUBLIC_ACCEPTANCE")
+            from public_acceptance_contract import validate_public_checkpoint
+            validate_public_checkpoint(record)
+            return dict(waiting="PRIVATE_ACCEPTANCE")
     raise ValueError("No supported lifecycle continuation; cleanup/reconciliation required")
 
 
@@ -231,9 +234,12 @@ class Dispatcher:
         record, _ = self.current()
         previous = completed_manager(self.clients, self.execution, record)
         op = next_operation(record, previous)
-        if op.get("waiting") == "ACCEPTANCE":
+        if op.get("waiting") in ("PUBLIC_ACCEPTANCE", "PRIVATE_ACCEPTANCE"):
             from edge_activation import read_activation_receipt
             read_activation_receipt(self.clients["s3"], self.bucket, record, self.version)
+        if op.get("waiting") == "PRIVATE_ACCEPTANCE":
+            from public_acceptance_contract import read_public_receipt
+            read_public_receipt(self.clients["s3"], self.bucket, record, self.version)
         if op.get("waiting"): return dict(sessionId=record["sessionId"], **op)
         if op["mode"] == "bootstrap":
             from chart_selection import read_release, read_selection

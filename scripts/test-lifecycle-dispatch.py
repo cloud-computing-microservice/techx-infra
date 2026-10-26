@@ -202,7 +202,7 @@ class DispatchTests(unittest.TestCase):
         self.f.record["stages"]["exposure"] = dict(state="ACTIVATED", attempt=1, taskId="1" * 32,
             contextSha256=checksum(exposure_context(self.f.record)), receiptReference=dict(
                 key=f"private/staging/{self.f.record['sessionId']}/exposure/{'1' * 32}.json", versionId="receipt-v1", sha256="f" * 64))
-        self.assertEqual(next_operation(self.f.record, operation("activate", "exposure")), dict(waiting="ACCEPTANCE"))
+        self.assertEqual(next_operation(self.f.record, operation("activate", "exposure")), dict(waiting="PUBLIC_ACCEPTANCE"))
         with self.assertRaises(ValueError): next_operation(self.f.record, operation("apply", "edge"))
         self.assertEqual(self.f.record["status"], "PROVISIONING")
 

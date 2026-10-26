@@ -116,6 +116,19 @@ class CleanupWorkerTests(unittest.TestCase):
             terminate.assert_called_once_with(self.clients["ec2"], "staging-123456", None)
             fence.assert_not_called()
 
+    def test_public_http_probe_can_be_fenced_without_github_or_fake_codebuild_stop(self):
+        record = initial_record("staging-123456", {key: "a" * 40 for key in ("techx-infra", "techx-chart", "techx-platform")},
+            4, "owner@example.invalid", "deploy-window", datetime.now(timezone.utc), approved_budget_usd=60)
+        record.update(status="PROVISIONING", lease=dict(owner="arn:aws:sts::058114477594:assumed-role/techx-automation-public-acceptance/techx-public-501", operation="deploy"))
+        with patch("run_cleanup.stop_executor") as stop, patch("run_cleanup.fence_session") as fence, \
+                patch("run_cleanup.terminate_deployment_executors") as terminate:
+            run_cleanup.prepare_takeover(self.clients, record, "cleanup", "control-bucket")
+            stop.assert_not_called()
+            terminate.assert_called_once_with(self.clients["ec2"], "staging-123456", None)
+            fence.assert_called_once_with(record, "cleanup", executor_stopped=True)
+        record["lease"]["operation"] = "cleanup"
+        with self.assertRaises(ValueError): run_cleanup.prepare_takeover(self.clients, record, "cleanup", "control-bucket")
+
     def test_uncertain_launch_requires_positive_terminal_proof_and_keeps_it_for_retries(self):
         record = initial_record("staging-123456", {key: "a" * 40 for key in ("techx-infra", "techx-chart", "techx-platform")},
             4, "owner@example.invalid", "deploy-window", datetime.now(timezone.utc), approved_budget_usd=60)

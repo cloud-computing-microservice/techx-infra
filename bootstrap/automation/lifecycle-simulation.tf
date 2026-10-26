@@ -53,6 +53,8 @@ output "lifecycle_iam_simulation_cases_json" {
       principalArn = "${local.simulation_account_prefix}:role/techx-automation-lifecycle-dispatcher"
       cases = [
         { name = "fixed-manager-build", action = "codebuild:StartBuild", expected = "allowed", resources = [local.lifecycle_project_arn] },
+        { name = "read-pinned-public-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
+        { name = "no-public-evidence-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
         { name = "read-pinned-activation-receipt", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
         { name = "no-unversioned-activation-read", action = "s3:GetObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
         { name = "no-dispatcher-activation-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
@@ -66,6 +68,16 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "no-ec2-create", action = "ec2:RunInstances", expected = "denied", resources = ["arn:aws:ec2:us-east-1:058114477594:instance/i-00000000000000000"] }
       ]
     }
+    public_acceptance = {
+      principalArn = "${local.simulation_account_prefix}:role/techx-automation-public-acceptance"
+      cases = [
+        { name = "read-pinned-exposure", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
+        { name = "write-public-evidence", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
+        { name = "no-private-inputs", action = "s3:GetObjectVersion", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/inputs.json"] },
+        { name = "no-control-secret", action = "secretsmanager:GetSecretValue", expected = "denied", resources = ["arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/automation/promotion-app-Abc123"] },
+        { name = "no-manager-build", action = "codebuild:StartBuild", expected = "denied", resources = [local.lifecycle_project_arn] }
+      ]
+    }
   }) : null
 }
 
@@ -76,7 +88,8 @@ resource "aws_iam_role_policy" "lifecycle_simulation" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [{
     Effect = "Allow", Action = ["iam:SimulatePrincipalPolicy"], Resource = [
       "${local.simulation_account_prefix}:role/techx-automation-lifecycle-manager", local.deployment_role_arn,
-      "${local.simulation_account_prefix}:role/techx-automation-lifecycle-dispatcher"
+      "${local.simulation_account_prefix}:role/techx-automation-lifecycle-dispatcher",
+      "${local.simulation_account_prefix}:role/techx-automation-public-acceptance"
     ]
   }] })
 }

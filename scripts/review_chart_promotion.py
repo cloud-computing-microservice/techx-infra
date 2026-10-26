@@ -15,27 +15,22 @@ from chart_selection import CHART_REPO, INFRA_REPO, GitHub
 from plan_approval import version
 from plan_review_store import ACCOUNT, checksum, encoded, immutable_json, read_json
 from select_bootstrap_chart import verified_selector
+from workflow_handoff import guard_child, title
 
 WORKFLOW = ".github/workflows/staging-chart-promote.yml"
 ENVIRONMENT = "staging-chart-promote"
 
 
-def authorize_promotion(checks, source, chart, infra, reference, *, owner, epoch, app_id, app_slug):
-    """Revalidate an exact grant on an owned executor; this never performs merge.
-
-    The future task loader must independently verify the EC2 identity/task.
-    No approval boolean or caller-supplied workflow ID replaces private bytes.
-    """
-    if owner is None or epoch is None: raise ValueError("Grant consumption requires an owned private deployment lease")
-    checks.guard(owner=owner, epoch=epoch)
-    prefix = f"promotion-approvals/staging/{checks.execution['sessionId']}/"
+def read_promotion_approval(s3, bucket, execution, execution_version, reference, now):
+    """Read immutable grant bytes, never an actor-provided approval boolean."""
+    prefix = f"promotion-approvals/staging/{execution['sessionId']}/"
     if (not isinstance(reference, dict) or set(reference) != {"key", "versionId", "sha256"}
             or not isinstance(reference.get("key"), str) or not reference["key"].startswith(prefix)
             or not re.fullmatch(r"[a-f0-9]{64}\.json", reference["key"][len(prefix):])
             or not isinstance(reference.get("sha256"), str) or not re.fullmatch(r"[a-f0-9]{64}", reference["sha256"])):
         raise ValueError("An exact session-scoped private promotion approval reference is required")
     version(reference["versionId"])
-    value, _ = read_json(checks.clients["s3"], checks.bucket, reference["key"], reference["versionId"])
+    value, _ = read_json(s3, bucket, reference["key"], reference["versionId"])
     request = value.get("request")
     if (set(value) != {"schemaVersion", "kind", "request", "requestSha256", "reviewer", "approvedAt", "expiresAt"}
             or type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1
@@ -44,10 +39,32 @@ def authorize_promotion(checks, source, chart, infra, reference, *, owner, epoch
             or reference["key"] != prefix + checksum(request) + ".json"):
         raise ValueError("Private promotion approval bytes/checksum differ from the exact reference")
     approved, expiry = utc(value["approvedAt"]), utc(value["expiresAt"])
-    if (not utc(checks.execution["createdAt"]) <= approved <= checks.clock() < expiry
+    if (not utc(execution["createdAt"]) <= approved <= now < expiry
             or expiry > approved + timedelta(minutes=15)
-            or expiry > utc(checks.execution["cleanupStartAt"]) - timedelta(minutes=3)):
+            or expiry > utc(execution["cleanupStartAt"]) - timedelta(minutes=3)):
         raise ValueError("Promotion approval is expired or extends its approved cleanup window")
+    expected = dict(schemaVersion=1, kind="cold-promotion", sessionId=execution["sessionId"],
+        executionVersion=execution_version, sourceRevisions=execution["sourceRevisions"],
+        approvedBudgetUsd=execution["approvedBudgetUsd"], deadline=execution["deadline"], cleanupStartAt=execution["cleanupStartAt"])
+    if any(request.get(key) != item for key, item in expected.items()):
+        raise ValueError("Promotion approval differs from the admitted execution context")
+    return value
+
+
+def promotion_index_key(session_id, run_id):
+    if (not re.fullmatch(r"staging-[A-Za-z0-9-]{1,64}", session_id)
+            or not re.fullmatch(r"[1-9][0-9]*", str(run_id))):
+        raise ValueError("A fixed session and actual promotion review run are required")
+    return f"promotion-approvals/staging/{session_id}/runs/{run_id}.json"
+
+
+def authorize_promotion(checks, source, chart, infra, reference, *, owner, epoch, app_id, app_slug):
+    """Revalidate an exact grant on an owned executor; this never performs merge."""
+    if owner is None or epoch is None: raise ValueError("Grant consumption requires an owned private deployment lease")
+    checks.guard(owner=owner, epoch=epoch)
+    value = read_promotion_approval(checks.clients["s3"], checks.bucket, checks.execution, checks.version, reference, checks.clock())
+    request = value["request"]
+    approved, expiry = utc(value["approvedAt"]), utc(value["expiresAt"])
     run_url = request.get("workflowRun", "")
     if not isinstance(run_url, str) or not re.fullmatch(rf"https://github.com/{INFRA_REPO}/actions/runs/[1-9][0-9]*", run_url):
         raise ValueError("Promotion approval must bind an actual infra workflow run")
@@ -76,10 +93,12 @@ def authorize_promotion(checks, source, chart, infra, reference, *, owner, epoch
 
 
 class PromotionReview(ColdPromotionChecks):
-    def __init__(self, *args, run_id, read_only=True, **kwargs):
+    def __init__(self, *args, run_id, read_only=True, dispatch_id="", **kwargs):
         super().__init__(*args, **kwargs)
         if not re.fullmatch(r"[1-9][0-9]*", str(run_id)): raise ValueError("A real promotion review workflow is required")
         self.run_id, self.read_only = str(run_id), read_only
+        if dispatch_id: title(dispatch_id)
+        self.dispatch_id = dispatch_id
 
     def guard(self, *, owner=None, epoch=None):
         role, name = ("chart-reader", "chart-read") if self.read_only else ("promotion-approver", "promotion-approve")
@@ -88,7 +107,11 @@ class PromotionReview(ColdPromotionChecks):
                 f"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-{role}/techx-{name}-{self.run_id}"):
             raise ValueError("Promotion review requires its exact read-only or approval-only workflow role")
         if owner is not None or epoch is not None: raise ValueError("The review workflow must not hold a deployment lease")
-        return super().guard()
+        record = super().guard()
+        guard_child(self.clients["s3"], self.bucket, dispatch_id=self.dispatch_id, repository=INFRA_REPO,
+            workflow=WORKFLOW.rsplit("/", 1)[1], source_sha=self.execution["sourceRevisions"]["techx-infra"],
+            run_id=self.run_id, inputs=dict(session_id=self.execution["sessionId"], execution_version=self.version), clock=self.clock)
+        return record
 
     def preview(self, source, chart, infra, *, app_id, app_slug):
         verified_selector(infra, self.run_id, self.execution, workflow=WORKFLOW)
@@ -121,6 +144,12 @@ class PromotionReview(ColdPromotionChecks):
         key = f"promotion-approvals/staging/{self.execution['sessionId']}/{request_sha256}.json"
         ref = immutable_json(self.clients["s3"], self.bucket, key, value)
         ref["sha256"] = checksum(value)
+        if self.dispatch_id:
+            self.guard()
+            index = dict(schemaVersion=1, kind="cold-promotion-index", sessionId=self.execution["sessionId"],
+                executionVersion=self.version, sourceRevisions=self.execution["sourceRevisions"],
+                dispatchId=self.dispatch_id, workflowRun=request["workflowRun"], approvalReference=ref)
+            immutable_json(self.clients["s3"], self.bucket, promotion_index_key(self.execution["sessionId"], self.run_id), index)
         return ref
 
 
@@ -143,7 +172,8 @@ def main():
     execution, _ = read_json(clients["s3"], bucket, f"executions/{session}.json", object_version)
     if execution.get("sessionId") != session: raise ValueError("Promotion execution belongs to another session")
     review = PromotionReview(clients, S3SessionStore(bucket), bucket, execution, object_version,
-                             run_id=os.environ["GITHUB_RUN_ID"], read_only=args.mode == "preview")
+                             run_id=os.environ["GITHUB_RUN_ID"], read_only=args.mode == "preview",
+                             dispatch_id=os.environ.get("TECHX_DISPATCH_ID", ""))
     review.guard()
     chart, infra = GitHub(CHART_REPO, os.environ["CHART_READ_TOKEN"]), GitHub(INFRA_REPO, os.environ["GITHUB_TOKEN"])
     with tempfile.TemporaryDirectory(prefix="techx-promotion-review-") as directory:

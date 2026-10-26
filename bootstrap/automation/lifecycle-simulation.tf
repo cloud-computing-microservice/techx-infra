@@ -57,6 +57,8 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "read-admission-kms", action = "kms:DescribeKey", expected = "allowed", resources = [aws_kms_key.control.arn] },
         { name = "read-orphan-origins", action = "cloudfront:ListVpcOrigins", expected = "allowed", resources = ["*"] },
         { name = "protected-handoff-write", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/handoffs/staging/simulation/intent.json"] },
+        { name = "read-dispatched-promotion-grant", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/promotion-approvals/staging/simulation/approval.json"] },
+        { name = "no-dispatcher-promotion-approval-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/promotion-approvals/staging/simulation/approval.json"] },
         { name = "no-other-build", action = "codebuild:StartBuild", expected = "denied", resources = ["arn:aws:codebuild:us-east-1:058114477594:project/unrelated-project"] },
         { name = "no-ec2-create", action = "ec2:RunInstances", expected = "denied", resources = ["arn:aws:ec2:us-east-1:058114477594:instance/i-00000000000000000"] }
       ]

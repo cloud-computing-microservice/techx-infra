@@ -206,18 +206,18 @@ class WakeAndWireTests(unittest.TestCase):
 
     def test_each_infra_child_can_wake_but_opening_or_controller_cannot(self):
         self.run["repository"] = self.run["head_repository"] = dict(full_name=INFRA_REPO)
-        for workflow in ("staging-plan-review.yml", "staging-chart-select.yml", "staging-chart-reuse.yml"):
+        for workflow in ("staging-plan-review.yml", "staging-chart-select.yml", "staging-chart-reuse.yml", "staging-chart-promote.yml"):
             self.run["path"] = ".github/workflows/" + workflow
             with self.subTest(workflow=workflow):
                 wake_existing(SimpleNamespace(get=lambda endpoint: deepcopy(self.run)), self.destination,
                     run_id="123", source_sha="a" * 40, session_id="staging-bound", execution_version="version", repository=INFRA_REPO)
-        self.assertEqual(len(self.sent), 3)
+        self.assertEqual(len(self.sent), 4)
         for workflow in ("staging-lifecycle.yml", "staging-orchestrate.yml", "bootstrap-staging.yml"):
             self.run["path"] = ".github/workflows/" + workflow
             with self.subTest(workflow=workflow), self.assertRaises(ValueError):
                 wake_existing(SimpleNamespace(get=lambda endpoint: deepcopy(self.run)), self.destination,
                     run_id="123", source_sha="a" * 40, session_id="staging-bound", execution_version="version", repository=INFRA_REPO)
-        self.assertEqual(len(self.sent), 3)
+        self.assertEqual(len(self.sent), 4)
 
     def test_api_uses_2026_run_response_without_legacy_post_retry(self):
         api = WorkflowAPI(INFRA_REPO, "fake-test-token")

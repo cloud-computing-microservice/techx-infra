@@ -720,7 +720,7 @@ GitHub schedules that job. The destination observes its own protected child run.
 GitHub cancellation/notification delivery still require live failure acceptance;
 the independently armed AWS cleanup never depends on a callback succeeding.
 
-Normal chart promotion, chart-main post-merge wakeup, DNS/acceptance, rollback,
+Chart-main post-merge wakeup, DNS/acceptance, rollback,
 App configuration and live OIDC/cleanup integration remain unfinished. A pending
 chart PR or its main CI is an explicit wait, not skipped review or a successful
 deployment. The cloud-free API probe at run 40180370141 verified the response
@@ -766,18 +766,18 @@ After the environment review, all candidate checks run again. Grants last at
 most 15 minutes and expire at least three minutes before cleanup starts. A new
 review produces a different immutable key because the preview binds its run;
 an old grant is never extended or overwritten. The grant is an authorization
-input for a future owned private task, not a claim that promotion occurred.
+input for the owned private task, not a claim that promotion occurred.
 
 `authorize_promotion()` validates an exact private grant VersionId/checksum,
 expiry, successful first-attempt review run and actual human environment
 approval, then repeats candidate verification under an owned private deploy
 lease. It does not acquire that lease, prove the EC2 task identity or merge.
-The future verified task loader must supply those boundaries; the review role
+The verified task loader supplies those boundaries; the review role
 cannot stand in for the owned executor. Missing/null versions, stale candidate
 CI, withdrawn approval and cleanup fencing fail before authority is returned.
 
 The private merge task and single-call recovery are implemented in the next
-section. Controller handoff and chart-main callback still require implementation.
+section. The review handoff is described below; chart-main callback remains open.
 Merge runs on the owned private executor so independent cleanup can stop the
 process before fencing the deployment lease. Do not add a runner merge step
 or enable lifecycle/release flags to skip remaining dependencies. READY-session
@@ -846,6 +846,33 @@ The loader changed, so a newly baked/pinned AMI is required before live use.
 No App, control secret, AWS role or AMI has been created at this checkpoint.
 Control App keys would remain after workload teardown and incur separate
 storage/KMS charges; include them in bootstrap/control-resource accounting.
-Controller discovery/consumption of the review grant, chart CI/callback wiring,
-READY releases, live token/OIDC/network/cancel/merge races, acceptance and
+Chart callback wiring, READY releases, live token/OIDC/network/cancel/merge races, acceptance and
 rollback remain incomplete. Both deployment flags stay false.
+
+### Automatic cold-promotion review and grant handoff (source only)
+
+An exact clean open proposal with successful candidate PR CI now dispatches
+the fixed `review-promotion` handoff to `staging-chart-promote.yml`. Pending
+human PR review/mergeability/candidate CI keeps the same bounded observation
+loop; the runner never merges. The review's protected run-name/dispatch ID and
+own S3 receipt are checked on preview and approval. Its final cloud-free notify
+job wakes only that existing session, including when review fails.
+
+After writing the immutable short-lived grant, the approval-only role writes
+`promotion-approvals/staging/<session>/runs/<review-run-id>.json`. This index
+binds the exact dispatch, source, execution and grant VersionId/checksum. The
+dispatcher has read access only; its session CAS cannot invent or extend a
+grant. It accepts the index only from the positively observed successful child,
+rechecks actual human environment review, expiry and unchanged release/proposal
+and predecessor, then attaches `bootstrapPromotionApproval`. Lost CAS responses
+can recover that same binding. The existing typed dispatcher subsequently starts
+one `promote / chart / 1` manager. The private worker independently repeats all
+candidate/grant/runtime/task/lease checks before the single merge call.
+
+After merge, missing or in-progress main CI is observed without creating another
+review or selecting an unverified chart. Failed/latest or incomplete CI cannot
+select. The same overall 40-minute observation bound applies; chart review and
+main-CI wakeups after that bound still need chart callback wiring. Human approval
+remains intentional; the automation removes script invocation, not review.
+App configuration/enforcement and live acceptance remain prerequisites, with
+both deployment flags false and no cloud resources created by offline checks.

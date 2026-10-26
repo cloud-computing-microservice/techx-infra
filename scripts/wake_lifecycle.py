@@ -9,7 +9,7 @@ from workflow_handoff import WorkflowAPI
 
 def wake_existing(source, destination, *, run_id, source_sha, session_id, execution_version, repository=PLATFORM_REPO):
     sha(source_sha)
-    workflows = {PLATFORM_REPO: {"bootstrap-staging.yml"}, INFRA_REPO: {"staging-plan-review.yml", "staging-chart-select.yml", "staging-chart-reuse.yml"}}
+    workflows = {PLATFORM_REPO: {"bootstrap-staging.yml"}, INFRA_REPO: {"staging-plan-review.yml", "staging-chart-select.yml", "staging-chart-reuse.yml", "staging-chart-promote.yml"}}
     if repository not in workflows: raise ValueError("Unsupported lifecycle callback repository")
     if not re.fullmatch(r"[1-9][0-9]*", str(run_id)): raise ValueError("A real lifecycle callback run is required")
     run = source.get(f"actions/runs/{run_id}")

@@ -22,6 +22,7 @@ WORKFLOWS = {
     "cold-bootstrap": (PLATFORM_REPO, "bootstrap-staging.yml"),
     "reuse-chart": (INFRA_REPO, "staging-chart-reuse.yml"),
     "select-chart": (INFRA_REPO, "staging-chart-select.yml"),
+    "review-promotion": (INFRA_REPO, "staging-chart-promote.yml"),
 }
 LIVE = {"queued", "requested", "waiting", "pending", "in_progress"}
 

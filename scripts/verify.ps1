@@ -66,6 +66,8 @@ python (Join-Path $PSScriptRoot 'test-chart-selection.py')
 if ($LASTEXITCODE -ne 0) { throw 'Protected chart PR/CI/tree/manifest selection tests failed.' }
 python (Join-Path $PSScriptRoot 'test-gitops-bootstrap.py')
 if ($LASTEXITCODE -ne 0) { throw 'GitOps bootstrap verification failed.' }
+python (Join-Path $PSScriptRoot 'test-edge-activation.py')
+if ($LASTEXITCODE -ne 0) { throw 'Committed edge activation, DNS ownership and cleanup recovery tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-coordinator.py')
 if ($LASTEXITCODE -ne 0) { throw 'Lifecycle startup, cleanup-arming and uncertain-response regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-admission.py')

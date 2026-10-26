@@ -13,7 +13,7 @@ from automation_budget import validate_estimate
 from automation_session import utc, validate
 from cleanup_schedule import verify_existing
 from deployment_manager import previous_terminal
-from deployment_tasks import ACCOUNT, executor_config, validate_bootstrap, validate_gitops_checkpoint, validate_promotion, validate_promotion_checkpoint
+from deployment_tasks import ACCOUNT, executor_config, validate_bootstrap, validate_gitops_checkpoint, validate_promotion, validate_promotion_checkpoint, validate_activation, validate_exposure_checkpoint
 from plan_review_store import encoded, read_json
 
 PROJECT = "techx-automation-lifecycle"
@@ -25,8 +25,8 @@ CONTEXT = ("sessionId", "sourceRevisions", "deadline", "cleanupStartAt", "approv
 def operation(mode, stage, attempt=1):
     if (type(attempt) is not int or not 1 <= attempt <= 999999
             or (mode, stage) not in {("prepare", "foundation"), ("plan", "foundation"), ("apply", "foundation"),
-                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge")}
-            or mode in ("prepare", "bootstrap", "promote") and attempt != 1):
+                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"), ("activate", "exposure")}
+            or mode in ("prepare", "bootstrap", "promote", "activate") and attempt != 1):
         raise ValueError("Unsupported typed lifecycle operation")
     return dict(mode=mode, stage=stage, attempt=attempt)
 
@@ -43,6 +43,7 @@ def dispatch_identity(record, execution_version, op):
         pendingPlan=record.get("pendingPlan") if op["mode"] == "apply" else None,
         bootstrapChart=record.get("bootstrapChart") if op["mode"] == "bootstrap" else None)
     if op["mode"] == "promote": context["promotionApproval"] = record.get("bootstrapPromotionApproval")
+    if op["mode"] == "activate": context["exposureSha256"] = validate_activation(record, op["attempt"])
     return hashlib.sha256(encoded(context)).hexdigest()
 
 
@@ -131,8 +132,13 @@ def next_operation(record, previous):
             raise ValueError("Edge planning requires the completed GitOps bootstrap")
         return operation("plan", "edge")
     edge = stages["edge"]
-    if edge.get("state") == "APPLIED" and previous == operation("apply", "edge", edge["attempt"]):
-        return dict(waiting="DNS_AND_ACCEPTANCE")
+    if edge.get("state") == "APPLIED":
+        if not stages.get("exposure") and previous == operation("apply", "edge", edge["attempt"]):
+            validate_activation(record, 1)
+            return operation("activate", "exposure")
+        if previous == operation("activate", "exposure"):
+            validate_exposure_checkpoint(record)
+            return dict(waiting="ACCEPTANCE")
     raise ValueError("No supported lifecycle continuation; cleanup/reconciliation required")
 
 
@@ -225,6 +231,9 @@ class Dispatcher:
         record, _ = self.current()
         previous = completed_manager(self.clients, self.execution, record)
         op = next_operation(record, previous)
+        if op.get("waiting") == "ACCEPTANCE":
+            from edge_activation import read_activation_receipt
+            read_activation_receipt(self.clients["s3"], self.bucket, record, self.version)
         if op.get("waiting"): return dict(sessionId=record["sessionId"], **op)
         if op["mode"] == "bootstrap":
             from chart_selection import read_release, read_selection

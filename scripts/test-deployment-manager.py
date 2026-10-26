@@ -124,6 +124,28 @@ class ManagerTests(unittest.TestCase):
         with self.assertRaises(ValueError): read_task(self.clients["s3"], "control-bucket", self.record, pointer["taskId"], self.now)
         with self.assertRaises(ValueError): self.manager.dispatch(self.private, "promote", "chart", 2)
 
+    def exposure(self):
+        ref = dict(key=f"chart-selections/staging/{self.record['sessionId']}/bootstrap.json", versionId="selection-v1", sha256="d" * 64)
+        release_ref = dict(key="release", versionId="release-v1", sha256="e" * 64)
+        self.record.update(status="PROVISIONING", bootstrapChart=ref, bootstrapRelease=release_ref)
+        self.record["stages"] = dict(foundation=dict(state="APPLIED", attempt=1), edge=dict(state="APPLIED", attempt=1,
+            stateSerial=3, stateLineage="12345678-1234-1234-1234-123456789abc"), gitops=dict(state="BOOTSTRAPPED", attempt=1,
+            chartSha="b" * 40, selectionReference=deepcopy(ref), releaseReference=deepcopy(release_ref),
+            internalAlbArn=f"arn:aws:elasticloadbalancing:us-east-1:{ACCOUNT}:loadbalancer/app/techx/123abc"))
+
+    def test_activation_dispatch_pins_predecessor_and_rejects_change_or_second_attempt(self):
+        from deployment_tasks import exposure_context
+        from plan_review_store import checksum
+        self.exposure()
+        pointer = self.manager.dispatch(self.private, "activate", "exposure", 1)
+        task = read_task(self.clients["s3"], "control-bucket", self.record, pointer["taskId"], self.now)
+        self.assertEqual(task["expectedExposureSha256"], checksum(exposure_context(self.record)))
+        self.assertEqual(pointer["expectedExposureSha256"], task["expectedExposureSha256"])
+        self.record["stages"]["edge"]["stateSerial"] += 1
+        with self.assertRaises(ValueError): read_task(self.clients["s3"], "control-bucket", self.record, pointer["taskId"], self.now)
+        self.record["stages"]["edge"]["stateSerial"] -= 1
+        with self.assertRaises(ValueError): self.manager.dispatch(self.private, "activate", "exposure", 2)
+
     def test_bootstrap_dispatch_pins_selection_and_refuses_a_second_attempt(self):
         self.record.update(status="PROVISIONING", stages=dict(foundation=dict(state="APPLIED")),
             bootstrapChart=dict(key=f"chart-selections/staging/{self.record['sessionId']}/bootstrap.json", versionId="selection-v1", sha256="c" * 64))

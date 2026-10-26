@@ -12,6 +12,8 @@ import dns.query
 import dns.rcode
 import dns.rdatatype
 
+from cloudflare_dns import validate_name_target
+
 HOST = "shop.dinhminhkhoa.id.vn"
 ZONE = "dinhminhkhoa.id.vn"
 ENDPOINTS = ("https://dns.google/resolve", "https://cloudflare-dns.com/dns-query")
@@ -26,6 +28,26 @@ def assert_no_cloudfront(response):
     for answer in answers:
         if answer.get("type") == 5 and str(answer.get("data", "")).rstrip(".").lower().endswith(".cloudfront.net"):
             raise ValueError("Remove the Cloudflare shop CNAME first to avoid dangling DNS")
+
+
+def assert_target(response, target):
+    _, target = validate_name_target(HOST, target)
+    answers = response.get("Answer", [])
+    cnames = [answer for answer in answers if answer.get("type") == 5]
+    if (response.get("Status") != 0 or len(cnames) != 1
+            or str(cnames[0].get("name", "")).rstrip(".").lower() != HOST
+            or str(cnames[0].get("data", "")).rstrip(".").lower() != target):
+        raise ValueError("Public DNS has not converged to the admitted CloudFront target")
+
+
+def verify_target(target, guard=lambda: None):
+    validate_name_target(HOST, target)
+    for endpoint in ENDPOINTS:
+        guard()
+        request = Request(f"{endpoint}?name={HOST}&type=CNAME", headers={"Accept": "application/dns-json"})
+        with urlopen(request, timeout=15) as response:
+            assert_target(json.load(response), target)
+    verify_authoritative(target, guard)
 
 
 def verify():
@@ -45,7 +67,7 @@ def doh(endpoint, name, kind):
     return result.get("Answer", [])
 
 
-def assert_authoritative(response, query):
+def assert_authoritative(response, query, target=None):
     if not query.is_response(response) or not response.flags & dns.flags.AA:
         raise ValueError("DNS response is not authoritative for the query")
     if response.rcode() not in (dns.rcode.NOERROR, dns.rcode.NXDOMAIN):
@@ -53,17 +75,21 @@ def assert_authoritative(response, query):
     answers = []
     for rrset in response.answer:
         if rrset.rdtype == dns.rdatatype.CNAME:
-            answers.extend(dict(type=5, data=str(record.target)) for record in rrset)
-    assert_no_cloudfront(dict(Status=response.rcode(), Answer=answers))
+            answers.extend(dict(type=5, name=str(rrset.name), data=str(record.target)) for record in rrset)
+    if target is None:
+        assert_no_cloudfront(dict(Status=response.rcode(), Answer=answers))
+    else:
+        assert_target(dict(Status=response.rcode(), Answer=answers), target)
     if not response.answer:
         zone = dns.name.from_text(ZONE)
         if not any(rrset.rdtype == dns.rdatatype.SOA and rrset.name == zone for rrset in response.authority):
             raise ValueError("Negative DNS response lacks zone authority proof")
 
 
-def verify_authoritative():
+def verify_authoritative(target=None, guard=lambda: None):
     discovered = []
     for endpoint in ENDPOINTS:
+        guard()
         names = {str(answer["data"]).rstrip(".").lower() for answer in doh(endpoint, ZONE, "NS")
                  if answer.get("type") == 2 and str(answer.get("name", "")).rstrip(".").lower() == ZONE}
         if len(names) < 2 or any(not re.fullmatch(r"[a-z0-9-]+\.ns\.cloudflare\.com", name) for name in names):
@@ -72,13 +98,15 @@ def verify_authoritative():
     if discovered[0] != discovered[1]:
         raise ValueError("Public resolvers disagree on zone delegation")
     for server in sorted(discovered[0]):
+        guard()
         addresses = {str(answer["data"]) for answer in doh(ENDPOINTS[0], server, "A") if answer.get("type") == 1}
         if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
             raise ValueError("Invalid authoritative server address")
         query = dns.message.make_query(HOST, dns.rdatatype.CNAME)
         query.flags &= ~dns.flags.RD
+        guard()
         response, _ = dns.query.udp_with_fallback(query, sorted(addresses)[0], timeout=10)
-        assert_authoritative(response, query)
+        assert_authoritative(response, query, target)
 
 
 if __name__ == "__main__":

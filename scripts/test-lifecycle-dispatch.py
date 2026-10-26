@@ -185,7 +185,7 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(self.f.record["lifecycleDispatch"]["phase"], "CALLING")
         self.assertEqual(len(self.support.cleanup), 1)
 
-    def test_gitops_to_edge_and_applied_edge_stops_before_dns_acceptance(self):
+    def test_gitops_to_edge_then_activation_and_acceptance_wait(self):
         self.applied()
         ref = dict(key=f"chart-selections/staging/{self.f.record['sessionId']}/bootstrap.json", versionId="selection-v1", sha256="d" * 64)
         self.f.record.update(bootstrapChart=ref, bootstrapRelease=dict(key="release-fixture"))
@@ -193,8 +193,17 @@ class DispatchTests(unittest.TestCase):
             releaseReference=deepcopy(self.f.record["bootstrapRelease"]), chartSha="e" * 40,
             internalAlbArn="arn:aws:elasticloadbalancing:us-east-1:058114477594:loadbalancer/app/techx/abcdef")
         self.assertEqual(next_operation(self.f.record, operation("bootstrap", "gitops")), operation("plan", "edge"))
-        self.f.record["stages"]["edge"] = dict(state="APPLIED", attempt=1)
-        self.assertEqual(next_operation(self.f.record, operation("apply", "edge")), dict(waiting="DNS_AND_ACCEPTANCE"))
+        self.f.record["stages"]["edge"] = dict(state="APPLIED", attempt=1, stateSerial=3,
+            stateLineage="12345678-1234-1234-1234-123456789abc")
+        self.assertEqual(next_operation(self.f.record, operation("apply", "edge")), operation("activate", "exposure"))
+        with self.assertRaises(ValueError): next_operation(self.f.record, operation("activate", "exposure"))
+        from deployment_tasks import exposure_context
+        from plan_review_store import checksum
+        self.f.record["stages"]["exposure"] = dict(state="ACTIVATED", attempt=1, taskId="1" * 32,
+            contextSha256=checksum(exposure_context(self.f.record)), receiptReference=dict(
+                key=f"private/staging/{self.f.record['sessionId']}/exposure/{'1' * 32}.json", versionId="receipt-v1", sha256="f" * 64))
+        self.assertEqual(next_operation(self.f.record, operation("activate", "exposure")), dict(waiting="ACCEPTANCE"))
+        with self.assertRaises(ValueError): next_operation(self.f.record, operation("apply", "edge"))
         self.assertEqual(self.f.record["status"], "PROVISIONING")
 
     def test_bootstrap_revalidates_immutable_receipts_before_startbuild(self):
@@ -205,6 +214,23 @@ class DispatchTests(unittest.TestCase):
             with self.assertRaises(ValueError): self.dispatcher.advance()
             release.assert_called_once()
         self.assertFalse(self.started)
+
+    def test_completed_edge_dispatches_one_typed_activation_manager(self):
+        self.applied()
+        ref = dict(key=f"chart-selections/staging/{self.f.record['sessionId']}/bootstrap.json", versionId="selection-v1", sha256="d" * 64)
+        self.f.record.update(bootstrapChart=ref, bootstrapRelease=dict(key="release-fixture"))
+        self.f.record["stages"]["gitops"] = dict(state="BOOTSTRAPPED", attempt=1, selectionReference=deepcopy(ref),
+            releaseReference=deepcopy(self.f.record["bootstrapRelease"]), chartSha="e" * 40,
+            internalAlbArn="arn:aws:elasticloadbalancing:us-east-1:058114477594:loadbalancer/app/techx/abcdef")
+        self.f.record["stages"]["edge"] = dict(state="APPLIED", attempt=1, stateSerial=3,
+            stateLineage="12345678-1234-1234-1234-123456789abc", savedPlanSha256="a" * 64)
+        self.previous(operation("apply", "edge"))
+        result = self.dispatcher.advance()
+        self.assertEqual((result["mode"], result["stage"]), ("activate", "exposure"))
+        overrides = {row["name"]: row["value"] for row in self.started[0]["environmentVariablesOverride"]}
+        self.assertEqual((overrides["TECHX_MODE"], overrides["TECHX_PLAN_STAGE"]), ("activate", "exposure"))
+        with self.assertRaises(ValueError): self.dispatcher.advance()
+        self.assertEqual(len(self.started), 1)
 
     def recovery(self):
         self.proofs = {}

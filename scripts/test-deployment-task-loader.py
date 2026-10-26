@@ -115,6 +115,25 @@ class TaskLoaderTests(unittest.TestCase):
         self.f.record["deploymentTask"]["state"] = "RUNNING"
         return SimpleNamespace(returncode=0)
 
+    def test_activation_uses_fixed_worker_and_requires_its_exact_receipt_checkpoint(self):
+        from deployment_tasks import create_task, exposure_context
+        from plan_review_store import checksum
+        self.f.record.pop("deploymentTask")
+        self.f.exposure()
+        _, self.pointer = create_task(self.f.clients["s3"], "control-bucket", self.f.record, "execution-v1", self.f.instance_id,
+            self.f.owner, "activate", "exposure", 1, "7" * 32, self.f.now)
+        self.f.record["deploymentTask"] = self.pointer
+        def child(command, **kw):
+            self.assertTrue(command[1].endswith("run_edge_activation.py"))
+            self.assertEqual(command[2], "activate")
+            self.f.record["stages"]["exposure"] = dict(state="ACTIVATED", attempt=1, taskId=self.pointer["taskId"],
+                contextSha256=checksum(exposure_context(self.f.record)), receiptReference=dict(
+                    key=f"private/staging/{self.f.record['sessionId']}/exposure/{self.pointer['taskId']}.json", versionId="receipt-v1", sha256="e" * 64))
+            return SimpleNamespace(returncode=0)
+        self.execute(child)
+        self.assertEqual(self.f.record["deploymentTask"]["state"], "SUCCEEDED")
+        self.assertEqual(self.f.record["status"], "PROVISIONING")
+
     def execute(self, run=None):
         with tempfile.TemporaryDirectory() as base:
             def load(client, bucket, session, version, directory):

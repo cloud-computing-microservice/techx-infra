@@ -76,6 +76,16 @@ def save_private(runtime, guard, change):
     runtime.private = updated
 
 
+def read_cloudflare_client(runtime, guard):
+    arn = os.environ.get("CLOUDFLARE_SECRET_ARN", "")
+    if not re.fullmatch(rf"arn:aws:secretsmanager:us-east-1:{ACCOUNT}:secret:techx/automation/cloudflare-[A-Za-z0-9]+", arn):
+        raise ValueError("The protected SSM document must provide the scoped Cloudflare secret ARN")
+    guard()
+    response = runtime.clients["secretsmanager"].get_secret_value(SecretId=arn)
+    credentials = json.loads(response["SecretString"])
+    return CloudflareDNS(credentials["zoneId"], credentials["apiToken"], guard=guard)
+
+
 class AssetBootstrap:
     def __init__(self, runtime, guard, *, sleep=time.sleep, pki_factory=None, dns_factory=None):
         self.runtime, self.guard = runtime, guard
@@ -92,13 +102,7 @@ class AssetBootstrap:
         save_private(self.runtime, self.guard, change)
 
     def dns_client(self):
-        arn = os.environ.get("CLOUDFLARE_SECRET_ARN", "")
-        if not re.fullmatch(rf"arn:aws:secretsmanager:us-east-1:{ACCOUNT}:secret:techx/automation/cloudflare-[A-Za-z0-9]+", arn):
-            raise ValueError("The protected SSM document must provide the scoped Cloudflare secret ARN")
-        self.guard()
-        response = self.clients["secretsmanager"].get_secret_value(SecretId=arn)
-        credentials = json.loads(response["SecretString"])
-        return CloudflareDNS(credentials["zoneId"], credentials["apiToken"])
+        return read_cloudflare_client(self.runtime, self.guard)
 
     def secret(self, purpose):
         if purpose not in ("vpn-pki", "order-api-key"):

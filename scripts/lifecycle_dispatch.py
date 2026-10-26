@@ -13,7 +13,7 @@ from automation_budget import validate_estimate
 from automation_session import utc, validate
 from cleanup_schedule import verify_existing
 from deployment_manager import previous_terminal
-from deployment_tasks import ACCOUNT, executor_config, validate_bootstrap, validate_gitops_checkpoint
+from deployment_tasks import ACCOUNT, executor_config, validate_bootstrap, validate_gitops_checkpoint, validate_promotion, validate_promotion_checkpoint
 from plan_review_store import encoded, read_json
 
 PROJECT = "techx-automation-lifecycle"
@@ -25,8 +25,8 @@ CONTEXT = ("sessionId", "sourceRevisions", "deadline", "cleanupStartAt", "approv
 def operation(mode, stage, attempt=1):
     if (type(attempt) is not int or not 1 <= attempt <= 999999
             or (mode, stage) not in {("prepare", "foundation"), ("plan", "foundation"), ("apply", "foundation"),
-                                     ("bootstrap", "gitops"), ("plan", "edge"), ("apply", "edge")}
-            or mode in ("prepare", "bootstrap") and attempt != 1):
+                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge")}
+            or mode in ("prepare", "bootstrap", "promote") and attempt != 1):
         raise ValueError("Unsupported typed lifecycle operation")
     return dict(mode=mode, stage=stage, attempt=attempt)
 
@@ -42,6 +42,7 @@ def dispatch_identity(record, execution_version, op):
         predecessor=record.get("lifecycleDispatch", {}).get("id"),
         pendingPlan=record.get("pendingPlan") if op["mode"] == "apply" else None,
         bootstrapChart=record.get("bootstrapChart") if op["mode"] == "bootstrap" else None)
+    if op["mode"] == "promote": context["promotionApproval"] = record.get("bootstrapPromotionApproval")
     return hashlib.sha256(encoded(context)).hexdigest()
 
 
@@ -109,11 +110,19 @@ def next_operation(record, previous):
     if foundation.get("state") != "APPLIED":
         raise ValueError("Foundation has not reached an applied checkpoint")
     if not stages.get("gitops"):
-        if previous != operation("apply", "foundation", foundation["attempt"]):
+        promoted = stages.get("chart")
+        if promoted:
+            validate_promotion_checkpoint(record)
+            if previous != operation("promote", "chart"): raise ValueError("Promotion requires its exact completed manager")
+        elif previous != operation("apply", "foundation", foundation["attempt"]):
             raise ValueError("Cold bootstrap requires the completed foundation apply")
         if not record.get("bootstrapRelease"): return dict(waiting="COLD_RELEASE")
         if not record.get("bootstrapProposal"): return dict(waiting="CHART_PROPOSAL")
-        if not record.get("bootstrapChart"): return dict(waiting="CHART_SELECTION")
+        if not record.get("bootstrapChart"):
+            if record.get("bootstrapPromotionApproval") and not promoted:
+                validate_promotion(record, 1)
+                return operation("promote", "chart")
+            return dict(waiting="CHART_SELECTION")
         validate_bootstrap(record, 1)
         return operation("bootstrap", "gitops")
     validate_gitops_checkpoint(record)

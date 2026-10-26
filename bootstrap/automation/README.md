@@ -776,11 +776,11 @@ The future verified task loader must supply those boundaries; the review role
 cannot stand in for the owned executor. Missing/null versions, stale candidate
 CI, withdrawn approval and cleanup fencing fail before authority is returned.
 
-The private merge task, grant-consumer task wiring, one-use merge intent/recovery,
-controller handoff and chart-main callback still require implementation. Merge
-must run on the owned private executor so independent cleanup can stop the
+The private merge task and single-call recovery are implemented in the next
+section. Controller handoff and chart-main callback still require implementation.
+Merge runs on the owned private executor so independent cleanup can stop the
 process before fencing the deployment lease. Do not add a runner merge step
-or enable lifecycle/release flags to skip that dependency. READY-session
+or enable lifecycle/release flags to skip remaining dependencies. READY-session
 promotion, App setup/enforcement, actual review/token/OIDC/race acceptance,
 DNS/acceptance and rollback remain incomplete.
 
@@ -791,3 +791,61 @@ only the future AWS role ARN metadata was set. No AWS role was created or
 assumed. The organization has zero installed Apps at this checkpoint, so App
 credentials and App-only main restrictions remain unconfigured. Both deployment
 flags stay false; preparing an environment is not runtime acceptance.
+
+### Private cold-promotion task and one-use merge recovery (source only)
+
+The fixed typed operation is `promote / chart / 1`. Its task and pointer pin
+`expectedPromotionApproval`; changed references, null versions, duplicate
+delivery and another executor cannot claim it. The reviewed SSM loader chooses
+only `run_chart_promotion.py` for that operation. The worker verifies the EC2
+runtime and its exact RUNNING task, then holds the owned deploy lease under the
+existing heartbeat wrapper. A manager cannot report success without the exact
+PROMOTED task/approval/release/proposal/receipt checkpoint and released lease.
+Promoted still means chart selection and GitOps verification remain required.
+
+`private_chart_promotion.py` repeats the private grant and actual GitHub review,
+candidate/tree/main/policy/CI checks. Before the one bounded synchronous merge,
+it requires at least 60 seconds of owned approval/lease/window. The API request
+uses the exact PR head, merge method `merge` and an intent-hash commit title.
+The client permits no other repository mutation, bypass, squash, rebase or
+asynchronous merge/queue endpoint. GitHub's [merge endpoint](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request)
+requires contents write and supports the expected-head SHA.
+
+Protected intent/calling/receipt objects live at
+`promotions/staging/<session>/<approval-sha256>/`. Only the private executor may
+write that prefix; the approval role cannot. A conditional calling marker must
+return a real object version before the PUT is issued. An existing/lost marker
+or HTTP response permits reconciliation only: the actual merged PR, expected
+App bot, merge window, intent-hash title, exact parents/tree and current main
+must match. A missing/ambiguous outcome never sends another merge request.
+Lost receipt/checkpoint responses retain the same intent and observed commit.
+Cleanup takeover prevents further checkpoints or grant use.
+
+The private worker reads two **existing** control secrets, never creates them:
+`techx/automation/promotion-app` and `techx/automation/lifecycle-app`. Both must
+use the admitted control KMS key and tags `Project=techx`,
+`Environment=automation`, `Role=github-app`. Each SecretString contains exactly
+`schemaVersion: 1`, numeric `appId`, `slug`, numeric `installationId` and the PEM
+`privateKey`. The promotion App must match the human-reviewed App ID/slug and
+be installed on selected chart access. The lifecycle App supplies infra review
+reads. Their keys are separate from the proposal publisher's authority.
+
+The helper verifies the JWT-authenticated App and active selected organization
+installation, requests a token for exactly one repository, checks reported
+permissions and independently lists that token's actual repository scope. Chart
+token: contents write, PR/Actions/administration read. Infra token: contents and
+Actions read only. Implicit metadata read may be omitted from GitHub's response;
+no other permission expansion is accepted. See [GitHub JWT](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
+and [installation authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
+OpenSSL signs RS256 using a temporary private key file (0700 directory/0600
+file) removed immediately; no key/token enters command arguments, public logs,
+source bundles or task inputs. Requests have bounds, no redirects and no
+automatic mutation retry.
+
+The loader changed, so a newly baked/pinned AMI is required before live use.
+No App, control secret, AWS role or AMI has been created at this checkpoint.
+Control App keys would remain after workload teardown and incur separate
+storage/KMS charges; include them in bootstrap/control-resource accounting.
+Controller discovery/consumption of the review grant, chart CI/callback wiring,
+READY releases, live token/OIDC/network/cancel/merge races, acceptance and
+rollback remain incomplete. Both deployment flags stay false.

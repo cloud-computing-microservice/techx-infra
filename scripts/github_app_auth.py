@@ -1,5 +1,6 @@
 """Fixed-repository GitHub App clients for the private promotion executor."""
 import base64
+from contextlib import contextmanager
 from datetime import timedelta
 import json
 import os
@@ -10,7 +11,7 @@ import tempfile
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from automation_session import utc
-from chart_selection import CHART_REPO, INFRA_REPO
+from chart_selection import CHART_REPO, INFRA_REPO, PLATFORM_REPO
 from plan_review_store import ACCOUNT, encoded
 
 ORG = "cloud-computing-microservice"
@@ -58,7 +59,7 @@ def jwt(secret, now, work, *, run=subprocess.run):
     return body + "." + b64(signed.stdout)
 
 
-def app_secret(client, purpose, *, kms_key):
+def app_secret_snapshot(client, purpose, *, kms_key):
     if purpose not in ("promotion", "lifecycle"): raise ValueError("Unsupported private App purpose")
     name = f"techx/automation/{purpose}-app"
     metadata = client.describe_secret(SecretId=name)
@@ -84,12 +85,16 @@ def app_secret(client, purpose, *, kms_key):
             or not value["privateKey"].startswith(("-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----"))
             or not value["privateKey"].isascii()):
         raise ValueError("Private App secret schema is invalid")
-    return value
+    return value, dict(arn=arn, versionId=result["VersionId"])
+
+
+def app_secret(client, purpose, *, kms_key):
+    return app_secret_snapshot(client, purpose, kms_key=kms_key)[0]
 
 
 class RepositoryClient:
     def __init__(self, repository, token, expiry, clock, *, merge=False, transport=api):
-        if repository not in (CHART_REPO, INFRA_REPO) or merge and repository != CHART_REPO or not token:
+        if repository not in (CHART_REPO, INFRA_REPO, PLATFORM_REPO) or merge and repository != CHART_REPO or not token:
             raise ValueError("A fixed repository and scoped token are required")
         self.repository, self.token, self.expiry, self.clock = repository, token, expiry, clock
         self.can_merge, self.transport = merge, transport
@@ -116,8 +121,8 @@ class RepositoryClient:
 
 
 def installation_client(secret, repository, work, clock, *, merge=False, transport=api, sign=jwt):
-    if repository not in (CHART_REPO, INFRA_REPO) or merge and repository != CHART_REPO:
-        raise ValueError("Only fixed chart promotion and infra review clients may be minted")
+    if repository not in (CHART_REPO, INFRA_REPO, PLATFORM_REPO) or merge and repository != CHART_REPO:
+        raise ValueError("Only fixed TechX App read clients and chart promotion may be minted")
     bearer = sign(secret, clock(), work)
     app = transport("/app", bearer)
     if app.get("id") != secret["appId"] or app.get("slug") != secret["slug"] or app.get("owner", {}).get("login") != ORG:
@@ -146,3 +151,33 @@ def installation_client(secret, repository, work, clock, *, merge=False, transpo
             or actual["repositories"][0].get("full_name") != repository):
         raise ValueError("Actual installation token can access a different repository scope")
     return RepositoryClient(repository, result["token"], expiry, clock, merge=merge, transport=transport)
+
+
+@contextmanager
+def readonly_installation(secret, repository, maximum, work, clock, *, transport=api, sign=jwt):
+    """Observe maximum grants but issue/revoke only a one-repository read token."""
+    install_path = f"/app/installations/{secret['installationId']}"
+    token_path = install_path + "/access_tokens"
+    reads = dict(contents="read", actions="read")
+    if repository == CHART_REPO: reads.update(pull_requests="read", administration="read")
+    issued = []
+    def guarded(path, token, payload=None, **kwargs):
+        if kwargs or payload is not None and (path != token_path or payload != dict(repositories=[repository.split("/")[1]], permissions=reads)):
+            raise ValueError("Credential preflight may mint only a fixed-repository read token")
+        result = transport(path, token, payload)
+        if path == install_path:
+            permissions = result.get("permissions")
+            if (not isinstance(permissions, dict) or {k: v for k, v in permissions.items() if k != "metadata"} != maximum
+                    or permissions.get("metadata", "read") != "read"):
+                raise ValueError("App installation lacks the exact reviewed maximum permissions")
+        if path == token_path:
+            value = result.get("token")
+            if isinstance(value, str) and 20 <= len(value) <= 512: issued.append(value)
+        return result
+    try:
+        client = installation_client(secret, repository, work, clock, transport=guarded, sign=sign)
+        yield client, guarded
+    finally:
+        for token in issued:
+            if transport("/installation/token", token, method="DELETE") is not None:
+                raise ValueError("Installation token revocation returned unverified evidence")

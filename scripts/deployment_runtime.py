@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from urllib.request import urlopen
 
 from automation_inputs import validate_variables
@@ -21,6 +22,7 @@ from lifecycle_stage import apply_saved_plan
 from plan_approval import digest
 from plan_review_store import summarize_changes
 from workload_state import MAX_STATE_BYTES, validate_state
+from private_credentials import verify as verify_private_credentials
 
 ACCOUNT = "058114477594"
 ROLE = f"arn:aws:iam::{ACCOUNT}:role/techx-automation-lifecycle-executor"
@@ -118,6 +120,9 @@ class TerraformRuntime:
     def prepare_bootstrap(self, guard):
         self.executor()
         AssetBootstrap(self, guard).prepare()
+
+    def verify_automation_credentials(self, guard, clock=None):
+        verify_private_credentials(self, guard, clock or (lambda: datetime.now(timezone.utc)))
 
     def initialize(self):
         self.executor()

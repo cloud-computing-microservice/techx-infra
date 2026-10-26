@@ -260,6 +260,9 @@ class RuntimeTests(unittest.TestCase):
         bootstrap = patch("deployment_runtime.AssetBootstrap")
         self.asset_bootstrap = bootstrap.start()
         self.addCleanup(bootstrap.stop)
+        credentials = patch("deployment_runtime.verify_private_credentials")
+        self.credential_verifier = credentials.start()
+        self.addCleanup(credentials.stop)
         self.now = datetime.now(timezone.utc)
         self.owner = f"arn:aws:ec2:us-east-1:{ACCOUNT}:instance/{self.instance['InstanceId']}"
         self.record = claim(self.execution, self.owner, "deploy", now=self.now)
@@ -298,6 +301,14 @@ class RuntimeTests(unittest.TestCase):
             self.record, self.etag = deepcopy(value), self.etag + 1
         self.store = SimpleNamespace(read=lambda: (deepcopy(self.record), self.etag), write=write)
         self.worker = LifecycleStageWorker(self.runtime, self.store, "execution-version", clock=lambda: self.now)
+
+    def test_bad_private_credentials_stop_before_terraform_and_bootstrap_side_effects(self):
+        self.flow()
+        self.credential_verifier.side_effect = ValueError("private key unavailable")
+        with self.assertRaisesRegex(ValueError, "private key unavailable"): self.perform()
+        self.assertFalse(self.calls)
+        self.asset_bootstrap.assert_not_called()
+        self.assertNotIn("pendingPlan", self.record)
 
     def perform(self, mode="plan", attempt=1, stage="foundation"):
         return self.worker.perform(mode, stage, attempt, self.owner, self.record["lease"]["epoch"])

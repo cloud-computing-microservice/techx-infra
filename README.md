@@ -245,6 +245,42 @@ is forbidden until the reviewed-plan approval checkpoint.
 
 Licensed under Apache-2.0. See [LICENSE](LICENSE).
 
+## Automation App credential admission
+
+Automation remains disabled until the control plane and a new deployment window
+have been approved. Opening preview schema v3 binds separate Promotion and
+Lifecycle App identities. Both preview and start recheck the real App,
+installation, maximum permissions and actual repository scope. Preflight issues
+only repository-specific read tokens and revokes them; it does not issue merge
+or workflow-dispatch tokens.
+
+The protected main environments `staging-chart-read` and `staging-start` need
+`PROMOTION_APP_PRIVATE_KEY` and `LIFECYCLE_APP_PRIVATE_KEY`. Public variables are
+`PROMOTION_APP_ID`, `PROMOTION_APP_SLUG`, `PROMOTION_INSTALLATION_ID`,
+`LIFECYCLE_APP_ID`, `LIFECYCLE_APP_SLUG` and `LIFECYCLE_INSTALLATION_ID`, taken
+from the actual installations. Promotion maximum permissions are Contents write
+and Pull requests, Actions and Administration read on chart. Lifecycle maximum
+permissions are Contents read and Actions write on infra/platform. The two Apps
+must have different IDs. Missing configuration fails admission; a v2 opening
+request cannot be reused as a v3 approval.
+
+Before foundation plan or apply initializes Terraform or prepares assets, the
+private worker verifies the existing Secrets Manager keys
+`techx/automation/promotion-app` and `techx/automation/lifecycle-app`, including
+account, region, control tags, KMS key, AWSCURRENT version, signed App identity,
+installation and actual read-token scope. It compares these with the reviewed
+opening proof and records only public identities and exact ARN/VersionId
+references in the private session snapshot using conditional S3 writes. It
+rechecks key versions after API verification and immediately before foundation
+apply. Private chart promotion also requires the same pinned versions. Rotation
+or changed authority stops the operation; an existing session pin is never
+replaced. No control key is created or rotated by this check, and private keys,
+JWTs and tokens do not enter the proof or Terraform inputs.
+
+These checks have offline regression coverage. Real App setup, private control
+secrets, branch enforcement, IAM/network and end-to-end acceptance remain live
+prerequisites; offline success does not authorize AWS deployment.
+
 Bootstrap verification:
 
 ```powershell

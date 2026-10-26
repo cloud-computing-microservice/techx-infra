@@ -28,6 +28,7 @@ class AdmissionTests(unittest.TestCase):
         self.sources = {"techx-infra": "a" * 40, "techx-platform": "b" * 40, "techx-chart": "c" * 40}
         self.promotion = dict(schemaVersion=1, repository=REPOS["techx-chart"], appId=12345,
             appSlug="techx-promotion", installationId=67890, policySha256="e" * 64)
+        self.lifecycle = dict(appId=23456, appSlug="techx-lifecycle", installationId=78901)
         self.inputs = dict(action="deploy-test-destroy", platform_sha="b" * 40, chart_sha="c" * 40,
             duration_hours="4", approved_budget_usd="60", budget_alert_email="owner@example.invalid")
         self.run_data = dict(id=100, status="in_progress", event="workflow_dispatch", run_attempt=1, head_branch="main", head_sha="a" * 40,
@@ -83,6 +84,7 @@ class AdmissionTests(unittest.TestCase):
             return "b" * 64
         self.flow = StartWorkflow(self.githubs, 100, "a" * 40, self.f.directory.name, clients=self.clients,
             promotion_check=lambda: deepcopy(self.promotion),
+            lifecycle_check=lambda: deepcopy(self.lifecycle),
             store=self.f.coordinator.store, bucket="control-bucket", kms_key=self.kms, clock=lambda: self.f.now, run=process,
             checkout=lambda *args: self.checkouts.append(args), bundle_pack=pack,
             bundle_extract=lambda *args: deepcopy(self.sources), open_url=lambda *args, **kw: io.BytesIO(b"8.8.8.8\n"))
@@ -107,6 +109,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual({name: value[1] for name, value in self.packed[0].items()}, self.sources)
         self.assertEqual(self.f.current["sourceAdmission"]["reviewer"], "reviewer")
         self.assertEqual(self.f.current["sourceAdmission"]["promotionAuthority"], request["promotionAuthority"])
+        self.assertEqual(self.f.current["sourceAdmission"]["lifecycleIdentity"], request["lifecycleIdentity"])
         self.assertEqual(self.f.current["deadline"], request["record"]["deadline"])
         self.assertEqual(result["deadline"], request["record"]["deadline"])
 
@@ -238,6 +241,25 @@ class AdmissionTests(unittest.TestCase):
     def test_missing_or_private_bearing_preflight_proof_cannot_publish_an_opening_preview(self):
         self.flow.promotion_check = lambda: dict(self.promotion, privateKey="never-public")
         with self.assertRaisesRegex(ValueError, "public promotion authority"): self.flow.preview(self.inputs)
+        self.assertFalse(self.f.events)
+
+    def test_lifecycle_identity_change_cannot_open_or_replace_the_promotion_app(self):
+        request = self.flow.preview(self.inputs)
+        self.lifecycle["installationId"] += 1
+        with self.assertRaisesRegex(ValueError, "Lifecycle App changed after"): self.start(request)
+        self.assertFalse(self.f.events)
+        self.lifecycle["appId"] = self.promotion["appId"]
+        with self.assertRaisesRegex(ValueError, "separate dedicated Apps"): self.flow.preview(self.inputs)
+
+    def test_lifecycle_change_before_reservation_has_no_paid_successor(self):
+        request = self.flow.preview(self.inputs)
+        calls = 0
+        def changed():
+            nonlocal calls
+            calls += 1
+            return deepcopy(self.lifecycle) if calls == 1 else dict(self.lifecycle, installationId=999)
+        self.flow.lifecycle_check = changed
+        with self.assertRaisesRegex(ValueError, "Lifecycle App changed before"): self.start(request)
         self.assertFalse(self.f.events)
 
 

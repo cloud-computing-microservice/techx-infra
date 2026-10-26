@@ -9,7 +9,7 @@ from unittest.mock import patch
 from chart_selection import CHART_REPO
 from plan_review_store import checksum
 from private_chart_promotion import app_clients
-from promotion_authority import admitted, authority, check, from_environment, MAXIMUM
+from promotion_authority import admitted, authority, check, check_lifecycle, from_environment, MAXIMUM, LIFECYCLE_MAXIMUM
 
 
 def load(name, filename):
@@ -136,9 +136,9 @@ class AuthorityTests(unittest.TestCase):
             execution=dict(sourceAdmission=dict(promotionAuthority=proof)))
         policy = {key: proof[key] for key in ("appId", "appSlug", "policySha256")}
         secret = dict(self.secret, installationId=88)
-        with patch("private_chart_promotion.app_secret", return_value=secret) as read, patch("private_chart_promotion.installation_client") as mint:
+        with patch("private_chart_promotion.app_secret_snapshot", return_value=(secret, {})) as read, patch("private_chart_promotion.installation_client") as mint:
             with self.assertRaisesRegex(ValueError, "human-reviewed branch authority"):
-                app_clients(runtime, policy, lambda: self.a.now)
+                app_clients(runtime, policy, lambda: self.a.now, "execution-v1")
             self.assertEqual(read.call_count, 1)
             mint.assert_not_called()
 
@@ -146,6 +146,21 @@ class AuthorityTests(unittest.TestCase):
         with patch.dict("os.environ", dict(PROMOTION_APP_ID="", PROMOTION_INSTALLATION_ID="")), patch("promotion_authority.check") as live:
             with self.assertRaisesRegex(ValueError, "must be configured"): from_environment("unused")
             live.assert_not_called()
+
+    def test_lifecycle_maximum_is_verified_but_only_two_repo_read_tokens_are_issued(self):
+        self.a.installation["permissions"] = dict(LIFECYCLE_MAXIMUM, metadata="read")
+        result = check_lifecycle(self.secret, "unused", lambda: self.a.now, transport=self.transport, sign=lambda *args: "fixture-jwt")
+        self.assertEqual(result, dict(appId=12345, appSlug="techx-promotion", installationId=77))
+        bodies = [body for path, body, _ in self.calls if path.endswith("/access_tokens")]
+        self.assertEqual([row["repositories"] for row in bodies], [["techx-infra"], ["techx-platform"]])
+        self.assertTrue(all(body["permissions"] == dict(contents="read", actions="read") for body in bodies))
+        self.assertEqual(len(self.revoked), 2)
+
+    def test_lifecycle_without_actions_write_maximum_cannot_be_admitted(self):
+        self.a.installation["permissions"] = dict(contents="read", actions="read", metadata="read")
+        with self.assertRaisesRegex(ValueError, "maximum permissions"):
+            check_lifecycle(self.secret, "unused", lambda: self.a.now, transport=self.transport, sign=lambda *args: "fixture-jwt")
+        self.assertFalse(any(path.endswith("/access_tokens") for path, *_ in self.calls))
 
 
 if __name__ == "__main__": unittest.main()

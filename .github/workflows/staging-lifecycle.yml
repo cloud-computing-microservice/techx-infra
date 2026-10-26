@@ -41,6 +41,9 @@ env:
   PROMOTION_APP_ID: ${{ vars.PROMOTION_APP_ID }}
   PROMOTION_APP_SLUG: ${{ vars.PROMOTION_APP_SLUG }}
   PROMOTION_INSTALLATION_ID: ${{ vars.PROMOTION_INSTALLATION_ID }}
+  LIFECYCLE_APP_ID: ${{ vars.LIFECYCLE_APP_ID }}
+  LIFECYCLE_APP_SLUG: ${{ vars.LIFECYCLE_APP_SLUG }}
+  LIFECYCLE_INSTALLATION_ID: ${{ vars.LIFECYCLE_INSTALLATION_ID }}
 jobs:
   preview:
     if: github.ref == 'refs/heads/main' && github.run_attempt == 1 && vars.LIFECYCLE_ENABLED == 'true'
@@ -61,23 +64,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PROMOTION_APP_PRIVATE_KEY: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+          LIFECYCLE_APP_PRIVATE_KEY: ${{ secrets.LIFECYCLE_APP_PRIVATE_KEY }}
         run: python techx-infra/scripts/start_lifecycle.py preview
-      - name: Verify platform Actions authorization before any AWS reservation
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
-        with:
-          app-id: ${{ vars.LIFECYCLE_APP_ID }}
-          private-key: ${{ secrets.LIFECYCLE_APP_PRIVATE_KEY }}
-          owner: cloud-computing-microservice
-          repositories: techx-platform
-          permission-actions: write
-      - name: Verify infra callback Actions authorization before any AWS reservation
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
-        with:
-          app-id: ${{ vars.LIFECYCLE_APP_ID }}
-          private-key: ${{ secrets.LIFECYCLE_APP_PRIVATE_KEY }}
-          owner: cloud-computing-microservice
-          repositories: techx-infra
-          permission-actions: write
   start:
     needs: preview
     runs-on: ubuntu-24.04
@@ -128,6 +116,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PROMOTION_APP_PRIVATE_KEY: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+          LIFECYCLE_APP_PRIVATE_KEY: ${{ secrets.LIFECYCLE_APP_PRIVATE_KEY }}
         run: python techx-infra/scripts/start_lifecycle.py start
   foundation-plan:
     needs: start

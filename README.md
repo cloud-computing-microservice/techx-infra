@@ -299,6 +299,24 @@ and a real VPN client test still require the acceptance worker. Activation
 alone never marks the session `READY`. This path has offline tests; it has not
 been accepted on AWS/Cloudflare and both automation flags remain disabled.
 
+Public acceptance now has its own protected `staging-acceptance.yml` handoff
+and IAM role. The exact admitted first-attempt main run must be observed on a
+GitHub-hosted Ubuntu job; the worker holds the deploy lease and rechecks the
+activation/selection/release, budget, schedule and ownership before requests.
+Public connections use validated global IPs with verified TLS/SNI, no proxy or
+redirect following. The suite checks DNS, storefront, HTTP-to-HTTPS redirect,
+public Argo blocking, health/readiness, catalog/detail/config, order creation,
+idempotent replay/conflict/lookup, no-store/request-ID behavior and an observed
+immutable static-asset cache hit. Failures preserve bounded private diagnostics.
+
+The role cannot deploy, access control secrets or read private inputs. It alone
+can produce versioned public evidence; the parent verifies the exact private
+receipt and dispatched run before consuming it. Cleanup fences this HTTP-only
+probe without requiring GitHub cancellation after stopping infrastructure
+executors. Public success leaves PROVISIONING and waits for PRIVATE_ACCEPTANCE;
+authenticated Argo/runtime and actual VPN-client checks are still required.
+These paths have offline tests and remain disabled pending live acceptance.
+
 Bootstrap verification:
 
 ```powershell

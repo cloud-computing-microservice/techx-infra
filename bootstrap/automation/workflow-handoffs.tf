@@ -21,6 +21,7 @@ locals {
       selector  = "techx-automation-chart-selector"
       preview   = "techx-automation-chart-reader"
       promotion = "techx-automation-promotion-approver"
+      public    = "techx-automation-public-acceptance"
     } : {}
   )
 }
@@ -34,5 +35,5 @@ resource "aws_iam_role_policy" "handoff_children" {
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.control.arn,
     Condition = { StringLike = { "s3:prefix" = ["handoffs/staging/*"] } } }
   ] })
-  depends_on = [aws_iam_role.plan_review, aws_iam_role.bootstrap_publisher, aws_iam_role.chart_selector, aws_iam_role.chart_reader, aws_iam_role.promotion_approver]
+  depends_on = [aws_iam_role.plan_review, aws_iam_role.bootstrap_publisher, aws_iam_role.chart_selector, aws_iam_role.chart_reader, aws_iam_role.promotion_approver, aws_iam_role.public_acceptance]
 }

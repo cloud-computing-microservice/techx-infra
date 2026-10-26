@@ -1009,3 +1009,38 @@ receipt prefix. It cannot read an unversioned receipt or write one; the worker
 is the producer. Terraform mock assertions cover that policy boundary, and the
 IAM contract contains allowed-version-read / denied-current-read / denied-write
 cases for live simulation before activation.
+
+### Hosted public acceptance (source only)
+
+After activation, `PUBLIC_ACCEPTANCE` dispatches the fixed protected
+`accept-public` handoff to `staging-acceptance.yml`. Its inputs bind the session,
+execution VersionId and activation checksum; neither a caller's pass flag nor
+an arbitrary URL is accepted. The new main-only `staging-acceptance` environment
+needs `AWS_PUBLIC_ACCEPTANCE_ROLE_ARN`, whose Terraform output is defined by
+`public-acceptance.tf`. The role is created only when lifecycle control is
+explicitly enabled. Both automation toggles remain false by default.
+
+The actual first-attempt run/source and GitHub-hosted Ubuntu job are verified
+through GitHub API evidence. A single-consumption public stage and heartbeat
+deploy lease protect the probe. Every request rechecks the session context,
+activation, budget, cleanup schedule and lease. Connections validate all DNS IP
+answers and the selected peer, verify TLS certificates/hostname, ignore proxy
+settings, reject redirects and bound responses. The storefront/API suite and
+static-cache observation run over this public connection, without a VPN or
+any Kubernetes/control credentials.
+
+Success writes `acceptance/staging/<session>/public/<dispatchId>/result.json`
+privately and pins its version/hash in the session. A bucket deny reserves
+evidence mutation for the public-probe role; the dispatcher can only read the
+exact version. Failure records a bounded classification, not response bodies,
+then requests cleanup through the existing failed-workflow orchestration.
+Unknown/partial evidence never becomes PASSED. Cleanup can fence this role's
+HTTP-only work without GitHub cancellation; all infrastructure executors still
+require their existing stop/termination proof before takeover.
+
+The parent consumes only the receipt belonging to its dispatched run and exact
+activation predecessor. Success changes the waiting point to
+`PRIVATE_ACCEPTANCE`; it never marks READY. Argo authenticated private access,
+actual running chart/digests and Client VPN end-to-end still require the private
+worker. This public path has not been accepted against AWS/Cloudflare; no live
+resources are created by its offline tests.

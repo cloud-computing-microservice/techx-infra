@@ -20,6 +20,7 @@ from certificate_recovery import reconcile_certificates
 from secret_recovery import reconcile_secrets
 from shop_dns_recovery import cleanup_shop_dns
 from cloudflare_dns import validate_shop_intent
+from public_acceptance_contract import OWNER as PUBLIC_PROBE_OWNER
 from leased_command import execute
 
 
@@ -60,6 +61,12 @@ def prepare_takeover(clients, record, owner, bucket):
         match = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", previous)
         if match:
             expected_instance = match[1]
+        elif re.fullmatch(PUBLIC_PROBE_OWNER, previous):
+            # This role has no infrastructure mutation authority. Fencing its
+            # public HTTP probe does not depend on GitHub cancellation. Every
+            # request and evidence CAS rechecks this lease; in-flight HTTP is
+            # bounded and cannot recreate any AWS/DNS resource during teardown.
+            if lease.get("operation") != "deploy": raise ValueError("Unexpected public probe lease operation")
         elif previous not in stopped_managers:
             stop_executor(clients["codebuild"], previous, owner)
             stopped_managers.add(previous)

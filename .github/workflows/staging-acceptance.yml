@@ -1,0 +1,80 @@
+name: Verify public staging acceptance
+run-name: TechX handoff ${{ inputs.dispatch_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      dispatch_id:
+        description: Protected orchestration handoff identity
+        required: true
+        type: string
+      session_id:
+        description: Existing admitted staging session
+        required: true
+        type: string
+      execution_version:
+        description: Immutable S3 execution VersionId
+        required: true
+        type: string
+      activation_sha256:
+        description: Exact committed activation receipt checksum
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: staging-public-acceptance
+  cancel-in-progress: false
+jobs:
+  public:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1 && vars.LIFECYCLE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: staging-acceptance
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      TECHX_DISPATCH_ID: ${{ inputs.dispatch_id }}
+      SESSION_ID: ${{ inputs.session_id }}
+      EXECUTION_VERSION: ${{ inputs.execution_version }}
+      ACTIVATION_SHA256: ${{ inputs.activation_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate fixed acceptance inputs
+        run: |
+          python - <<'PY'
+          import os, re
+          assert re.fullmatch(r'staging-[A-Za-z0-9-]{1,64}', os.environ['SESSION_ID'])
+          assert re.fullmatch(r'[A-Za-z0-9_./+=-]{1,1024}', os.environ['EXECUTION_VERSION'])
+          for key in ('TECHX_DISPATCH_ID', 'ACTIVATION_SHA256'):
+              assert re.fullmatch(r'[a-f0-9]{64}', os.environ[key])
+          PY
+      - run: python -m pip install -r scripts/requirements-automation.txt
+      - uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
+        with:
+          role-to-assume: ${{ vars.AWS_PUBLIC_ACCEPTANCE_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: '058114477594'
+          role-session-name: techx-public-${{ github.run_id }}
+          role-duration-seconds: 1800
+      - name: Run leased public probes and save private evidence
+        env:
+          CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/public_acceptance.py --bucket "$CONTROL_BUCKET" --session-id "$SESSION_ID" \
+            --execution-version "$EXECUTION_VERSION" --activation-sha256 "$ACTIVATION_SHA256"
+  notify:
+    needs: public
+    if: always() && vars.LIFECYCLE_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/staging-wakeup.yml
+    with:
+      session_id: ${{ inputs.session_id }}
+      execution_version: ${{ inputs.execution_version }}

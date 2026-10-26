@@ -270,6 +270,13 @@ class CallbackTests(unittest.TestCase):
         self.assertEqual(self.resolve()["waiting"], "NO_ACTIVE_SESSION")
         self.assertFalse(self.cleanup)
 
+    def test_manual_wakeup_of_the_exact_failed_session_requests_cleanup_without_advancing(self):
+        self.own["event"] = "workflow_dispatch"
+        self.f.record["status"] = "FAILED_NEEDS_CLEANUP"
+        inputs = dict(session_id=self.f.record["sessionId"], execution_version=self.d.version)
+        result = self.resolve(event_name="workflow_dispatch", event=dict(inputs=inputs))
+        self.assertTrue(result["boundFailure"])
+
     def test_cleanup_request_does_not_touch_a_newer_or_destroyed_session(self):
         self.assertTrue(request_cleanup(self.d.clients, self.d.store, self.d.execution, self.d.version))
         self.assertEqual(len(self.cleanup), 1)

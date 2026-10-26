@@ -71,7 +71,7 @@ def resolve(clients, store, bucket, github, *, run_id, source_sha, event_name, e
             or any(root.get(key, {}).get("full_name") != INFRA_REPO for key in ("repository", "head_repository"))):
         raise ValueError("Opening workflow identity differs from the protected admission")
     if root.get("status") != "completed": return dict(waiting="OPENING_WORKFLOW_RUNNING")
-    bound_failure = root.get("conclusion") != "success"
+    bound_failure = root.get("conclusion") != "success" or current["status"] == "FAILED_NEEDS_CLEANUP"
     if chart_run_id is not None:
         if chart is None: raise ValueError("Chart callback requires independent read-only GitHub evidence")
         if not bound_chart_run(clients["s3"], bucket, current, execution, object_version, chart, chart_run_id):

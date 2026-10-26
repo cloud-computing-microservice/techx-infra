@@ -28,7 +28,9 @@ def fence_session(record, owner, executor_stopped=False):
 
     They cannot create infrastructure, namespaces or ECR repositories. Changing
     status/epoch closes promotion and their next heartbeat terminates the command.
-    Infrastructure/acceptance/cleanup executors require AWS terminal-state proof.
+    Infrastructure/cleanup executors require AWS terminal-state proof. The
+    public HTTP-only probe role has no infrastructure authority; its caller
+    fences it after confirming all infrastructure managers/hosts are terminal.
     """
     validate(record)
     lease = record.get("lease", {})

@@ -250,6 +250,23 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Continuation must read pinned activation receipt versions without gaining private receipt write authority."
   }
   assert {
+    condition = (
+      jsondecode(aws_iam_role.public_acceptance[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-infra:environment:staging-acceptance" &&
+      alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.public_acceptance[0].policy).Statement : [for action in statement.Action :
+        contains(["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "kms:Decrypt", "kms:GenerateDataKey", "scheduler:GetSchedule"], action)
+      ]])) &&
+      alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.public_acceptance[0].policy).Statement : [for resource in flatten([statement.Resource]) :
+        contains(["arn:aws:s3:::techx-test-control/automation/staging/session.json", "arn:aws:s3:::techx-test-control/acceptance/staging/*/public/*"], resource)
+        ] if contains(statement.Action, "s3:PutObject")
+      ])) &&
+      length([for statement in data.aws_iam_policy_document.control.statement : statement if
+        statement.sid == "OnlyPublicProbeCanWritePublicAcceptance" && statement.effect == "Deny" &&
+        contains(statement.resources, "arn:aws:s3:::techx-test-control/acceptance/staging/*/public/*")
+      ]) == 1
+    )
+    error_message = "Public probes require their main-only role and producer-only evidence prefix, without deployment or secret access."
+  }
+  assert {
     condition = toset(jsondecode(aws_iam_role.lifecycle_dispatcher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]) == toset([
       "repo:cloud-computing-microservice/techx-infra:environment:staging-lifecycle", "repo:cloud-computing-microservice/techx-infra:environment:staging-start"
     ])
@@ -364,7 +381,7 @@ run "lifecycle_is_scoped_and_pinned" {
       anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
         contains(condition.values, "arn:aws:iam::058114477594:role/techx-automation-lifecycle-dispatcher")
       ])
-      ]) == 1 && length(aws_iam_role_policy.handoff_children) == 6 &&
+      ]) == 1 && length(aws_iam_role_policy.handoff_children) == 7 &&
       alltrue(flatten([for policy in aws_iam_role_policy.handoff_children : [for statement in jsondecode(policy.policy).Statement : [for action in statement.Action :
         contains(["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket"], action)
     ]]])))

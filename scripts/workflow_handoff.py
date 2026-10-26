@@ -23,6 +23,7 @@ WORKFLOWS = {
     "reuse-chart": (INFRA_REPO, "staging-chart-reuse.yml"),
     "select-chart": (INFRA_REPO, "staging-chart-select.yml"),
     "review-promotion": (INFRA_REPO, "staging-chart-promote.yml"),
+    "accept-public": (INFRA_REPO, "staging-acceptance.yml"),
 }
 LIVE = {"queued", "requested", "waiting", "pending", "in_progress"}
 
@@ -57,6 +58,10 @@ def target_for(operation, record, execution, *, chart_sha=None, pr_number=None):
             sha(chart_sha)
             if type(pr_number) is not int or pr_number < 1: raise ValueError("A verified merged proposal PR is required")
             inputs.update(chart_sha=chart_sha, pr_number=str(pr_number))
+        if operation == "accept-public":
+            from deployment_tasks import validate_exposure_checkpoint
+            stage = validate_exposure_checkpoint(record)
+            inputs["activation_sha256"] = stage["receiptReference"]["sha256"]
     source = execution["sourceRevisions"][repository.rsplit("/", 1)[1]]
     return dict(operation=operation, repository=repository, workflow=workflow, sourceSha=sha(source), inputs=inputs)
 
@@ -70,6 +75,8 @@ def intent_for(record, execution_version, target):
     body = dict(schemaVersion=1, context={key: deepcopy(record[key]) for key in CONTEXT}, executionVersion=execution_version,
         target=deepcopy(target), predecessor={key: deepcopy(record.get(key)) for key in
             ("lifecycleDispatch", "pendingPlan", "bootstrapRelease", "bootstrapProposal", "bootstrapChart")})
+    if target["operation"] == "accept-public":
+        body["predecessor"].update(stages=deepcopy(record["stages"]), status=record["status"])
     dispatch_id = checksum(body)
     return dict(body, dispatchId=dispatch_id)
 

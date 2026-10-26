@@ -68,6 +68,10 @@ python (Join-Path $PSScriptRoot 'test-gitops-bootstrap.py')
 if ($LASTEXITCODE -ne 0) { throw 'GitOps bootstrap verification failed.' }
 python (Join-Path $PSScriptRoot 'test-edge-activation.py')
 if ($LASTEXITCODE -ne 0) { throw 'Committed edge activation, DNS ownership and cleanup recovery tests failed.' }
+python (Join-Path $PSScriptRoot 'test-public-probe.py')
+if ($LASTEXITCODE -ne 0) { throw 'Public storefront HTTPS/API/cache/request-ID probe tests failed.' }
+python (Join-Path $PSScriptRoot 'test-public-acceptance.py')
+if ($LASTEXITCODE -ne 0) { throw 'Protected hosted public acceptance, lease and evidence tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-coordinator.py')
 if ($LASTEXITCODE -ne 0) { throw 'Lifecycle startup, cleanup-arming and uncertain-response regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-admission.py')

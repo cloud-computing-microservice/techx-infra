@@ -1,13 +1,15 @@
 from copy import deepcopy
 from datetime import timedelta
 import importlib.util
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from plan_review_store import checksum
-from review_chart_promotion import authorize_promotion, ENVIRONMENT, PromotionReview, WORKFLOW
+from plan_review_store import checksum, encoded
+from review_chart_promotion import authorize_promotion, ENVIRONMENT, PromotionReview, promotion_index_key, WORKFLOW
+from workflow_handoff import intent_for, intent_key, receipt_key, target_for
 
 spec = importlib.util.spec_from_file_location("promotion_review_support", Path(__file__).with_name("test-chart-promotion.py"))
 support = importlib.util.module_from_spec(spec)
@@ -62,6 +64,58 @@ class PromotionReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Preview identity"):
             self.reader.approve(self.f.source, self.p.chart, self.infra, request, checksum(request), app_id=12345, app_slug="techx-promotion")
         self.assertFalse(self.f.writes)
+
+    def automatic_review(self):
+        target = target_for("review-promotion", self.f.record, self.f.execution)
+        intent = intent_for(self.f.record, "exec-v1", target)
+        dispatch_id = intent["dispatchId"]
+        key = intent_key(self.f.record["sessionId"], dispatch_id)
+        ref = dict(key=key, versionId="v1", sha256=checksum(intent))
+        self.f.objects[key] = encoded(intent)
+        self.f.record["workflowHandoff"] = dict(id=dispatch_id, phase="OBSERVED", intentReference=ref)
+        self.receipt_key = receipt_key(self.f.record["sessionId"], dispatch_id)
+        self.f.objects[self.receipt_key] = encoded(dict(schemaVersion=1, dispatchId=dispatch_id, intentReference=ref,
+            response=dict(workflow_run_id=100, run_url="https://api.github.com/repos/cloud-computing-microservice/techx-infra/actions/runs/100",
+                          html_url="https://github.com/cloud-computing-microservice/techx-infra/actions/runs/100")))
+        get = self.f.clients["s3"].get_object
+        self.f.clients["s3"].get_object = lambda **kw: dict(VersionId="session-v1", Body=io.BytesIO(encoded(self.f.record))) \
+            if kw["Key"] == "automation/staging/session.json" else get(**kw)
+        self.reader.dispatch_id = self.writer.dispatch_id = dispatch_id
+
+    def test_automatic_review_requires_actual_receipt_and_publishes_exact_run_index(self):
+        self.automatic_review()
+        request = self.preview()
+        ref = self.approve(request)
+        key = promotion_index_key(self.f.record["sessionId"], 100)
+        index = json.loads(self.f.objects[key])
+        self.assertEqual(index["approvalReference"], ref)
+        self.assertEqual(index["workflowRun"], request["workflowRun"])
+        self.assertEqual(index["dispatchId"], self.reader.dispatch_id)
+        self.assertEqual(self.f.writes, [ref["key"], key])
+        self.assertEqual(self.f.etag, 1)
+
+    def test_automatic_child_cannot_preview_or_publish_under_another_run_receipt(self):
+        self.automatic_review()
+        receipt = json.loads(self.f.objects[self.receipt_key])
+        receipt["response"] = dict(workflow_run_id=101,
+            run_url="https://api.github.com/repos/cloud-computing-microservice/techx-infra/actions/runs/101",
+            html_url="https://github.com/cloud-computing-microservice/techx-infra/actions/runs/101")
+        self.f.objects[self.receipt_key] = encoded(receipt)
+        with self.assertRaisesRegex(ValueError, "protected dispatched run"): self.preview()
+        self.assertFalse(self.f.writes)
+
+    def test_cleanup_after_grant_write_cannot_publish_a_discoverable_index(self):
+        self.automatic_review()
+        request = self.preview()
+        put = self.f.clients["s3"].put_object
+        def cleanup(**kw):
+            result = put(**kw)
+            self.f.record["status"] = "DESTROYING"
+            return result
+        self.f.clients["s3"].put_object = cleanup
+        with self.assertRaises(ValueError): self.approve(request)
+        self.assertEqual(len(self.f.writes), 1)
+        self.assertNotIn(promotion_index_key(self.f.record["sessionId"], 100), self.f.objects)
 
     def test_wrong_role_session_run_or_source_is_rejected(self):
         self.identity("promotion-approver", "promotion-approve")

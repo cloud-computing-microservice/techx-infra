@@ -350,7 +350,7 @@ run "lifecycle_is_scoped_and_pinned" {
       anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
         contains(condition.values, "arn:aws:iam::058114477594:role/techx-automation-lifecycle-dispatcher")
       ])
-      ]) == 1 && length(aws_iam_role_policy.handoff_children) == 5 &&
+      ]) == 1 && length(aws_iam_role_policy.handoff_children) == 6 &&
       alltrue(flatten([for policy in aws_iam_role_policy.handoff_children : [for statement in jsondecode(policy.policy).Statement : [for action in statement.Action :
         contains(["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket"], action)
     ]]])))

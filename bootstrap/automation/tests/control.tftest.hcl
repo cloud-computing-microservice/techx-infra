@@ -236,6 +236,20 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Manager must use the immutable loader, no Docker privilege and one build at a time."
   }
   assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.lifecycle_dispatcher[0].policy).Statement : statement if
+        statement.Resource == "arn:aws:s3:::techx-test-control/private/staging/*/exposure/*.json" &&
+        toset(statement.Action) == toset(["s3:GetObjectVersion"])
+      ]) == 1 &&
+      alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.lifecycle_dispatcher[0].policy).Statement : [
+        for resource in flatten([statement.Resource]) :
+        !strcontains(resource, "/private/staging/") || resource == "arn:aws:s3:::techx-test-control/private/staging/*/inputs.json"
+        ] if contains(statement.Action, "s3:PutObject")
+      ]))
+    )
+    error_message = "Continuation must read pinned activation receipt versions without gaining private receipt write authority."
+  }
+  assert {
     condition = toset(jsondecode(aws_iam_role.lifecycle_dispatcher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]) == toset([
       "repo:cloud-computing-microservice/techx-infra:environment:staging-lifecycle", "repo:cloud-computing-microservice/techx-infra:environment:staging-start"
     ])

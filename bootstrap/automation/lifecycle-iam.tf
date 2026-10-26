@@ -214,6 +214,7 @@ resource "aws_iam_role_policy" "lifecycle_dispatcher" {
   name  = "reserve-session-arm-cleanup-dispatch-fixed-manager"
   role  = aws_iam_role.lifecycle_dispatcher[0].name
   policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = "${aws_s3_bucket.control.arn}/private/staging/*/exposure/*.json" },
     { Effect = "Allow", Action = ["s3:ListBucket", "s3:GetBucketVersioning", "s3:GetEncryptionConfiguration"], Resource = aws_s3_bucket.control.arn },
     { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [for prefix in ["automation/staging/session.json", "staging/terraform.tfstate", "staging/terraform.tfstate.tflock", "control/staging/executor-config.json", "executions/*", "bundles/*", "private/staging/*/plans/*/*/request.json", "approvals/staging/*", "releases/staging/*/bootstrap.json", "chart-selections/staging/*/bootstrap.json"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
     { Effect = "Allow", Action = ["s3:PutObject"], Resource = [for prefix in ["automation/staging/session.json", "control/staging/current-execution.json", "executions/*", "bundles/*", "private/staging/*/inputs.json", "staging/terraform.tfstate", "staging/terraform.tfstate.tflock"] : "${aws_s3_bucket.control.arn}/${prefix}"] },

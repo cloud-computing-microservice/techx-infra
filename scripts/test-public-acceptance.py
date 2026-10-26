@@ -185,7 +185,7 @@ class PublicAcceptanceTests(unittest.TestCase):
         engine.handoffs.phase.assert_called_once_with(self.dispatch, "CONSUMED")
         with self.assertRaises(ValueError): engine.consume(deepcopy(self.f.record), intent_data, dict(id=502))
         from lifecycle_dispatch import next_operation, operation
-        self.assertEqual(next_operation(self.f.record, operation("activate", "exposure")), dict(waiting="PRIVATE_ACCEPTANCE"))
+        self.assertEqual(next_operation(self.f.record, operation("activate", "exposure")), operation("verify", "private"))
         self.assertEqual(self.f.record["status"], "PROVISIONING")
 
     def test_dispatch_intent_cannot_be_rebound_to_changed_activation(self):

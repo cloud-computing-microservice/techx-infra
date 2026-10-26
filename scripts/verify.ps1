@@ -72,6 +72,12 @@ python (Join-Path $PSScriptRoot 'test-public-probe.py')
 if ($LASTEXITCODE -ne 0) { throw 'Public storefront HTTPS/API/cache/request-ID probe tests failed.' }
 python (Join-Path $PSScriptRoot 'test-public-acceptance.py')
 if ($LASTEXITCODE -ne 0) { throw 'Protected hosted public acceptance, lease and evidence tests failed.' }
+python (Join-Path $PSScriptRoot 'test-vpn-probe.py')
+if ($LASTEXITCODE -ne 0) { throw 'Actual Client VPN connection identity, route and disconnect evidence tests failed.' }
+python (Join-Path $PSScriptRoot 'test-private-http.py')
+if ($LASTEXITCODE -ne 0) { throw 'Private VPN HTTPS/TLS and credential containment tests failed.' }
+python (Join-Path $PSScriptRoot 'test-private-acceptance.py')
+if ($LASTEXITCODE -ne 0) { throw 'Authenticated private runtime/resilience and atomic READY release tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-coordinator.py')
 if ($LASTEXITCODE -ne 0) { throw 'Lifecycle startup, cleanup-arming and uncertain-response regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-lifecycle-admission.py')

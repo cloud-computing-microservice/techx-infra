@@ -1040,7 +1040,47 @@ require their existing stop/termination proof before takeover.
 
 The parent consumes only the receipt belonging to its dispatched run and exact
 activation predecessor. Success changes the waiting point to
-`PRIVATE_ACCEPTANCE`; it never marks READY. Argo authenticated private access,
+the private `verify/private/1` task; it never marks READY. Argo authenticated private access,
 actual running chart/digests and Client VPN end-to-end still require the private
 worker. This public path has not been accepted against AWS/Cloudflare; no live
 resources are created by its offline tests.
+
+### Private VPN acceptance and READY handoff (source only)
+
+Public PASSED now dispatches the fixed `verify/private/1` task through the same
+manager, immutable bundle, SSM document and single-consumer task CAS. No manual
+VPN profile or operator password file is required. `run_private_acceptance.py`
+reads the exact already-observed bootstrap PKI secret version; it never creates
+or rotates credentials. The reviewed Ubuntu recipe installs OpenVPN 2.6 and
+iproute2. This changes the pinned image build contract: an older AMI cannot be
+reused without baking and validating the updated recipe.
+
+The executor remains in the separate control VPC. It exports only the owned
+staging endpoint configuration, validates its CA/server identity and constructs
+a restricted UDP/443 mutual-TLS profile in a temporary private directory. It
+does not trust connection log text: AWS must observe a new exact connection ID,
+operator common name and client address, matching the local TUN address/route.
+Private DNS must resolve both the storefront and admitted internal ALB to the
+workload CIDR. HTTPS verifies the certificate/SNI and socket peer/source through
+that tunnel; redirects, public routing and credential-bearing logs are rejected.
+
+Acceptance authenticates to Argo with the Kubernetes admin secret, verifies
+the exact Synced/Healthy chart revision, all three ready runtime image digests,
+immutable ECR artifacts and completed scans, plus DynamoDB table/TTL and IRSA
+configuration. It observes replica drift/self-heal and a genuine replacement
+Order Pod, then checks the existing order totals and idempotent replay again.
+A failed self-heal may restore the replica while the lease is valid, but that
+restoration never counts as a passed test. The VPN connection must be positively
+observed terminated and the local TUN removed before success is recorded.
+
+The versioned receipt is private at
+`private/staging/<session>/acceptance/<taskId>.json`. A bucket deny permits only
+the deployment executor to write it; the dispatcher receives version-read only.
+The parent rereads activation, public and private receipts after the child is
+terminal and publishes `READY`, `acceptedRelease` and lease release in one CAS.
+The manager still requires successful terminal SSM evidence, and continuation
+requires the exact successful terminal CodeBuild operation before returning
+READY. Read-only READY observation cannot start another cold task. Test-only
+sessions request independent cleanup immediately; window sessions retain their
+original cleanup schedule/deadline. Live VPN/IAM/AMI and full cold-start
+acceptance remain unverified; both automation flags stay off.

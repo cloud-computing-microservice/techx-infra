@@ -241,13 +241,17 @@ run "lifecycle_is_scoped_and_pinned" {
         statement.Resource == "arn:aws:s3:::techx-test-control/private/staging/*/exposure/*.json" &&
         toset(statement.Action) == toset(["s3:GetObjectVersion"])
       ]) == 1 &&
+      length([for statement in jsondecode(aws_iam_role_policy.lifecycle_dispatcher[0].policy).Statement : statement if
+        statement.Resource == "arn:aws:s3:::techx-test-control/private/staging/*/acceptance/*.json" &&
+        toset(statement.Action) == toset(["s3:GetObjectVersion"])
+      ]) == 1 &&
       alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.lifecycle_dispatcher[0].policy).Statement : [
         for resource in flatten([statement.Resource]) :
         !strcontains(resource, "/private/staging/") || resource == "arn:aws:s3:::techx-test-control/private/staging/*/inputs.json"
         ] if contains(statement.Action, "s3:PutObject")
       ]))
     )
-    error_message = "Continuation must read pinned activation receipt versions without gaining private receipt write authority."
+    error_message = "Continuation must read pinned activation/private acceptance versions without gaining private receipt write authority."
   }
   assert {
     condition = (
@@ -292,6 +296,29 @@ run "lifecycle_is_scoped_and_pinned" {
   assert {
     condition     = length(aws_security_group.executor_control[0].ingress) == 0
     error_message = "Executor control network must have no inbound rule."
+  }
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.executor_vpn[0].ip_protocol == "udp" &&
+      aws_vpc_security_group_egress_rule.executor_vpn[0].from_port == 443 &&
+      aws_vpc_security_group_egress_rule.executor_vpn[0].to_port == 443 &&
+      aws_vpc_security_group_egress_rule.executor_vpn[0].cidr_ipv4 == "0.0.0.0/0" &&
+      alltrue([for rule in aws_vpc_security_group_egress_rule.executor_dns : rule.cidr_ipv4 == "172.30.0.2/32" && rule.from_port == 53 && rule.to_port == 53]) &&
+      anytrue([for statement in jsondecode(aws_iam_policy.deployment_executor["network"].policy).Statement :
+        toset(statement.Action) == toset(["ec2:ExportClientVpnClientConfiguration", "ec2:TerminateClientVpnConnections"]) &&
+        statement.Resource == "arn:aws:ec2:us-east-1:058114477594:client-vpn-endpoint/*" &&
+        try(statement.Condition.StringEquals["ec2:ResourceTag/Project"] == "techx" && statement.Condition.StringEquals["ec2:ResourceTag/Environment"] == "staging", false)
+      ]) &&
+      length([for statement in data.aws_iam_policy_document.control.statement : statement if
+        statement.sid == "OnlyDeploymentExecutorCanWritePrivateAcceptance" && statement.effect == "Deny" &&
+        contains(statement.resources, "arn:aws:s3:::techx-test-control/private/staging/*/acceptance/*") &&
+        toset(statement.actions) == toset(["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]) &&
+        anytrue([for condition in statement.condition : condition.test == "ArnNotEquals" && condition.variable == "aws:PrincipalArn" &&
+          toset(condition.values) == toset(["arn:aws:iam::058114477594:role/techx-automation-lifecycle-executor"])
+        ])
+      ]) == 1
+    )
+    error_message = "Private verification needs scoped VPN UDP egress, tagged endpoint operations and executor-only evidence writes."
   }
   assert {
     condition     = alltrue([for p in aws_iam_policy.lifecycle_manager : length(p.policy) <= 6144]) && alltrue([for p in aws_iam_policy.deployment_executor : length(p.policy) <= 6144]) && length(aws_iam_policy.workload_boundary[0].policy) <= 6144

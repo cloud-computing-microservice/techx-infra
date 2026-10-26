@@ -47,7 +47,7 @@ def admitted_task(client, bucket, task_id, instance_id, now):
     if (digest != ref.get("sha256") or task.get("schemaVersion") != 1 or task.get("taskId") != task_id
             or task.get("sessionId") != record.get("sessionId") or task.get("executionVersion") != record.get("executionVersion")
             or task.get("instanceId") != instance_id
-            or (task.get("mode"), task.get("stage")) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure")}
+            or (task.get("mode"), task.get("stage")) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private")}
             or type(task.get("attempt")) is not int or task["attempt"] < 1):
         raise ValueError("Task intent differs from the admitted pointer")
     def utc(value):
@@ -94,7 +94,7 @@ def run_task(clients, bucket, kms, task_id, base, *, run=subprocess.run, clock=N
     try:
         with log.open("xb") as output:
             log.chmod(0o600)
-            worker = {"bootstrap": "run_gitops_bootstrap.py", "promote": "run_chart_promotion.py", "activate": "run_edge_activation.py"}.get(task["mode"], "run_lifecycle_stage.py")
+            worker = {"bootstrap": "run_gitops_bootstrap.py", "promote": "run_chart_promotion.py", "activate": "run_edge_activation.py", "verify": "run_private_acceptance.py"}.get(task["mode"], "run_lifecycle_stage.py")
             run([sys.executable, str(infra / "scripts" / worker), task["mode"], "--stage", task["stage"],
                  "--attempt", str(task["attempt"]), "--execution", str(directory / "execution.json"),
                  "--execution-version", task["executionVersion"], "--bucket", bucket, "--kms-key", kms,

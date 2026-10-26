@@ -39,7 +39,7 @@ def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, s
     end = monotonic() + 2400
     for _ in range(observations):
         if monotonic() >= end: break
-        record, _ = dispatcher.current(idle=False)
+        record, _ = dispatcher.current(idle=False, allow_ready=True)
         build = observed_build(dispatcher.clients["codebuild"], record)
         if build.get("buildStatus") == "IN_PROGRESS" and build.get("buildComplete") is False:
             sleep(max(0, min(10, end - monotonic())))
@@ -47,7 +47,9 @@ def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, s
         if build.get("buildStatus") != "SUCCEEDED" or build.get("buildComplete") is not True:
             dispatcher.cleanup()
             raise ValueError("Manager failed or returned an unknown terminal result; independent cleanup requested")
-        if resume_approved:
+        if record["status"] == "READY":
+            result = dispatcher.advance()
+        elif resume_approved:
             result = coordinator.resume_approved(record["sessionId"])
             resume_approved = False  # This run never consumes a later review.
         else:
@@ -59,7 +61,7 @@ def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, s
             return result
     # Read the exact current pointer again. Never restart because observation
     # expired; an operator or future caller can continue this same AWS build.
-    record, _ = dispatcher.current(idle=False)
+    record, _ = dispatcher.current(idle=False, allow_ready=True)
     build = observed_build(dispatcher.clients["codebuild"], record)
     return dict(sessionId=record["sessionId"], executionVersion=dispatcher.version, waiting="OBSERVATION_LIMIT",
                 buildId=build["id"], buildStatus=build.get("buildStatus"))
@@ -87,8 +89,11 @@ def main():
     store = S3SessionStore(args.bucket)
     dispatcher = Dispatcher(clients, store, args.bucket, execution, args.execution_version)
     # Stale identity/session/deadline fails before entering any cleanup handler.
-    dispatcher.current(idle=False)
+    dispatcher.current(idle=False, allow_ready=True)
     result = drive(dispatcher, Coordinator(clients, store, args.bucket), resume_approved=args.resume_approved)
+    if result.get("waiting") == "READY" and execution["action"] == "deploy-test-destroy":
+        from orchestrate_lifecycle import request_cleanup
+        result = dict(waiting="CLEANUP_REQUESTED", requestAcknowledged=request_cleanup(clients, store, execution, args.execution_version))
     print(json.dumps(result, sort_keys=True))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

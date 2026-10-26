@@ -27,11 +27,13 @@ def terminate(process):
             process.wait(timeout=10)
 
 
-def execute(store, owner, operation, session_id, command, renew_seconds=30, popen=subprocess.Popen, success_status=None):
+def execute(store, owner, operation, session_id, command, renew_seconds=30, popen=subprocess.Popen, success_status=None, ready_release=None):
     if not command or not 1 <= renew_seconds <= 120:
         raise ValueError("A command and bounded heartbeat are required")
     if success_status is not None and (operation != "deploy" or success_status != "READY"):
         raise ValueError("Only a completed deploy command may hand off READY")
+    if ready_release is not None and success_status != "READY":
+        raise ValueError("Accepted release payload requires the terminal READY handoff")
     record, etag = store.read()
     if record["sessionId"] != session_id:
         raise ValueError("Expected session changed")
@@ -69,7 +71,14 @@ def execute(store, owner, operation, session_id, command, renew_seconds=30, pope
                 # Do not publish READY while the child is still executing or
                 # leave a deploy heartbeat trying to renew in READY.
                 claim(current, owner, operation, ttl_seconds=300)
+                accepted = ready_release(current) if ready_release is not None else None
+                if ready_release is not None:
+                    latest, latest_etag = store.read()
+                    if latest != current or latest_etag != current_etag:
+                        raise ValueError("Session changed while verifying the accepted READY release")
+                    claim(current, owner, operation, ttl_seconds=300)
                 finished = transition(current, owner, success_status)
+                if accepted is not None: finished["acceptedRelease"] = accepted
             except ValueError:
                 store.write(release(current, owner, epoch), current_etag)
                 raise

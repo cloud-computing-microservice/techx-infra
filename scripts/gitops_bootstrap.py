@@ -150,7 +150,7 @@ class GitOpsBootstrap:
             raise ValueError("Existing Application selects different GitOps configuration")
         self.apply(app)
 
-    def observe_ready(self):
+    def observe_ready(self, *, allow_readiness_restart=True):
         app = self.get("application", APPLICATION, "argocd") or {}
         if app.get("spec", {}).get("source", {}).get("targetRevision") != self.selected["chartSha"]:
             raise ValueError("Application revision changed during bootstrap")
@@ -191,6 +191,7 @@ class GitOpsBootstrap:
             if name == "frontend": frontend = pod
         gates = [row["conditionType"] for row in frontend["spec"].get("readinessGates", []) if row.get("conditionType", "").startswith(READINESS)]
         if not gates:
+            if not allow_readiness_restart: return False
             bindings = self.kubectl("get", "targetgroupbindings.elbv2.k8s.aws", "-n", NAMESPACE, "-o", "json")["items"]
             if not any(row.get("spec", {}).get("serviceRef", {}).get("name") == "frontend" and row["spec"].get("targetType") == "ip" for row in bindings):
                 return False

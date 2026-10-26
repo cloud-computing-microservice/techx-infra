@@ -99,7 +99,7 @@ resource "aws_route_table_association" "executor_control" {
 resource "aws_security_group" "executor_control" {
   count       = local.executor_network_enabled ? 1 : 0
   name        = "techx-automation-deployment-control"
-  description = "No inbound; HTTPS and VPC DNS egress only; no SSH or NAT"
+  description = "No inbound; HTTPS, Client VPN UDP and VPC DNS egress only; no SSH or NAT"
   vpc_id      = aws_vpc.executor_control[0].id
   tags        = local.executor_network_tags
 }
@@ -125,6 +125,20 @@ resource "aws_vpc_security_group_egress_rule" "executor_dns" {
   from_port         = 53
   to_port           = 53
   cidr_ipv4         = "172.30.0.2/32"
+}
+
+# Client VPN endpoints resolve to dynamic public addresses. The worker pins the
+# endpoint/account/region, mutual-TLS CA and server identity before connecting.
+# No inbound rule, general UDP or internet DNS exception is introduced.
+#trivy:ignore:AWS-0104
+resource "aws_vpc_security_group_egress_rule" "executor_vpn" {
+  count             = local.executor_network_enabled ? 1 : 0
+  security_group_id = aws_security_group.executor_control[0].id
+  description       = "Owned staging Client VPN over mutual-TLS UDP 443"
+  ip_protocol       = "udp"
+  from_port         = 443
+  to_port           = 443
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 data "aws_ami" "executor" {

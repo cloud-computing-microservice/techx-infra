@@ -24,6 +24,28 @@ class MemoryStore:
 
 
 class LeaseCommandTests(unittest.TestCase):
+    def test_ready_receipt_failure_or_concurrent_takeover_never_publishes_release(self):
+        for takeover in (False, True):
+            store = MemoryStore()
+            store.record["status"] = "PROVISIONING"
+            class Child:
+                def wait(self, timeout): return 0
+                def poll(self): return 0
+            def accepted(record):
+                if not takeover: raise ValueError("Receipt checksum mismatch")
+                newer = copy.deepcopy(store.record)
+                newer["status"] = "DESTROYING"
+                newer["lease"] = dict(owner="cleanup:101", epoch=99)
+                store.write(newer, store.version)
+                return dict(platformSha="a" * 40)
+            with self.subTest(takeover=takeover), self.assertRaises(ValueError):
+                execute(store, "infra:100", "deploy", "staging-123456", ["trusted"], popen=lambda *a, **kw: Child(),
+                    success_status="READY", ready_release=accepted)
+            self.assertNotEqual(store.record["status"], "READY")
+            self.assertNotIn("acceptedRelease", store.record)
+            if takeover: self.assertEqual(store.record["lease"]["owner"], "cleanup:101")
+            else: self.assertNotIn("lease", store.record)
+
     def test_deploy_ready_handoff_occurs_after_child_terminal_in_one_cas(self):
         store = MemoryStore()
         store.record["status"] = "PROVISIONING"

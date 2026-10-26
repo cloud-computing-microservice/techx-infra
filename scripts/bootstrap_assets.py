@@ -86,6 +86,31 @@ def read_cloudflare_client(runtime, guard):
     return CloudflareDNS(credentials["zoneId"], credentials["apiToken"], guard=guard)
 
 
+def read_existing_secret(runtime, purpose, guard):
+    """Read an already-observed bootstrap version; never create or rotate it."""
+    if purpose not in ("vpn-pki", "order-api-key"): raise ValueError("Unsupported bootstrap secret read")
+    session = runtime.execution["sessionId"]
+    name = f"techx/staging/{session}/{purpose}"
+    token = hashlib.sha256(f"{session}:{purpose}:v1".encode()).hexdigest()
+    ref = runtime.private.get("bootstrapSecrets", {}).get(purpose, {})
+    if (set(ref) != {"name", "arn", "versionId", "phase"} or ref.get("name") != name
+            or ref.get("versionId") != token or ref.get("phase") != "OBSERVED"
+            or not re.fullmatch(rf"arn:aws:secretsmanager:us-east-1:{ACCOUNT}:secret:{re.escape(name)}-[A-Za-z0-9]{{6}}", ref.get("arn", ""))):
+        raise ValueError("An exact observed bootstrap secret reference is required")
+    client = runtime.clients["secretsmanager"]
+    guard()
+    metadata = client.describe_secret(SecretId=ref["arn"])
+    if (metadata.get("ARN") != ref["arn"] or metadata.get("Name") != name or metadata.get("KmsKeyId") != runtime.kms
+            or metadata.get("DeletedDate") or {row["Key"]: row["Value"] for row in metadata.get("Tags", [])} != tags(session, purpose)
+            or metadata.get("VersionIdsToStages", {}).get(token) != ["AWSCURRENT"]):
+        raise ValueError("Observed bootstrap secret ownership/encryption/version changed")
+    guard()
+    value = client.get_secret_value(SecretId=ref["arn"], VersionId=token, VersionStage="AWSCURRENT")
+    if value.get("ARN") != ref["arn"] or value.get("VersionId") != token or len(value.get("SecretString", "")) > 48 * 1024:
+        raise ValueError("Observed bootstrap secret read returned an unexpected version")
+    return validate_secret(purpose, json.loads(value["SecretString"]))
+
+
 class AssetBootstrap:
     def __init__(self, runtime, guard, *, sleep=time.sleep, pki_factory=None, dns_factory=None):
         self.runtime, self.guard = runtime, guard

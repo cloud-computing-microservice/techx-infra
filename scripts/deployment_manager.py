@@ -88,7 +88,7 @@ class DeploymentManager:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.sleep = sleep
 
-    def current(self):
+    def current(self, *, allow_ready=False):
         identity = self.clients["sts"].get_caller_identity()
         if identity.get("Account") != ACCOUNT or not re.fullmatch(
                 rf"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-lifecycle-manager/[^/]+", identity.get("Arn", "")):
@@ -98,10 +98,13 @@ class DeploymentManager:
         for key in ("sessionId", "sourceRevisions", "approvedBudgetUsd", "deadline", "cleanupStartAt", "maximumHours", "action"):
             if record.get(key) != self.execution.get(key):
                 raise ValueError("Current session differs from admitted execution")
-        if (record.get("executionVersion") != self.version or record["status"] not in ("PLANNING", "PROVISIONING")
+        if (record.get("executionVersion") != self.version or record["status"] not in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING"))
                 or self.clock() >= utc(record["cleanupStartAt"])):
             raise ValueError("Session is closed for deployment")
         verify_existing(self.clients["scheduler"], record, self.version, self.clock())
+        if record["status"] == "READY":
+            from private_acceptance_contract import validate_private_checkpoint
+            validate_private_checkpoint(record, record["deploymentTask"])
         return record, etag
 
     def verify_document(self):
@@ -175,6 +178,9 @@ class DeploymentManager:
         elif mode == "activate" and stage == "exposure":
             from deployment_tasks import validate_activation
             validate_activation(record, attempt)
+        elif mode == "verify" and stage == "private":
+            from private_acceptance_contract import validate_private_start
+            validate_private_start(record, attempt)
         elif (mode != "apply" or record.get("stages", {}).get(stage, {}).get("state") != "AWAITING_APPROVAL"
                 or record["stages"][stage].get("attempt") != attempt or record.get("pendingPlan", {}).get("stage") != stage):
             raise ValueError("Task requires a supported plan or pending apply stage")
@@ -224,7 +230,7 @@ class DeploymentManager:
             raise ValueError("Bounded task observation is required")
         try:
             for _ in range(max_observations):
-                record, _ = self.current()
+                record, _ = self.current(allow_ready=pointer.get("mode") == "verify")
                 active = record.get("deploymentTask", {})
                 if active.get("taskId") != pointer["taskId"] or active.get("commandId") != pointer.get("commandId"):
                     raise ValueError("Task pointer changed while observing remote work")
@@ -232,7 +238,7 @@ class DeploymentManager:
                 if result is not None and result["Status"] in TERMINAL:
                     # The remote process can finish between the session read
                     # and this SSM observation. Fetch its terminal checkpoint.
-                    record, _ = self.current()
+                    record, _ = self.current(allow_ready=pointer.get("mode") == "verify")
                     active = record.get("deploymentTask", {})
                     if active.get("taskId") != pointer["taskId"] or active.get("commandId") != pointer.get("commandId"):
                         raise ValueError("Task pointer changed before terminal reconciliation")

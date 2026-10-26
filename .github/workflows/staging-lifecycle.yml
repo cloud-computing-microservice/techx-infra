@@ -38,11 +38,15 @@ concurrency:
 env:
   CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
   CONTROL_KMS_KEY_ARN: ${{ vars.TECHX_KMS_KEY_ARN }}
+  PROMOTION_APP_ID: ${{ vars.PROMOTION_APP_ID }}
+  PROMOTION_APP_SLUG: ${{ vars.PROMOTION_APP_SLUG }}
+  PROMOTION_INSTALLATION_ID: ${{ vars.PROMOTION_INSTALLATION_ID }}
 jobs:
   preview:
     if: github.ref == 'refs/heads/main' && github.run_attempt == 1 && vars.LIFECYCLE_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    environment: staging-chart-read
     outputs:
       request: ${{ steps.preview.outputs.request }}
       request_sha256: ${{ steps.preview.outputs.request_sha256 }}
@@ -56,6 +60,7 @@ jobs:
         id: preview
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PROMOTION_APP_PRIVATE_KEY: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
         run: python techx-infra/scripts/start_lifecycle.py preview
       - name: Verify platform Actions authorization before any AWS reservation
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
@@ -122,6 +127,7 @@ jobs:
         id: admit
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PROMOTION_APP_PRIVATE_KEY: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
         run: python techx-infra/scripts/start_lifecycle.py start
   foundation-plan:
     needs: start

@@ -7,6 +7,7 @@ import unittest
 
 from chart_promotion import ColdPromotionChecks, PromotionPending, protection
 from chart_selection import CHART_REPO
+from plan_review_store import checksum
 
 spec = importlib.util.spec_from_file_location("promotion_selection_support", Path(__file__).with_name("test-chart-selection.py"))
 support = importlib.util.module_from_spec(spec)
@@ -26,6 +27,8 @@ class PromotionTests(unittest.TestCase):
                 require_last_push_approval=True, bypass_pull_request_allowances=dict(users=[], teams=[], apps=[])),
             restrictions=dict(users=[], teams=[], apps=[dict(id=12345, slug="techx-promotion")]))
         f.chart_data["branches/main/protection"] = self.policy
+        f.execution["sourceAdmission"] = dict(promotionAuthority=dict(schemaVersion=1, repository=CHART_REPO,
+            appId=12345, appSlug="techx-promotion", installationId=67890, policySha256=checksum(self.policy)))
         f.chart_data["git/ref/heads/main"]["object"]["sha"] = "a" * 40
         f.chart_data["git/commits/" + "f" * 40] = dict(sha="f" * 40, tree=dict(sha=f.selected_tree), parents=[dict(sha="a" * 40)])
         self.pull = f.chart_data["pulls/7"]
@@ -60,6 +63,15 @@ class PromotionTests(unittest.TestCase):
         self.assertEqual(result["releaseReference"], self.f.record["bootstrapRelease"])
         self.assertFalse(self.f.writes)
         self.assertEqual(self.f.etag, 1)
+
+    def test_missing_or_changed_opening_app_policy_cannot_be_reauthorized_mid_session(self):
+        original = deepcopy(self.checks.execution["sourceAdmission"])
+        self.checks.execution.pop("sourceAdmission")
+        with self.assertRaisesRegex(ValueError, "public promotion authority"): self.evaluate()
+        self.checks.execution["sourceAdmission"] = original
+        self.checks.execution["sourceAdmission"]["promotionAuthority"]["policySha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "opening authority"): self.evaluate()
+        self.assertFalse(self.f.writes)
 
     def test_only_an_actual_dedicated_app_and_enforced_branch_policy_are_accepted(self):
         for app_id, slug in ((0, "techx"), (True, "techx"), (12345, ""), (12345, "other-app")):

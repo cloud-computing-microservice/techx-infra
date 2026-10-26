@@ -905,3 +905,47 @@ CI or human approval. This explicit dispatch avoids a long `workflow_run` chain.
 The callback workflow name does not claim AWS acceptance. App configuration,
 opening preflight, READY releases, acceptance/rollback and live callback/OIDC/
 queue/cancel/cleanup gates remain open. Keep both deployment flags false.
+
+### Opening promotion-authority preflight (source only)
+
+The opening preview is schema version **2** and includes public
+`promotionAuthority`: fixed chart repository, App ID/slug, selected installation
+ID and protected-main policy checksum. An old/missing proof cannot start a new
+session. `promotion_authority.py` authenticates the actual organization App
+using RS256, verifies its active selected installation and exact maximum grants:
+contents write, PR/Actions/administration read (implicit metadata read only).
+It requests a chart-only **read** token through the existing scoped adapter;
+the runner never requests a merge token or calls a repository mutation.
+
+Actual token repository scope and enforced App-only main protection are checked.
+App/installation/policy are read again after external checks. The read token is
+revoked before a successful proof returns, including failures after a token was
+observed. Only the actual empty HTTP 204 revocation response is accepted; unknown
+creation/revocation responses are not blindly retried. A hard process cancellation
+or lost creation response can leave an unobserved read token until expiry; this
+does not grant merge authority and still needs live cancellation acceptance.
+See GitHub's [installation token revocation endpoint](https://docs.github.com/en/rest/apps/installations#revoke-an-installation-access-token).
+
+Configure `PROMOTION_APP_ID`, `PROMOTION_APP_SLUG` and the actual numeric
+`PROMOTION_INSTALLATION_ID`. Store `PROMOTION_APP_PRIVATE_KEY` as an environment
+secret in main-only `staging-chart-read` (preview), human-reviewed `staging-start`
+(opening), and the existing main-only promotion-review environments that need
+it. The preview now uses `staging-chart-read` without AWS credentials. Do not
+place a signing key in a repository secret available to PR code. Existing
+Lifecycle App credentials used by preview also need these environment scopes.
+Missing metadata/key or incomplete/wrong permissions fail before reservation.
+
+After the real human opening review, the same public proof is checked again
+before AWS identity/storage reads and once more immediately before Coordinator
+reservation. Only the reviewed proof is saved in immutable execution
+`sourceAdmission.promotionAuthority`; no JWT/key/token is serialized. Candidate
+promotion checks must retain that admitted App/policy, and the private worker
+also requires the same installation before minting its merge token. A new App,
+installation or policy needs a new opening preview, not an extended old approval.
+
+This gate verifies GitHub-side promotion credentials/authority, not the private
+Secrets Manager copies or other Apps. Private control-secret metadata and key
+verification, Lifecycle/publisher/callback grants, READY handling, acceptance/
+rollback and live App/OIDC/network/cancel/cleanup tests remain open. No App,
+secret, token, role, AMI or paid AWS environment was created by offline tests.
+Both deployment flags remain false.

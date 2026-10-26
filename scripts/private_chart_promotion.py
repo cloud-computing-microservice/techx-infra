@@ -10,6 +10,7 @@ from github_app_auth import app_secret, installation_client
 from lifecycle_stage import StageController
 from plan_approval import version
 from plan_review_store import ACCOUNT, checksum, encoded, immutable_json, read_json
+from promotion_authority import admitted
 from review_chart_promotion import authorize_promotion
 from workflow_handoff import listed_json
 
@@ -20,7 +21,10 @@ class MergeUncertain(ValueError):
 
 def app_clients(runtime, policy, clock):
     promotion = app_secret(runtime.clients["secretsmanager"], "promotion", kms_key=runtime.kms)
-    if promotion["appId"] != policy["appId"] or promotion["slug"] != policy["appSlug"]:
+    opening = admitted(runtime.execution)
+    if (promotion["appId"] != policy["appId"] or promotion["slug"] != policy["appSlug"]
+            or promotion["appId"] != opening["appId"] or promotion["slug"] != opening["appSlug"]
+            or promotion["installationId"] != opening["installationId"] or policy["policySha256"] != opening["policySha256"]):
         raise ValueError("Private promotion key differs from the human-reviewed branch authority")
     lifecycle = app_secret(runtime.clients["secretsmanager"], "lifecycle", kms_key=runtime.kms)
     from chart_selection import INFRA_REPO

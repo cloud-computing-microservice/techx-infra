@@ -12,8 +12,8 @@ from plan_review_store import read_json
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("prepare", "plan", "apply", "bootstrap", "promote", "activate"))
-    parser.add_argument("--stage", choices=("foundation", "edge", "gitops", "chart", "exposure"), default="foundation")
+    parser.add_argument("mode", choices=("prepare", "plan", "apply", "bootstrap", "promote", "activate", "verify"))
+    parser.add_argument("--stage", choices=("foundation", "edge", "gitops", "chart", "exposure", "private"), default="foundation")
     parser.add_argument("--attempt", type=int, default=1)
     parser.add_argument("--execution", type=Path, required=True)
     parser.add_argument("--execution-version", required=True)

@@ -132,6 +132,7 @@ def validate_task(task, record, now):
     fields = TASK_FIELDS | ({"expectedBootstrapChart"} if isinstance(task, dict) and task.get("mode") == "bootstrap" else set())
     if isinstance(task, dict) and task.get("mode") == "promote": fields |= {"expectedPromotionApproval"}
     if isinstance(task, dict) and task.get("mode") == "activate": fields |= {"expectedExposureSha256"}
+    if isinstance(task, dict) and task.get("mode") == "verify": fields |= {"expectedAcceptanceSha256"}
     if not isinstance(task, dict) or set(task) != fields or task["schemaVersion"] != 1:
         raise ValueError("Unsupported deployment task schema")
     if not re.fullmatch(r"[a-f0-9]{32}", task["taskId"]) or not re.fullmatch(MANAGER, task["managerArn"]):
@@ -140,11 +141,11 @@ def validate_task(task, record, now):
         raise ValueError("Invalid task executor identity")
     version(task["executionVersion"])
     if (record["sessionId"] != task["sessionId"] or record.get("executionVersion") != task["executionVersion"]
-            or record["status"] not in ("PLANNING", "PROVISIONING")):
+            or record["status"] not in (("PROVISIONING", "READY") if task.get("mode") == "verify" else ("PLANNING", "PROVISIONING"))):
         raise ValueError("Task does not belong to the active admitted session")
     if not utc(task["createdAt"]) <= now < utc(task["expiresAt"]) <= utc(record["cleanupStartAt"]):
         raise ValueError("Task expired or enters the cleanup window")
-    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure")}
+    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private")}
             or type(task["attempt"]) is not int or task["attempt"] < 1):
         raise ValueError("Unsupported deployment task action")
     if task["mode"] == "bootstrap" and task["expectedBootstrapChart"] != bootstrap_reference(record):
@@ -153,6 +154,11 @@ def validate_task(task, record, now):
         raise ValueError("Promotion task approval changed after dispatch")
     if task["mode"] == "activate" and (task["attempt"] != 1 or task["expectedExposureSha256"] != checksum(exposure_context(record))):
         raise ValueError("Exposure task predecessor changed after dispatch")
+    if task["mode"] == "verify":
+        from private_acceptance_contract import private_context, validate_private_checkpoint
+        if task["attempt"] != 1 or task["expectedAcceptanceSha256"] != checksum(private_context(record)):
+            raise ValueError("Private task predecessor changed after dispatch")
+        if record["status"] == "READY": validate_private_checkpoint(record, task)
     if task["mode"] == "apply":
         pending = task["expectedPendingPlan"]
         if (not isinstance(pending, dict) or record.get("pendingPlan") != pending
@@ -173,6 +179,9 @@ def create_task(client, bucket, record, execution_version, instance_id, owner, m
         task["expectedBootstrapChart"] = deepcopy(validate_bootstrap(record, attempt))
     if mode == "promote": task["expectedPromotionApproval"] = deepcopy(validate_promotion(record, attempt))
     if mode == "activate": task["expectedExposureSha256"] = validate_activation(record, attempt)
+    if mode == "verify":
+        from private_acceptance_contract import validate_private_start
+        task["expectedAcceptanceSha256"] = validate_private_start(record, attempt)
     validate_task(task, record, now)
     ref = immutable_json(client, bucket, f"control/staging/tasks/{task_id}.json", task)
     pointer = dict(taskId=task_id, instanceId=instance_id, managerArn=owner, mode=mode, stage=stage, attempt=attempt,
@@ -180,6 +189,7 @@ def create_task(client, bucket, record, execution_version, instance_id, owner, m
     if mode == "bootstrap": pointer["expectedBootstrapChart"] = deepcopy(task["expectedBootstrapChart"])
     if mode == "promote": pointer["expectedPromotionApproval"] = deepcopy(task["expectedPromotionApproval"])
     if mode == "activate": pointer["expectedExposureSha256"] = task["expectedExposureSha256"]
+    if mode == "verify": pointer["expectedAcceptanceSha256"] = task["expectedAcceptanceSha256"]
     return task, pointer
 
 
@@ -202,13 +212,16 @@ def read_task(client, bucket, record, task_id, now):
         raise ValueError("Promotion pointer differs from immutable approval intent")
     if task["mode"] == "activate" and pointer.get("expectedExposureSha256") != task["expectedExposureSha256"]:
         raise ValueError("Exposure pointer differs from immutable predecessor intent")
+    if task["mode"] == "verify" and pointer.get("expectedAcceptanceSha256") != task["expectedAcceptanceSha256"]:
+        raise ValueError("Private pointer differs from immutable predecessor intent")
     return task
 
 
 def claim_task(store, client, bucket, task_id, instance_id, now):
     record, etag = store.read()
     task = read_task(client, bucket, record, task_id, now)
-    if task["instanceId"] != instance_id or record["deploymentTask"]["state"] != "DISPATCHING" or record.get("lease"):
+    if (task["instanceId"] != instance_id or record["status"] not in ("PLANNING", "PROVISIONING")
+            or record["deploymentTask"]["state"] != "DISPATCHING" or record.get("lease")):
         raise ValueError("Task already consumed, busy or assigned to another executor")
     updated = deepcopy(record)
     updated["deploymentTask"].update(state="RUNNING", startedAt=now.isoformat())
@@ -223,7 +236,12 @@ def validate_result(record, task):
     stage = record.get("stages", {}).get(task["stage"], {})
     if stage.get("attempt") != task["attempt"]:
         raise ValueError("Remote task did not complete its expected stage attempt")
-    if task["mode"] == "activate":
+    if task["mode"] == "verify":
+        from private_acceptance_contract import validate_private_checkpoint
+        completed = validate_private_checkpoint(record, task)
+        if record["status"] != "READY" or record.get("acceptedRelease") != dict(completed["release"], acceptanceReference=completed["receiptReference"]):
+            raise ValueError("Private task has not atomically handed off its accepted release to READY")
+    elif task["mode"] == "activate":
         validate_exposure_checkpoint(record, task)
     elif task["mode"] == "promote":
         validate_promotion_checkpoint(record, task)
@@ -255,7 +273,8 @@ def finish_task(store, task, succeeded, now):
     if succeeded:
         # validate_task's pending-plan equality applies before consumption. A
         # successful apply has deliberately cleared it; verify scope/time here.
-        if record["status"] not in ("PLANNING", "PROVISIONING") or now >= utc(record["cleanupStartAt"]):
+        allowed = ("READY",) if task["mode"] == "verify" else ("PLANNING", "PROVISIONING")
+        if record["status"] not in allowed or now >= utc(record["cleanupStartAt"]):
             raise ValueError("Task completed after the deployment window closed")
         validate_result(record, task)
     updated = deepcopy(record)

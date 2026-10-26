@@ -14,7 +14,7 @@ if test -f /etc/apt/sources.list.d/ubuntu.sources; then
   sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
 fi
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl unzip gnupg python3 python3-venv openssl git tar \
+apt-get install -y --no-install-recommends ca-certificates curl unzip gnupg python3 python3-venv openssl git tar openvpn iproute2 \
   libicu74 libunwind8 libssl3t64 libgssapi-krb5-2 zlib1g libstdc++6 libgcc-s1
 install -d -m 0755 /opt/techx/bootstrap /opt/microsoft/powershell/7 /var/lib/techx
 python3 -m venv /opt/techx/venv
@@ -52,6 +52,8 @@ test "$(pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')" = 7.6.
 terraform version -json | /opt/techx/venv/bin/python -c 'import json,sys; assert json.load(sys.stdin)["terraform_version"] == "1.15.5"'
 helm version --short | grep -q '^v4.1.4'
 kubectl version --client=true -o json | /opt/techx/venv/bin/python -c 'import json,sys; assert json.load(sys.stdin)["clientVersion"]["gitVersion"] == "v1.35.0"'
+/usr/sbin/openvpn --version | head -n 1 | grep -q '^OpenVPN 2\.6\.'
+ip -Version
 /opt/techx/venv/bin/python -m compileall -q /opt/techx/bootstrap
 install -m 0644 "$asset/executor-image-tools.json" /opt/techx/image-tools.json
 install -m 0644 "$asset/verify_executor_ssm.py" /opt/techx/verify_executor_ssm.py

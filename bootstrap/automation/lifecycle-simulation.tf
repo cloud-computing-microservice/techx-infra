@@ -40,6 +40,19 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "no-self-policy", action = "iam:PutRolePolicy", expected = "denied", resources = [local.deployment_role_arn] },
         { name = "state-write", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/staging/terraform.tfstate"] },
         { name = "private-promotion-call-write", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/promotions/staging/simulation/receipt.json"] },
+        { name = "write-private-acceptance", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/receipt.json"] },
+        { name = "owned-vpn-client-export", action = "ec2:ExportClientVpnClientConfiguration", expected = "allowed", resources = ["arn:aws:ec2:us-east-1:058114477594:client-vpn-endpoint/cvpn-endpoint-00000000000000000"],
+          context = [for key, value in { Project = "techx", Environment = "staging" } : {
+            ContextKeyName = "ec2:ResourceTag/${key}", ContextKeyType = "string", ContextKeyValues = [value]
+        }] },
+        { name = "owned-vpn-client-disconnect", action = "ec2:TerminateClientVpnConnections", expected = "allowed", resources = ["arn:aws:ec2:us-east-1:058114477594:client-vpn-endpoint/cvpn-endpoint-00000000000000000"],
+          context = [for key, value in { Project = "techx", Environment = "staging" } : {
+            ContextKeyName = "ec2:ResourceTag/${key}", ContextKeyType = "string", ContextKeyValues = [value]
+        }] },
+        { name = "no-foreign-vpn-client-disconnect", action = "ec2:TerminateClientVpnConnections", expected = "denied", resources = ["arn:aws:ec2:us-east-1:058114477594:client-vpn-endpoint/cvpn-endpoint-00000000000000000"],
+          context = [for key, value in { Project = "unrelated", Environment = "staging" } : {
+            ContextKeyName = "ec2:ResourceTag/${key}", ContextKeyType = "string", ContextKeyValues = [value]
+        }] },
         { name = "no-promotion-approval-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/promotion-approvals/staging/simulation/approval.json"] },
         { name = "read-fixed-promotion-app", action = "secretsmanager:GetSecretValue", expected = "allowed", resources = ["arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/automation/promotion-app-Abc123"],
           context = [for key, value in { Project = "techx", Environment = "automation", Role = "github-app" } : {
@@ -56,6 +69,9 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "read-pinned-public-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
         { name = "no-public-evidence-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
         { name = "read-pinned-activation-receipt", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
+        { name = "read-pinned-private-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/receipt.json"] },
+        { name = "no-unversioned-private-acceptance", action = "s3:GetObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/receipt.json"] },
+        { name = "no-private-acceptance-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/receipt.json"] },
         { name = "no-unversioned-activation-read", action = "s3:GetObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
         { name = "no-dispatcher-activation-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
         { name = "read-admission-encryption", action = "s3:GetEncryptionConfiguration", expected = "allowed", resources = [aws_s3_bucket.control.arn] },

@@ -313,9 +313,22 @@ The role cannot deploy, access control secrets or read private inputs. It alone
 can produce versioned public evidence; the parent verifies the exact private
 receipt and dispatched run before consuming it. Cleanup fences this HTTP-only
 probe without requiring GitHub cancellation after stopping infrastructure
-executors. Public success leaves PROVISIONING and waits for PRIVATE_ACCEPTANCE;
-authenticated Argo/runtime and actual VPN-client checks are still required.
-These paths have offline tests and remain disabled pending live acceptance.
+executors. Public success leaves PROVISIONING and dispatches the single-use
+`verify/private/1` task on the fixed executor. Its OpenVPN client must prove an
+AWS connection ID/client address, the matching TUN route, private DNS and
+verified HTTPS before authenticated Argo and runtime/resilience checks. The
+worker verifies exact chart/image digests, DynamoDB/IRSA, automatic replica
+self-heal and order/idempotency persistence after an observed Pod replacement.
+It must positively observe VPN disconnect before writing its private receipt.
+
+Only the terminal successful child plus verified activation/public/private
+receipts allow the parent to publish `READY`, `acceptedRelease` and lease release
+in one CAS. The manager still requires terminal SSM success; continuation also
+requires terminal CodeBuild success and the same evidence. A `deploy-test-destroy`
+session requests independent cleanup after acceptance; `deploy-window` keeps the
+original verified deadline. These paths have offline tests and remain disabled
+pending live acceptance. Active-session releases and bounded Git rollback still
+require further implementation.
 
 Bootstrap verification:
 

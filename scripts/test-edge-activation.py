@@ -69,7 +69,9 @@ class ActivationTests(unittest.TestCase):
         resource("module.vpc", "aws_vpc", id=self.vpc, cidr_block="10.52.0.0/16")
         self.state["outputs"] = {key: dict(value=value) for key, value in dict(cloudfront_distribution_id=self.distribution_id,
             cloudfront_domain_name=self.target, client_vpn_endpoint_id=self.vpn_id, private_subnet_ids=[self.subnet],
-            public_frontend_url=f"https://{HOST}/").items()}
+            public_frontend_url=f"https://{HOST}/", order_table_name="techx-staging-orders",
+            order_table_arn=f"arn:aws:dynamodb:us-east-1:{ACCOUNT}:table/techx-staging-orders",
+            order_api_role_arn=f"arn:aws:iam::{ACCOUNT}:role/techx-staging-order-api").items()}
         self.events, self.dns_records, self.mutations = [], [], []
         self.lose_post = self.lose_delete = self.hide_after_post = False
         self.before_receipt = None

@@ -166,7 +166,7 @@ class Orchestrator:
         last = {}
         for _ in range(observations):
             if monotonic() >= end: break
-            record, _ = self.dispatcher.current(idle=False)
+            record, _ = self.dispatcher.current(idle=False, allow_ready=True)
             state = record.get("workflowHandoff", {})
             if state and state.get("phase") != "CONSUMED":
                 _, intent = self.handoffs.load()
@@ -189,6 +189,7 @@ class Orchestrator:
             result = drive(self.dispatcher, self.coordinator, observations=1,
                            sleep=lambda delay: sleep(max(0, min(delay, end - monotonic()))), monotonic=monotonic)
             last = result
+            if result.get("waiting") == "READY": return result
             if result.get("waiting") == "OBSERVATION_LIMIT": continue
             if result.get("waiting"):
                 target = self.target(result)

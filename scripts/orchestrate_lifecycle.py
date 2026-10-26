@@ -153,6 +153,8 @@ def main():
         if os.environ.get("LIFECYCLE_APP_TOKEN"):
             apis[PLATFORM_REPO] = WorkflowAPI(PLATFORM_REPO, os.environ["LIFECYCLE_APP_TOKEN"])
         result = Orchestrator(dispatcher, Coordinator(clients, store, bucket), apis, chart).run()
+        if result.get("waiting") == "READY" and execution["action"] == "deploy-test-destroy":
+            result = dict(waiting="CLEANUP_REQUESTED", requestAcknowledged=request_cleanup(clients, store, execution, object_version))
         summary(result)
     except BaseException:
         request_cleanup(clients, store, execution, object_version)

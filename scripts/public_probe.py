@@ -20,6 +20,12 @@ CHECKS = {"dns", "tls-cloudfront-storefront", "http-redirect", "public-argocd-bl
           "catalog-config-detail", "order-create-replay-conflict-lookup", "dynamic-no-store-request-id", "static-cache"}
 
 
+def checkout_payload(product_id):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", product_id): raise ValueError("Invalid acceptance product ID")
+    return dict(items=[dict(productId=product_id, quantity=1)], customer=dict(name="Automation Acceptance", email="acceptance@example.invalid"),
+        shippingAddress=dict(line1="100 Acceptance Street", city="Seattle", region="WA", postalCode="98101", countryCode="US"), shippingMethod="standard")
+
+
 class ProbeFailure(ValueError):
     def __init__(self, check):
         self.check = check
@@ -161,8 +167,7 @@ class PublicProbe:
         detail = self.request("GET", "/api/products/" + quote(selected["id"], safe=""), 200, api=True)
         self.require(detail.get("product", {}).get("id") == selected["id"], "product-detail")
         self.checks.append("catalog-config-detail")
-        payload = dict(items=[dict(productId=selected["id"], quantity=1)], customer=dict(name="Automation Acceptance", email="acceptance@example.invalid"),
-            shippingAddress=dict(line1="100 Acceptance Street", city="Seattle", region="WA", postalCode="98101", countryCode="US"), shippingMethod="standard")
+        payload = checkout_payload(selected["id"])
         key = "acceptance-" + self.dispatch_id
         created = self.request("POST", "/api/orders", 201, payload=payload, key=key, api=True).get("order", {})
         self.require(re.fullmatch(r"[A-Za-z0-9_-]{1,100}", created.get("id", "")) and
@@ -197,4 +202,5 @@ class PublicProbe:
         self.guard()
         self.require(set(self.checks) == CHECKS, "complete-public-suite")
         return dict(status="passed", networkView="public", checks=sorted(self.checks), observations=self.observations,
-                    private="pending", vpn="pending")
+                    private="pending", vpn="pending", orderSummary=dict(id=created["id"], productId=selected["id"],
+                        subtotalCents=created["subtotalCents"], shippingCents=created["shippingCents"], totalCents=created["totalCents"]))

@@ -25,8 +25,8 @@ CONTEXT = ("sessionId", "sourceRevisions", "deadline", "cleanupStartAt", "approv
 def operation(mode, stage, attempt=1):
     if (type(attempt) is not int or not 1 <= attempt <= 999999
             or (mode, stage) not in {("prepare", "foundation"), ("plan", "foundation"), ("apply", "foundation"),
-                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"), ("activate", "exposure")}
-            or mode in ("prepare", "bootstrap", "promote", "activate") and attempt != 1):
+                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"), ("activate", "exposure"), ("verify", "private")}
+            or mode in ("prepare", "bootstrap", "promote", "activate", "verify") and attempt != 1):
         raise ValueError("Unsupported typed lifecycle operation")
     return dict(mode=mode, stage=stage, attempt=attempt)
 
@@ -44,17 +44,25 @@ def dispatch_identity(record, execution_version, op):
         bootstrapChart=record.get("bootstrapChart") if op["mode"] == "bootstrap" else None)
     if op["mode"] == "promote": context["promotionApproval"] = record.get("bootstrapPromotionApproval")
     if op["mode"] == "activate": context["exposureSha256"] = validate_activation(record, op["attempt"])
+    if op["mode"] == "verify":
+        from private_acceptance_contract import validate_private_start
+        context["acceptanceSha256"] = validate_private_start(record, op["attempt"])
     return hashlib.sha256(encoded(context)).hexdigest()
 
 
-def guard(record, execution, version, now, *, idle=True):
+def guard(record, execution, version, now, *, idle=True, allow_ready=False):
     validate(record)
     executor_config(execution["deploymentConfig"])
     if (any(record.get(key) != execution.get(key) for key in CONTEXT) or record.get("executionVersion") != version
-            or record["status"] not in ("PLANNING", "PROVISIONING") or now >= utc(record["cleanupStartAt"])
+            or record["status"] not in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING")) or now >= utc(record["cleanupStartAt"])
             or idle and record.get("lease")):
         raise ValueError("Dispatch requires the same open, idle admitted staging session")
     validate_estimate(record, execution["costEstimate"])
+    if record["status"] == "READY":
+        from private_acceptance_contract import validate_private_checkpoint
+        if record.get("lifecycleDispatch", {}).get("operation") != operation("verify", "private"):
+            raise ValueError("READY observation requires the exact private acceptance manager")
+        validate_private_checkpoint(record, record.get("deploymentTask", {}))
 
 
 def observed_build(client, record):
@@ -98,6 +106,11 @@ def completed_manager(clients, execution, record):
 def next_operation(record, previous):
     """Only supported edges are returned; external phases remain explicit waits."""
     stages = record.get("stages", {})
+    if record.get("status") == "READY":
+        from private_acceptance_contract import validate_private_checkpoint
+        validate_private_checkpoint(record)
+        if previous != operation("verify", "private"): raise ValueError("READY has no completed private predecessor")
+        return dict(waiting="READY")
     if record.get("pendingPlan") is not None:
         ref = record["pendingPlan"]
         if previous != operation("plan", ref["stage"], ref["attempt"]):
@@ -141,7 +154,9 @@ def next_operation(record, previous):
             if not stages.get("publicAcceptance"): return dict(waiting="PUBLIC_ACCEPTANCE")
             from public_acceptance_contract import validate_public_checkpoint
             validate_public_checkpoint(record)
-            return dict(waiting="PRIVATE_ACCEPTANCE")
+            from private_acceptance_contract import validate_private_start
+            validate_private_start(record, 1)
+            return operation("verify", "private")
     raise ValueError("No supported lifecycle continuation; cleanup/reconciliation required")
 
 
@@ -151,11 +166,11 @@ class Dispatcher:
         self.execution, self.version = deepcopy(execution), version
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
-    def current(self, *, idle=True):
+    def current(self, *, idle=True, allow_ready=False):
         if self.clients["sts"].get_caller_identity().get("Account") != ACCOUNT:
             raise ValueError("Wrong lifecycle dispatch account")
         record, etag = self.store.read()
-        guard(record, self.execution, self.version, self.clock(), idle=idle)
+        guard(record, self.execution, self.version, self.clock(), idle=idle, allow_ready=allow_ready)
         verify_existing(self.clients["scheduler"], record, self.version, self.clock())
         return record, etag
 
@@ -231,14 +246,21 @@ class Dispatcher:
             raise
 
     def advance(self):
-        record, _ = self.current()
+        record, _ = self.current(allow_ready=True)
         previous = completed_manager(self.clients, self.execution, record)
         op = next_operation(record, previous)
-        if op.get("waiting") in ("PUBLIC_ACCEPTANCE", "PRIVATE_ACCEPTANCE"):
+        if op.get("waiting") == "READY":
+            from private_acceptance_contract import ready_release
+            accepted = ready_release(self.clients["s3"], self.bucket, record, self.version)
+            if record.get("acceptedRelease") != accepted: raise ValueError("READY does not carry the verified accepted release")
+            return dict(sessionId=record["sessionId"], waiting="READY", acceptedRelease=accepted)
+        if op.get("waiting") == "PUBLIC_ACCEPTANCE":
             from edge_activation import read_activation_receipt
             read_activation_receipt(self.clients["s3"], self.bucket, record, self.version)
-        if op.get("waiting") == "PRIVATE_ACCEPTANCE":
+        if op.get("mode") == "verify":
+            from edge_activation import read_activation_receipt
             from public_acceptance_contract import read_public_receipt
+            read_activation_receipt(self.clients["s3"], self.bucket, record, self.version)
             read_public_receipt(self.clients["s3"], self.bucket, record, self.version)
         if op.get("waiting"): return dict(sessionId=record["sessionId"], **op)
         if op["mode"] == "bootstrap":

@@ -18,6 +18,8 @@ from cleanup_execution import (assert_inventory, delete_session_secrets, fence_s
 from cloudflare_dns import CloudflareDNS, HOST, validate_name_target
 from certificate_recovery import reconcile_certificates
 from secret_recovery import reconcile_secrets
+from shop_dns_recovery import cleanup_shop_dns
+from cloudflare_dns import validate_shop_intent
 from leased_command import execute
 
 
@@ -153,7 +155,15 @@ def work(args, clients, record, directory):
             credentials = json.loads(secret["SecretString"])
             dns_client = CloudflareDNS(credentials["zoneId"], credentials["apiToken"])
         return dns_client
-    if private["dnsMutationAttempted"]: remove_owned_shop(get_dns(), session_id)
+    shop_intent = private.get("shopDnsIntent")
+    if shop_intent is not None:
+        validate_shop_intent(shop_intent)
+        # PREPARED guarantees the create request was not invoked. ACM DNS may
+        # independently have set dnsMutationAttempted already.
+        if shop_intent["phase"] != "PREPARED" or private["dnsMutationAttempted"]:
+            cleanup_shop_dns(clients["s3"], args.bucket, session_id, private, get_dns())
+    elif private["dnsMutationAttempted"]:
+        remove_owned_shop(get_dns(), session_id)  # Historical snapshot contract.
     # Recursive caches and every authoritative nameserver must converge before edge deletion.
     for attempt in range(31):
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("public-dns.py"))], capture_output=True, text=True)

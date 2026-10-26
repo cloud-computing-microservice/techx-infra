@@ -499,8 +499,8 @@ stage checkpoint. CAS merges preserve worker fields; cleanup takeover wins.
 
 The continuation observes the same build for a bounded 40-minute loop, retaining
 its handle on observation timeout. It can advance preparation to foundation
-plan, an approved apply, selected GitOps bootstrap and edge plan. Plan review,
-cold release, chart selection and DNS/acceptance are explicit waiting states;
+plan, an approved apply, selected GitOps bootstrap, edge plan/apply and edge
+activation. Plan review, cold release, chart selection and application acceptance are explicit waiting states;
 there is no false READY or dispatch to a missing workflow. The separate cold
 publish/proposal caller is described below; opening a session and the complete
 end-to-end orchestration remain due.
@@ -974,3 +974,32 @@ Real control-key copies and App configuration/enforcement, publisher/callback
 readiness, READY handling, acceptance/rollback and live App/OIDC/network/cancel/
 cleanup tests remain open. No App, secret, token, role, AMI or paid AWS environment
 was created by offline tests. Both deployment flags remain false.
+
+### Post-edge activation and storefront DNS (source only)
+
+The manager/SSM loader accepts the fixed task `activate / exposure / 1` only
+after the committed edge apply and GitOps checkpoint. Its immutable intent
+pins their checksum; the worker rechecks the actual private executor, lease,
+schedule, budget and committed state lineage/serial. Output IDs must resolve
+to the same managed state resources. Actual CloudFront distribution/VPC origin
+and single Client VPN association must report ready with the expected account,
+tags, certificate configuration, private subnet and internal ALB identity.
+
+Before Cloudflare create, the worker saves `shopDnsIntent` as PREPARED then
+CALLING with `dnsMutationAttempted=true`. The only permitted record is the
+DNS-only shop CNAME to that distribution, tagged by the session comment. An
+ambiguous POST is never replayed: only the actual identical owned record can
+advance to OBSERVED. Cleanup saves a versioned immutable positive observation
+at `cleanup/<session>/shop-dns-observed.json` before DELETE, allowing a lost
+delete response to recover from absence. CALLING plus absence without this
+positive proof remains unresolved; cleanup cannot report completion or delete
+the origin on that evidence alone. Apex and unrelated records are untouched.
+
+Both recursive resolvers and every discovered authoritative Cloudflare
+nameserver must return the exact CNAME. A private versioned/hash-bound receipt
+is saved at `private/staging/<session>/exposure/<taskId>.json`; continuation
+reads and verifies that object before reporting `ACCEPTANCE`. ACTIVATED still
+means PROVISIONING, with acceptance pending. Public HTTPS/API and admin-block
+checks, authenticated Argo/runtime-digest checks and a real VPN-client probe
+remain required before READY; they are not supplied by this control-plane task.
+No AWS or Cloudflare live acceptance is claimed by the offline tests.

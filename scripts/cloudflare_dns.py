@@ -10,6 +10,32 @@ from urllib.request import Request, urlopen
 HOST = "shop.dinhminhkhoa.id.vn"
 
 
+def validate_shop_intent(value):
+    fields = {"schemaVersion", "phase", "name", "target", "distributionId"}
+    if isinstance(value, dict) and value.get("phase") == "OBSERVED": fields.add("id")
+    if (not isinstance(value, dict) or set(value) != fields or value.get("schemaVersion") != 1
+            or value.get("phase") not in ("PREPARED", "CALLING", "OBSERVED") or value.get("name") != HOST
+            or not re.fullmatch(r"[A-Z0-9]{8,32}", value.get("distributionId", ""))
+            or value.get("phase") == "OBSERVED" and not re.fullmatch(r"[a-f0-9]{32}", value.get("id", ""))):
+        raise ValueError("Invalid storefront DNS intent")
+    if validate_name_target(value["name"], value["target"]) != (value["name"], value["target"]):
+        raise ValueError("DNS intent must use the canonical storefront target")
+    return value
+
+
+def owned_shop_record(records, target, session_id):
+    validate_name_target(HOST, target)
+    if not isinstance(records, list) or len(records) != 1:
+        raise ValueError("Storefront DNS ownership is not uniquely observed")
+    record = records[0]
+    if (record.get("type") != "CNAME" or record.get("name") != HOST
+            or record.get("content", "").rstrip(".").lower() != target
+            or record.get("proxied") is not False or record.get("comment") != f"techx:{session_id}"
+            or not re.fullmatch(r"[a-f0-9]{32}", record.get("id", ""))):
+        raise ValueError("Observed storefront record differs from its session intent")
+    return dict(id=record["id"], name=HOST, content=target, sessionId=session_id)
+
+
 def validate_name_target(name, target):
     name, target = name.rstrip(".").lower(), target.rstrip(".").lower()
     if name == HOST:
@@ -24,11 +50,16 @@ def validate_name_target(name, target):
 
 
 class CloudflareDNS:
-    def __init__(self, zone_id, token, request=None):
+    def __init__(self, zone_id, token, request=None, guard=lambda: None):
         if not re.fullmatch(r"[a-f0-9]{32}", zone_id) or not token:
             raise ValueError("Cloudflare zone ID and scoped token are required")
         self.zone_id, self.token = zone_id, token
         self.request = request or self._request
+        self.guard = guard
+
+    def send(self, method, path, payload=None):
+        self.guard()
+        return self.request(method, path, payload)
 
     def _request(self, method, path, payload=None):
         body = json.dumps(payload).encode() if payload is not None else None
@@ -42,7 +73,7 @@ class CloudflareDNS:
         return result
 
     def records(self, name):
-        result = self.request("GET", "?" + urlencode(dict(type="CNAME", name=name, per_page=100)))
+        result = self.send("GET", "?" + urlencode(dict(type="CNAME", name=name, per_page=100)))
         if result.get("result_info", {}).get("total_pages", 1) != 1:
             raise ValueError("Ambiguous DNS record result")
         return result["result"]
@@ -63,7 +94,7 @@ class CloudflareDNS:
             if record.get("proxied") is not False:
                 raise ValueError("Owned CNAME must remain DNS-only")
             return dict(id=record["id"], name=name, content=target, sessionId=session_id)
-        result = self.request("POST", "", payload)["result"]
+        result = self.send("POST", "", payload)["result"]
         return dict(id=result["id"], name=name, content=target, sessionId=session_id)
 
     def delete(self, ownership):
@@ -80,7 +111,7 @@ class CloudflareDNS:
             raise ValueError("DNS ownership changed; refusing deletion")
         if not re.fullmatch(r"[a-f0-9]{32}", record["id"]):
             raise ValueError("Invalid DNS record ID")
-        self.request("DELETE", "/" + record["id"])
+        self.send("DELETE", "/" + record["id"])
         return "deleted"
 
 

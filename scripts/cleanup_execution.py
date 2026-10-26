@@ -119,13 +119,26 @@ def stop_dispatched_manager(clients, bucket, record, owner):
     return build["arn"]
 
 
-def remove_owned_shop(client, session_id):
+def remove_owned_shop(client, session_id, *, intent=None, observed=None, persist_observation=None):
+    from cloudflare_dns import owned_shop_record, validate_shop_intent
+    if intent is not None: validate_shop_intent(intent)
     records = client.records(HOST)
-    if not records: return
+    if not records:
+        if intent is not None and intent["phase"] == "CALLING" and observed is None:
+            raise ValueError("Storefront DNS creation outcome remains unproven; absence cannot complete cleanup")
+        return
     if len(records) != 1 or records[0].get("comment") != f"techx:{session_id}":
         raise ValueError("Storefront DNS is not owned by this cleanup session")
     record = records[0]
-    client.delete(dict(id=record["id"], name=HOST, content=record["content"], sessionId=session_id))
+    ownership = dict(id=record["id"], name=HOST, content=record["content"], sessionId=session_id)
+    if intent is not None:
+        ownership = owned_shop_record(records, intent["target"], session_id)
+        if (intent["phase"] == "OBSERVED" and ownership["id"] != intent["id"]
+                or observed is not None and ownership != observed):
+            raise ValueError("Storefront record was replaced after its creation proof")
+        if persist_observation is None: raise ValueError("Durable DNS observation is required before deletion")
+        persist_observation(ownership)
+    client.delete(ownership)
 
 
 def terminate_probes(ec2, session_id):

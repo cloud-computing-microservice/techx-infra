@@ -128,6 +128,10 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(result[2], "prepare")
         bootstrap = command(infra, directory, "control-bucket", "execution-version", dict(TECHX_MODE="bootstrap", TECHX_PLAN_STAGE="gitops"))
         self.assertEqual(bootstrap[2], "bootstrap")
+        activation = command(infra, directory, "control-bucket", "execution-version", dict(TECHX_MODE="activate", TECHX_PLAN_STAGE="exposure"))
+        self.assertEqual(activation[2], "activate")
+        with self.assertRaises(ValueError):
+            command(infra, directory, "control-bucket", "execution-version", dict(TECHX_MODE="activate", TECHX_PLAN_STAGE="edge"))
         with self.assertRaises(ValueError):
             command(infra, directory, "control-bucket", "execution-version", dict(TECHX_MODE="bootstrap", TECHX_PLAN_STAGE="foundation"))
         for key, value in dict(TECHX_MODE="bash", TECHX_PLAN_STAGE="edge; bad", TECHX_PLAN_ATTEMPT="1; bad").items():

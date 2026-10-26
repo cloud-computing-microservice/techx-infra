@@ -16,6 +16,39 @@ CONFIG_FIELDS = {"schemaVersion", "imageId", "launchTemplateId", "launchTemplate
                  "loaderSha256", "imageBuildSha256", "documentVersion", "documentSha256"}
 
 
+def exposure_context(record):
+    edge = record.get("stages", {}).get("edge", {})
+    gitops = validate_gitops_checkpoint(record)
+    if (record.get("status") != "PROVISIONING" or record.get("pendingPlan") is not None
+            or record.get("stages", {}).get("foundation", {}).get("state") != "APPLIED"
+            or edge.get("state") != "APPLIED" or type(edge.get("stateSerial")) is not int or edge["stateSerial"] < 1
+            or not re.fullmatch(r"[a-f0-9-]{36}", edge.get("stateLineage", ""))):
+        raise ValueError("Exposure requires the committed edge and GitOps checkpoints")
+    return dict(edge=deepcopy(edge), gitops=deepcopy(gitops))
+
+
+def validate_activation(record, attempt):
+    context = exposure_context(record)
+    if attempt != 1 or record.get("stages", {}).get("exposure"):
+        raise ValueError("Only one unconsumed exposure activation is allowed")
+    return checksum(context)
+
+
+def validate_exposure_checkpoint(record, task=None):
+    stage = record.get("stages", {}).get("exposure", {})
+    ref = stage.get("receiptReference", {})
+    if (stage.get("state") != "ACTIVATED" or stage.get("attempt") != 1
+            or stage.get("contextSha256") != checksum(exposure_context(record))
+            or not re.fullmatch(r"[a-f0-9]{32}", stage.get("taskId", ""))
+            or not isinstance(ref, dict) or set(ref) != {"key", "versionId", "sha256"}
+            or ref.get("key") != f"private/staging/{record['sessionId']}/exposure/{stage['taskId']}.json"
+            or not re.fullmatch(r"[a-f0-9]{64}", ref.get("sha256", ""))
+            or task is not None and (stage["taskId"] != task["taskId"] or stage["contextSha256"] != task.get("expectedExposureSha256"))):
+        raise ValueError("Exposure has no exact durable activation receipt checkpoint")
+    version(ref.get("versionId"))
+    return stage
+
+
 def promotion_reference(record):
     ref = record.get("bootstrapPromotionApproval", {})
     prefix = f"promotion-approvals/staging/{record['sessionId']}/"
@@ -98,6 +131,7 @@ def validate_task(task, record, now):
     validate(record)
     fields = TASK_FIELDS | ({"expectedBootstrapChart"} if isinstance(task, dict) and task.get("mode") == "bootstrap" else set())
     if isinstance(task, dict) and task.get("mode") == "promote": fields |= {"expectedPromotionApproval"}
+    if isinstance(task, dict) and task.get("mode") == "activate": fields |= {"expectedExposureSha256"}
     if not isinstance(task, dict) or set(task) != fields or task["schemaVersion"] != 1:
         raise ValueError("Unsupported deployment task schema")
     if not re.fullmatch(r"[a-f0-9]{32}", task["taskId"]) or not re.fullmatch(MANAGER, task["managerArn"]):
@@ -110,13 +144,15 @@ def validate_task(task, record, now):
         raise ValueError("Task does not belong to the active admitted session")
     if not utc(task["createdAt"]) <= now < utc(task["expiresAt"]) <= utc(record["cleanupStartAt"]):
         raise ValueError("Task expired or enters the cleanup window")
-    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart")}
+    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure")}
             or type(task["attempt"]) is not int or task["attempt"] < 1):
         raise ValueError("Unsupported deployment task action")
     if task["mode"] == "bootstrap" and task["expectedBootstrapChart"] != bootstrap_reference(record):
         raise ValueError("Bootstrap task selection changed after dispatch")
     if task["mode"] == "promote" and (task["attempt"] != 1 or task["expectedPromotionApproval"] != promotion_reference(record)):
         raise ValueError("Promotion task approval changed after dispatch")
+    if task["mode"] == "activate" and (task["attempt"] != 1 or task["expectedExposureSha256"] != checksum(exposure_context(record))):
+        raise ValueError("Exposure task predecessor changed after dispatch")
     if task["mode"] == "apply":
         pending = task["expectedPendingPlan"]
         if (not isinstance(pending, dict) or record.get("pendingPlan") != pending
@@ -136,12 +172,14 @@ def create_task(client, bucket, record, execution_version, instance_id, owner, m
     if mode == "bootstrap":
         task["expectedBootstrapChart"] = deepcopy(validate_bootstrap(record, attempt))
     if mode == "promote": task["expectedPromotionApproval"] = deepcopy(validate_promotion(record, attempt))
+    if mode == "activate": task["expectedExposureSha256"] = validate_activation(record, attempt)
     validate_task(task, record, now)
     ref = immutable_json(client, bucket, f"control/staging/tasks/{task_id}.json", task)
     pointer = dict(taskId=task_id, instanceId=instance_id, managerArn=owner, mode=mode, stage=stage, attempt=attempt,
                    reference=dict(ref, sha256=checksum(task)), state="DISPATCHING")
     if mode == "bootstrap": pointer["expectedBootstrapChart"] = deepcopy(task["expectedBootstrapChart"])
     if mode == "promote": pointer["expectedPromotionApproval"] = deepcopy(task["expectedPromotionApproval"])
+    if mode == "activate": pointer["expectedExposureSha256"] = task["expectedExposureSha256"]
     return task, pointer
 
 
@@ -162,6 +200,8 @@ def read_task(client, bucket, record, task_id, now):
         raise ValueError("Bootstrap pointer differs from immutable selection intent")
     if task["mode"] == "promote" and pointer.get("expectedPromotionApproval") != task["expectedPromotionApproval"]:
         raise ValueError("Promotion pointer differs from immutable approval intent")
+    if task["mode"] == "activate" and pointer.get("expectedExposureSha256") != task["expectedExposureSha256"]:
+        raise ValueError("Exposure pointer differs from immutable predecessor intent")
     return task
 
 
@@ -183,7 +223,9 @@ def validate_result(record, task):
     stage = record.get("stages", {}).get(task["stage"], {})
     if stage.get("attempt") != task["attempt"]:
         raise ValueError("Remote task did not complete its expected stage attempt")
-    if task["mode"] == "promote":
+    if task["mode"] == "activate":
+        validate_exposure_checkpoint(record, task)
+    elif task["mode"] == "promote":
         validate_promotion_checkpoint(record, task)
     elif task["mode"] == "bootstrap":
         validate_gitops_checkpoint(record)

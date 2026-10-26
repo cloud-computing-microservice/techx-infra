@@ -281,6 +281,24 @@ These checks have offline regression coverage. Real App setup, private control
 secrets, branch enforcement, IAM/network and end-to-end acceptance remain live
 prerequisites; offline success does not authorize AWS deployment.
 
+After the reviewed edge apply, the typed private task `activate / exposure / 1`
+pins the committed edge/GitOps predecessors, state lineage/serial and resource
+IDs. It observes the actual CloudFront distribution/VPC origin and the single
+mutual-TLS Client VPN association before creating the DNS-only `shop` CNAME.
+It checks both public recursive resolvers and every discovered authoritative
+Cloudflare nameserver. Session ownership and a durable DNS intent precede the
+create request; a lost response is reconciled against the exact owned record,
+never by blindly repeating POST. Cleanup persists positive creation evidence
+before DELETE so a lost delete response can be recovered. An empty read after
+an unknown create cannot authorize teardown completion.
+
+The versioned private activation receipt is verified before the lifecycle
+reports `ACCEPTANCE`. `ACTIVATED` leaves the session `PROVISIONING`: public
+HTTPS/API checks, authenticated management checks, runtime digest verification
+and a real VPN client test still require the acceptance worker. Activation
+alone never marks the session `READY`. This path has offline tests; it has not
+been accepted on AWS/Cloudflare and both automation flags remain disabled.
+
 Bootstrap verification:
 
 ```powershell

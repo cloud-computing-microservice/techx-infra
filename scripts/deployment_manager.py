@@ -172,6 +172,9 @@ class DeploymentManager:
         elif mode == "promote" and stage == "chart":
             from deployment_tasks import validate_promotion
             validate_promotion(record, attempt)
+        elif mode == "activate" and stage == "exposure":
+            from deployment_tasks import validate_activation
+            validate_activation(record, attempt)
         elif (mode != "apply" or record.get("stages", {}).get(stage, {}).get("state") != "AWAITING_APPROVAL"
                 or record["stages"][stage].get("attempt") != attempt or record.get("pendingPlan", {}).get("stage") != stage):
             raise ValueError("Task requires a supported plan or pending apply stage")

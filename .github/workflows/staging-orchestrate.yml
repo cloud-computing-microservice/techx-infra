@@ -4,11 +4,18 @@ on:
     inputs:
       session_id:
         description: Existing admitted staging session; does not open a new environment
-        required: true
+        required: false
+        default: ''
         type: string
       execution_version:
         description: Exact immutable S3 execution VersionId
-        required: true
+        required: false
+        default: ''
+        type: string
+      chart_run_id:
+        description: Chart callback only; leave both session references blank
+        required: false
+        default: ''
         type: string
   workflow_run:
     workflows:

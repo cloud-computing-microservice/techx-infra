@@ -720,7 +720,7 @@ GitHub schedules that job. The destination observes its own protected child run.
 GitHub cancellation/notification delivery still require live failure acceptance;
 the independently armed AWS cleanup never depends on a callback succeeding.
 
-Chart-main post-merge wakeup, DNS/acceptance, rollback,
+Live chart-main post-merge wakeup, DNS/acceptance, rollback,
 App configuration and live OIDC/cleanup integration remain unfinished. A pending
 chart PR or its main CI is an explicit wait, not skipped review or a successful
 deployment. The cloud-free API probe at run 40180370141 verified the response
@@ -777,7 +777,7 @@ cannot stand in for the owned executor. Missing/null versions, stale candidate
 CI, withdrawn approval and cleanup fencing fail before authority is returned.
 
 The private merge task and single-call recovery are implemented in the next
-section. The review handoff is described below; chart-main callback remains open.
+section. The review handoff and chart callback are described below.
 Merge runs on the owned private executor so independent cleanup can stop the
 process before fencing the deployment lease. Do not add a runner merge step
 or enable lifecycle/release flags to skip remaining dependencies. READY-session
@@ -846,7 +846,7 @@ The loader changed, so a newly baked/pinned AMI is required before live use.
 No App, control secret, AWS role or AMI has been created at this checkpoint.
 Control App keys would remain after workload teardown and incur separate
 storage/KMS charges; include them in bootstrap/control-resource accounting.
-Chart callback wiring, READY releases, live token/OIDC/network/cancel/merge races, acceptance and
+Live chart callback delivery, READY releases, live token/OIDC/network/cancel/merge races, acceptance and
 rollback remain incomplete. Both deployment flags stay false.
 
 ### Automatic cold-promotion review and grant handoff (source only)
@@ -872,7 +872,36 @@ candidate/grant/runtime/task/lease checks before the single merge call.
 After merge, missing or in-progress main CI is observed without creating another
 review or selecting an unverified chart. Failed/latest or incomplete CI cannot
 select. The same overall 40-minute observation bound applies; chart review and
-main-CI wakeups after that bound still need chart callback wiring. Human approval
+main-CI wakeups after that bound use the callback described below. Human approval
 remains intentional; the automation removes script invocation, not review.
 App configuration/enforcement and live acceptance remain prerequisites, with
 both deployment flags false and no cloud resources created by offline checks.
+
+### Chart CI/review wakeups after observation timeout (source only)
+
+The orchestrator also accepts only `chart_run_id`, with both existing-session
+inputs blank. It derives the current execution from protected S3, verifies its
+opening admission and exact infra source, then reads actual chart run/PR data
+against the versioned proposal. Optional empty GitHub input defaults preserve
+existing child wakeups; mixed session/run hints or extra inputs are rejected.
+Main CI must match the merged proposal commit. PR/review runs must match the
+same-repository branch and head or current synthetic merge, before cleanup and
+while the same proposal is open. GitHub may omit review-run PR associations;
+present associations must match, and an empty list does not remove branch/SHA
+checks. Zero-diff reuse uses its existing protected review notification.
+
+A valid notification only wakes observation: it cannot choose a session, stage,
+budget, verdict or merge. Older failed/rerun notifications do not override newer
+CI; the engine reads the latest actual evidence. Closed/stale/fork/unrelated
+hints are no-ops. Duplicate notifications retain existing durable handoff and
+manager identities and the shared non-cancelling orchestration concurrency.
+
+Chart's `post-deploy.yml` executes only default-branch code, reads no PR files or
+artifacts, and sends one fixed-repository notification POST. Its Lifecycle App
+key must be a secret of main-only `staging-chart-notify`, never a chart repository
+secret available to PR workflows. A no-credential `chart-review-event.yml`
+signals submitted/edited/dismissed reviews; it never substitutes for candidate
+CI or human approval. This explicit dispatch avoids a long `workflow_run` chain.
+The callback workflow name does not claim AWS acceptance. App configuration,
+opening preflight, READY releases, acceptance/rollback and live callback/OIDC/
+queue/cancel/cleanup gates remain open. Keep both deployment flags false.

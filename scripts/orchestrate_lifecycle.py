@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 from automation_session import S3SessionStore, utc, validate
+from chart_callback import bound_chart_run
 from chart_selection import CHART_REPO, INFRA_REPO, PLATFORM_REPO, GitHub
 from lifecycle_coordinator import Coordinator
 from lifecycle_dispatch import CONTEXT, Dispatcher
@@ -17,7 +18,7 @@ WORKFLOW = ".github/workflows/staging-orchestrate.yml"
 OPEN_WORKFLOW = ".github/workflows/staging-lifecycle.yml"
 
 
-def resolve(clients, store, bucket, github, *, run_id, source_sha, event_name, event):
+def resolve(clients, store, bucket, github, *, run_id, source_sha, event_name, event, chart=None):
     if not re.fullmatch(r"[1-9][0-9]*", str(run_id)): raise ValueError("A real orchestrator run is required")
     own = github.get(f"actions/runs/{run_id}")
     if (own.get("id") != int(run_id) or own.get("status") != "in_progress"
@@ -27,11 +28,21 @@ def resolve(clients, store, bucket, github, *, run_id, source_sha, event_name, e
             or own.get("path") not in (WORKFLOW, WORKFLOW + "@main")
             or any(own.get(key, {}).get("full_name") != INFRA_REPO for key in ("repository", "head_repository"))):
         raise ValueError("Orchestration must run once from trusted infra main")
+    chart_run_id = None
     if event_name == "workflow_dispatch":
         inputs = event.get("inputs", {})
-        if set(inputs) != {"session_id", "execution_version"}: raise ValueError("Only an existing immutable session may be woken")
-        session, object_version = inputs["session_id"], inputs["execution_version"]
-    else:
+        if not isinstance(inputs, dict) or set(inputs) - {"session_id", "execution_version", "chart_run_id"}:
+            raise ValueError("Only an existing immutable session or an actual chart run may be woken")
+        inputs = {key: value for key, value in inputs.items() if value != ""}
+        if set(inputs) == {"chart_run_id"}:
+            number = inputs["chart_run_id"]
+            if not isinstance(number, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", number):
+                raise ValueError("Chart callback requires one actual numeric run ID")
+            chart_run_id = int(number)
+        elif set(inputs) == {"session_id", "execution_version"}:
+            session, object_version = inputs["session_id"], inputs["execution_version"]
+        else: raise ValueError("Session references and chart run hints cannot be mixed or incomplete")
+    if event_name == "workflow_run" or chart_run_id is not None:
         pointer, _ = read_json(clients["s3"], bucket, "control/staging/current-execution.json")
         if pointer.get("status") == "OFF": return dict(waiting="NO_ACTIVE_SESSION")
         session, object_version = pointer["sessionId"], pointer["executionVersion"]
@@ -61,6 +72,12 @@ def resolve(clients, store, bucket, github, *, run_id, source_sha, event_name, e
         raise ValueError("Opening workflow identity differs from the protected admission")
     if root.get("status") != "completed": return dict(waiting="OPENING_WORKFLOW_RUNNING")
     bound_failure = root.get("conclusion") != "success"
+    if chart_run_id is not None:
+        if chart is None: raise ValueError("Chart callback requires independent read-only GitHub evidence")
+        if not bound_chart_run(clients["s3"], bucket, current, execution, object_version, chart, chart_run_id):
+            return dict(waiting="UNRELATED_CALLBACK")
+        # A stale failed run must not kill a newer accepted release. The engine
+        # observes the latest actual CI/review; the sender supplies no verdict.
     if event_name == "workflow_run":
         number = event.get("workflow_run", {}).get("id")
         if type(number) is not int or number < 1: raise ValueError("A real completed workflow callback is required")
@@ -119,8 +136,9 @@ def main():
     bucket, token = os.environ["CONTROL_BUCKET"], os.environ["GITHUB_TOKEN"]
     store = S3SessionStore(bucket)
     infra = WorkflowAPI(INFRA_REPO, token)
+    chart = GitHub(CHART_REPO, token)
     context = resolve(clients, store, bucket, infra, run_id=run_id, source_sha=source_sha,
-                      event_name=os.environ["GITHUB_EVENT_NAME"], event=json.loads(event_path.read_bytes()))
+                      event_name=os.environ["GITHUB_EVENT_NAME"], event=json.loads(event_path.read_bytes()), chart=chart)
     if context.get("waiting"):
         summary(context)
         return
@@ -134,7 +152,7 @@ def main():
         apis = {INFRA_REPO: infra}
         if os.environ.get("LIFECYCLE_APP_TOKEN"):
             apis[PLATFORM_REPO] = WorkflowAPI(PLATFORM_REPO, os.environ["LIFECYCLE_APP_TOKEN"])
-        result = Orchestrator(dispatcher, Coordinator(clients, store, bucket), apis, GitHub(CHART_REPO, token)).run()
+        result = Orchestrator(dispatcher, Coordinator(clients, store, bucket), apis, chart).run()
         summary(result)
     except BaseException:
         request_cleanup(clients, store, execution, object_version)

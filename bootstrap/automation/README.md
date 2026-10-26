@@ -1003,3 +1003,9 @@ means PROVISIONING, with acceptance pending. Public HTTPS/API and admin-block
 checks, authenticated Argo/runtime-digest checks and a real VPN-client probe
 remain required before READY; they are not supplied by this control-plane task.
 No AWS or Cloudflare live acceptance is claimed by the offline tests.
+
+The continuation role receives only `s3:GetObjectVersion` on the exposure
+receipt prefix. It cannot read an unversioned receipt or write one; the worker
+is the producer. Terraform mock assertions cover that policy boundary, and the
+IAM contract contains allowed-version-read / denied-current-read / denied-write
+cases for live simulation before activation.

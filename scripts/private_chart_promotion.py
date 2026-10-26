@@ -6,11 +6,12 @@ from automation_session import utc
 from chart_promotion import ColdPromotionChecks
 from chart_selection import CHART_REPO, git_tree, sha
 from deployment_tasks import promotion_reference, read_task
-from github_app_auth import app_secret, installation_client
+from github_app_auth import app_secret_snapshot, installation_client
 from lifecycle_stage import StageController
 from plan_approval import version
 from plan_review_store import ACCOUNT, checksum, encoded, immutable_json, read_json
 from promotion_authority import admitted
+from private_credentials import credential_proof
 from review_chart_promotion import authorize_promotion
 from workflow_handoff import listed_json
 
@@ -19,14 +20,21 @@ class MergeUncertain(ValueError):
     """No positive merge receipt exists; observe this intent, never send again."""
 
 
-def app_clients(runtime, policy, clock):
-    promotion = app_secret(runtime.clients["secretsmanager"], "promotion", kms_key=runtime.kms)
+def app_clients(runtime, policy, clock, execution_version):
+    promotion, promotion_ref = app_secret_snapshot(runtime.clients["secretsmanager"], "promotion", kms_key=runtime.kms)
     opening = admitted(runtime.execution)
     if (promotion["appId"] != policy["appId"] or promotion["slug"] != policy["appSlug"]
             or promotion["appId"] != opening["appId"] or promotion["slug"] != opening["appSlug"]
             or promotion["installationId"] != opening["installationId"] or policy["policySha256"] != opening["policySha256"]):
         raise ValueError("Private promotion key differs from the human-reviewed branch authority")
-    lifecycle = app_secret(runtime.clients["secretsmanager"], "lifecycle", kms_key=runtime.kms)
+    proof = credential_proof(runtime.private, runtime.execution, execution_version)
+    if promotion_ref != proof["promotion"]["secret"]:
+        raise ValueError("Private promotion key changed after foundation credential pinning")
+    lifecycle, lifecycle_ref = app_secret_snapshot(runtime.clients["secretsmanager"], "lifecycle", kms_key=runtime.kms)
+    expected = proof["lifecycle"]["identity"]
+    if (lifecycle_ref != proof["lifecycle"]["secret"] or lifecycle["appId"] != expected["appId"]
+            or lifecycle["slug"] != expected["appSlug"] or lifecycle["installationId"] != expected["installationId"]):
+        raise ValueError("Private Lifecycle key changed after foundation credential pinning")
     from chart_selection import INFRA_REPO
     chart = installation_client(promotion, CHART_REPO, runtime.work, clock, merge=True)
     infra = installation_client(lifecycle, INFRA_REPO, runtime.work, clock)
@@ -139,7 +147,7 @@ class PrivateChartPromotion:
         self.request = deepcopy(approval["request"])
         self.guard()
         self.prefix = f"promotions/staging/{record['sessionId']}/{self.approval_ref['sha256']}"
-        self.chart, self.infra = self.clients(self.runtime, approval["request"]["branchPolicy"], self.clock)
+        self.chart, self.infra = self.clients(self.runtime, approval["request"]["branchPolicy"], self.clock, self.version)
         expected = dict(schemaVersion=1, sessionId=record["sessionId"], executionVersion=self.version, sourceRevisions=self.runtime.execution["sourceRevisions"],
             taskId=self.task_id, instanceId=self.runtime.private["deploymentExecutor"]["instanceId"], approvalReference=self.approval_ref,
             request=approval["request"], approvalExpiresAt=approval["expiresAt"])

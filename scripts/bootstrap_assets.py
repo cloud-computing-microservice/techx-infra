@@ -60,6 +60,22 @@ def validate_secret(purpose, value):
     return value
 
 
+def save_private(runtime, guard, change):
+    guard()
+    key = f"private/staging/{runtime.execution['sessionId']}/inputs.json"
+    response = runtime.clients["s3"].get_object(Bucket=runtime.bucket, Key=key, ExpectedBucketOwner=ACCOUNT)
+    body = response["Body"].read(256 * 1024 + 1)
+    if len(body) > 256 * 1024 or not response.get("ETag") or json.loads(body) != runtime.private:
+        raise ValueError("Private bootstrap snapshot changed; no mutation is authorized")
+    updated = deepcopy(runtime.private)
+    change(updated)
+    guard()
+    runtime.clients["s3"].put_object(Bucket=runtime.bucket, Key=key, ExpectedBucketOwner=ACCOUNT,
+        IfMatch=response["ETag"], Body=json.dumps(updated, allow_nan=False).encode(), ContentType="application/json",
+        ServerSideEncryption="aws:kms", SSEKMSKeyId=runtime.kms)
+    runtime.private = updated
+
+
 class AssetBootstrap:
     def __init__(self, runtime, guard, *, sleep=time.sleep, pki_factory=None, dns_factory=None):
         self.runtime, self.guard = runtime, guard
@@ -73,17 +89,7 @@ class AssetBootstrap:
         self.dns_factory = dns_factory or self.dns_client
 
     def save(self, change):
-        self.guard()
-        response = self.clients["s3"].get_object(Bucket=self.runtime.bucket, Key=self.key, ExpectedBucketOwner=ACCOUNT)
-        body = response["Body"].read(256 * 1024 + 1)
-        if len(body) > 256 * 1024 or not response.get("ETag") or json.loads(body) != self.runtime.private:
-            raise ValueError("Private bootstrap snapshot changed; no mutation is authorized")
-        updated = deepcopy(self.runtime.private)
-        change(updated)
-        self.clients["s3"].put_object(Bucket=self.runtime.bucket, Key=self.key, ExpectedBucketOwner=ACCOUNT,
-            IfMatch=response["ETag"], Body=json.dumps(updated, allow_nan=False).encode(), ContentType="application/json",
-            ServerSideEncryption="aws:kms", SSEKMSKeyId=self.runtime.kms)
-        self.runtime.private = updated
+        save_private(self.runtime, self.guard, change)
 
     def dns_client(self):
         arn = os.environ.get("CLOUDFLARE_SECRET_ARN", "")

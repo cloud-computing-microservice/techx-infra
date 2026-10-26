@@ -8,8 +8,8 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from chart_selection import CHART_REPO, INFRA_REPO
-from github_app_auth import api, app_secret, installation_client, jwt, RepositoryClient
+from chart_selection import CHART_REPO, INFRA_REPO, PLATFORM_REPO
+from github_app_auth import api, app_secret, app_secret_snapshot, installation_client, jwt, RepositoryClient
 
 KMS = "arn:aws:kms:us-east-1:058114477594:key/12345678-1234-1234-1234-123456789abc"
 
@@ -59,6 +59,18 @@ class AppAuthTests(unittest.TestCase):
             self.metadata[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError): app_secret(self.secrets, "promotion", kms_key=KMS)
             self.metadata = old
+
+    def test_secret_snapshot_exposes_only_an_exact_version_reference_beside_private_bytes(self):
+        value, ref = app_secret_snapshot(self.secrets, "promotion", kms_key=KMS)
+        self.assertEqual(value, self.secret)
+        self.assertEqual(ref, dict(arn=self.metadata["ARN"], versionId=self.result["VersionId"]))
+        self.assertNotIn("privateKey", json.dumps(ref))
+
+    def test_platform_installation_client_has_only_read_capability(self):
+        client = self.mint(PLATFORM_REPO, merge=False)
+        self.assertEqual(self.last_repository, PLATFORM_REPO)
+        with self.assertRaises(ValueError): client.request("actions/workflows/bootstrap-staging.yml/dispatches", dict(ref="main"))
+        with self.assertRaises(ValueError): self.mint(PLATFORM_REPO, merge=True)
 
     def test_wrong_tag_scope_version_stage_or_oversized_secret_is_rejected(self):
         self.metadata["Tags"][0]["Value"] = "other-project"

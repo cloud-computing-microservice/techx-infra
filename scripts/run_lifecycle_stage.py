@@ -85,6 +85,9 @@ class LifecycleStageWorker:
             gitops = validate_gitops_checkpoint(record)
             if self.runtime.private["terraformVars"].get("internal_alb_arn") != gitops["internalAlbArn"]:
                 raise ValueError("Edge private inputs differ from the observed GitOps ALB")
+        if stage == "foundation":
+            self.runtime.verify_automation_credentials(lambda: self.guard(owner, epoch), self.clock)
+            self.guard(owner, epoch)
         self.runtime.initialize()
         self.guard(owner, epoch)
         if mode == "plan" and stage == "foundation":
@@ -136,7 +139,15 @@ class LifecycleStageWorker:
         def observe():
             self.guard(owner, epoch)
             return self.runtime.observe()
-        return self.controller.apply(record["sessionId"], owner, epoch, approval_ref, observe, self.runtime.apply)
+        def apply_checked(path, selected_stage):
+            if selected_stage == "foundation":
+                before = observe()
+                self.runtime.verify_automation_credentials(lambda: self.guard(owner, epoch), self.clock)
+                if observe() != before:
+                    raise ValueError("Foundation context changed during final credential verification")
+            self.guard(owner, epoch)
+            return self.runtime.apply(path, selected_stage)
+        return self.controller.apply(record["sessionId"], owner, epoch, approval_ref, observe, apply_checked)
 
 
 def main():
@@ -156,7 +167,8 @@ def main():
     # ImportCertificate has no idempotency token: the SDK must not retry a lost
     # response internally before our durable intent can reconcile it.
     clients = {name: boto3.client(name, region_name="us-east-1",
-        **({"config": Config(retries={"total_max_attempts": 1, "mode": "standard"})} if name == "acm" else {})) for name in
+        **({"config": Config(connect_timeout=10, read_timeout=30, retries={"total_max_attempts": 1, "mode": "standard"})}
+           if name in ("acm", "secretsmanager") else {})) for name in
         ("s3", "sts", "ec2", "scheduler", "acm", "secretsmanager", "resourcegroupstaggingapi")}
     local = json.loads(args.execution.read_bytes())
     execution, _ = read_json(clients["s3"], args.bucket, f"executions/{local['sessionId']}.json", args.execution_version)

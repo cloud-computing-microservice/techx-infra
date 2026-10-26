@@ -86,6 +86,8 @@ python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-handoff.py')
 if ($LASTEXITCODE -ne 0) { throw 'Protected promotion review discovery, grant consumption and automatic private-task dispatch tests failed.' }
+python (Join-Path $PSScriptRoot 'test-chart-callback.py')
+if ($LASTEXITCODE -ne 0) { throw 'Chart callback scope, current proposal and delayed continuation tests failed.' }
 python (Join-Path $PSScriptRoot 'test-github-app-auth.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private GitHub App key/JWT, installation scope and exact merge adapter tests failed.' }
 python (Join-Path $PSScriptRoot 'test-private-chart-promotion.py')

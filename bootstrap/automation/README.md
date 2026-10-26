@@ -908,7 +908,7 @@ queue/cancel/cleanup gates remain open. Keep both deployment flags false.
 
 ### Opening promotion-authority preflight (source only)
 
-The opening preview is schema version **2** and includes public
+The opening preview is schema version **3** and includes public
 `promotionAuthority`: fixed chart repository, App ID/slug, selected installation
 ID and protected-main policy checksum. An old/missing proof cannot start a new
 session. `promotion_authority.py` authenticates the actual organization App
@@ -933,6 +933,14 @@ secret in main-only `staging-chart-read` (preview), human-reviewed `staging-star
 it. The preview now uses `staging-chart-read` without AWS credentials. Do not
 place a signing key in a repository secret available to PR code. Existing
 Lifecycle App credentials used by preview also need these environment scopes.
+Configure actual `LIFECYCLE_APP_ID`, `LIFECYCLE_APP_SLUG` and
+`LIFECYCLE_INSTALLATION_ID`; its App ID must differ from Promotion. Its exact
+maximum grants are Contents read and Actions write, with selected installations
+covering infra/platform. The preview records public `lifecycleIdentity` after
+verifying both repositories with separately scoped read tokens, then revokes
+them. No Actions-write token is minted during this preflight. Both identities
+are rechecked at start and immediately before reservation; schema-v2 approvals
+cannot be reused.
 Missing metadata/key or incomplete/wrong permissions fail before reservation.
 
 After the real human opening review, the same public proof is checked again
@@ -943,9 +951,26 @@ promotion checks must retain that admitted App/policy, and the private worker
 also requires the same installation before minting its merge token. A new App,
 installation or policy needs a new opening preview, not an extended old approval.
 
-This gate verifies GitHub-side promotion credentials/authority, not the private
-Secrets Manager copies or other Apps. Private control-secret metadata and key
-verification, Lifecycle/publisher/callback grants, READY handling, acceptance/
-rollback and live App/OIDC/network/cancel/cleanup tests remain open. No App,
-secret, token, role, AMI or paid AWS environment was created by offline tests.
-Both deployment flags remain false.
+### Private credential gate before foundation (source only)
+
+Before foundation plan/apply initializes Terraform or prepares assets, the leased
+private worker reads only the two fixed control keys
+`techx/automation/promotion-app` and `techx/automation/lifecycle-app`. It validates
+account, region, control tags, KMS key and AWSCURRENT metadata, proves actual
+App/installation/grants/repository scope using read tokens, and compares the
+identities/policy with the immutable opening proof. Read tokens are revoked even
+when a later scope/lease check fails. Control secrets are never created or
+rotated by this gate.
+
+The worker conditionally pins public identities and exact ARN/VersionId pairs
+in `private/staging/<session>/inputs.json`. Versions are reread after API checks,
+on subsequent foundation operations and at the final apply boundary. Existing
+pins cannot be overwritten. Private chart promotion rejects either changed
+version before issuing a merge token. Key/JWT/token material is excluded from
+the proof and Terraform inputs; lost private-snapshot writes require reading the
+actual snapshot before resuming.
+
+Real control-key copies and App configuration/enforcement, publisher/callback
+readiness, READY handling, acceptance/rollback and live App/OIDC/network/cancel/
+cleanup tests remain open. No App, secret, token, role, AMI or paid AWS environment
+was created by offline tests. Both deployment flags remain false.

@@ -71,6 +71,13 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
                 or instance and task.get("state") == "RUNNING" and task.get("mode") == "release"
                 and task.get("stage") == "active" and task.get("instanceId") == instance[1]):
             raise ValueError("TESTING release lease is limited to the bound private manager/executor")
+    elif operation == "acceptance" and record["status"] == "TESTING":
+        from active_public_contract import active_public_context
+        active_public_context(record)
+        handoff = record.get("workflowHandoff", {})
+        if (not re.fullmatch(r"arn:aws:sts::058114477594:assumed-role/techx-automation-public-acceptance/techx-public-[1-9][0-9]*", owner)
+                or handoff.get("operation") != "accept-active-public" or handoff.get("phase") not in ("CALLING", "OBSERVED")):
+            raise ValueError("TESTING public lease requires its protected active acceptance handoff")
     elif operation in ("release", "acceptance") and record["status"] != "READY":
         raise ValueError("Application operations require READY")
     if operation == "bootstrap-publish" and (record["status"] != "PROVISIONING"

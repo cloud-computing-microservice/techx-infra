@@ -1180,7 +1180,32 @@ Private rollout/App receipts are executor-produced and pinned by version/hash;
 the dispatcher can version-read only. Parent validation follows the actual
 manifest, merge receipt and Application intent/spec observation. Completion
 retains TESTING and the original accepted baseline/source revisions, then waits
-at `ACTIVE_PUBLIC_ACCEPTANCE`. Active public/private acceptance, accepted-release
-history and rollback remain unfinished. Loader/recipe hashes changed: bake and
+at `ACTIVE_PUBLIC_ACCEPTANCE`. The hosted handoff below now continues public
+checks; active private acceptance, accepted-release history and rollback remain
+unfinished. Loader/recipe hashes changed: bake and
 verify a matching AMI before live tests. Both flags remain false; no cloud
 acceptance is implied by offline tests or recipe CI.
+
+### Hosted active public acceptance (source only)
+
+After the actual private rollout manager and SSM task succeed, the orchestrator
+dispatches `accept-active-public` through `staging-acceptance.yml`. Inputs bind
+the session/execution, candidate ID and exact rollout receipt checksum. Cold
+acceptance retains its activation input; the workflow rejects mixed/incomplete
+input modes before assuming its scoped role.
+
+The hosted worker rereads pinned rollout/manifest/proposal/merge/Application
+binding and original edge target, verifies its protected handoff and actual
+GitHub-hosted main job, then runs the complete HTTPS/API/admin-block/idempotency/
+rate-limit suite under its TESTING acceptance lease. Historical edge binding
+does not stand in for new runtime evidence. Receipts are separate:
+`acceptance/staging/<session>/active/<releaseId>/public/<dispatchId>/result.json`.
+The public role can version-read only the required private rollout/Application
+binding, not private task logs, inputs, credentials or private acceptance.
+
+The parent consumes only the exact dispatched run/candidate/receipt and advances
+to `ACTIVE_PRIVATE_ACCEPTANCE`. Success leaves TESTING, original execution source
+revisions and the accepted baseline unchanged. Failure retains diagnostics and
+requests independent cleanup; cleanup takeover always wins. Duplicate workers
+cannot repeat order requests. Offline tests include the real CLI parent/child
+lease path and full probe transport; actual hosted HTTP/AWS acceptance is pending.

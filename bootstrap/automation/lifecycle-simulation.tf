@@ -97,6 +97,11 @@ output "lifecycle_iam_simulation_cases_json" {
     public_acceptance = {
       principalArn = "${local.simulation_account_prefix}:role/techx-automation-public-acceptance"
       cases = [
+        { name = "read-pinned-active-rollout", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/rollout.json"] },
+        { name = "read-pinned-application-intent", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/application/intent.json"] },
+        { name = "write-active-public-evidence", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/active/candidate/public/dispatch/result.json"] },
+        { name = "no-active-private-task-log-read", action = "s3:GetObjectVersion", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/task.private.log"] },
+        { name = "no-active-private-acceptance-read", action = "s3:GetObjectVersion", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/acceptance/task.json"] },
         { name = "read-pinned-exposure", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
         { name = "write-public-evidence", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
         { name = "no-private-inputs", action = "s3:GetObjectVersion", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/inputs.json"] },

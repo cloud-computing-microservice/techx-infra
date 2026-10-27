@@ -117,6 +117,10 @@ def next_operation(record, previous):
         from active_release_contract import validate_rollout_checkpoint
         if previous != operation("release", "active"): raise ValueError("Active rollout requires its exact completed manager")
         validate_rollout_checkpoint(record)
+        if record["releaseCandidate"].get("publicAcceptance"):
+            from active_public_contract import validate_active_public_checkpoint
+            validate_active_public_checkpoint(record)
+            return dict(waiting="ACTIVE_PRIVATE_ACCEPTANCE", releaseId=record["releaseCandidate"]["id"])
         return dict(waiting="ACTIVE_PUBLIC_ACCEPTANCE", releaseId=record["releaseCandidate"]["id"])
     if record.get("status") == "READY":
         from private_acceptance_contract import validate_private_checkpoint
@@ -280,6 +284,9 @@ class Dispatcher:
         if op.get("waiting") == "ACTIVE_PUBLIC_ACCEPTANCE":
             from active_release_contract import read_rollout_receipt
             read_rollout_receipt(self.clients["s3"], self.bucket, record, self.version)
+        if op.get("waiting") == "ACTIVE_PRIVATE_ACCEPTANCE":
+            from active_public_contract import read_active_public_receipt
+            read_active_public_receipt(self.clients["s3"], self.bucket, record, self.version)
         if op.get("mode") == "verify":
             from edge_activation import read_activation_receipt
             from public_acceptance_contract import read_public_receipt

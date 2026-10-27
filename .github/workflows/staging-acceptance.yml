@@ -17,7 +17,18 @@ on:
         type: string
       activation_sha256:
         description: Exact committed activation receipt checksum
-        required: true
+        required: false
+        default: ''
+        type: string
+      release_id:
+        description: Active candidate only; leave blank for cold acceptance
+        required: false
+        default: ''
+        type: string
+      rollout_sha256:
+        description: Exact private rollout receipt checksum for active acceptance
+        required: false
+        default: ''
         type: string
 permissions:
   contents: read
@@ -39,6 +50,8 @@ jobs:
       SESSION_ID: ${{ inputs.session_id }}
       EXECUTION_VERSION: ${{ inputs.execution_version }}
       ACTIVATION_SHA256: ${{ inputs.activation_sha256 }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      ROLLOUT_SHA256: ${{ inputs.rollout_sha256 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -50,8 +63,11 @@ jobs:
           import os, re
           assert re.fullmatch(r'staging-[A-Za-z0-9-]{1,64}', os.environ['SESSION_ID'])
           assert re.fullmatch(r'[A-Za-z0-9_./+=-]{1,1024}', os.environ['EXECUTION_VERSION'])
-          for key in ('TECHX_DISPATCH_ID', 'ACTIVATION_SHA256'):
-              assert re.fullmatch(r'[a-f0-9]{64}', os.environ[key])
+          assert re.fullmatch(r'[a-f0-9]{64}', os.environ['TECHX_DISPATCH_ID'])
+          activation, release, rollout = (os.environ[key] for key in ('ACTIVATION_SHA256', 'RELEASE_ID', 'ROLLOUT_SHA256'))
+          cold = bool(re.fullmatch(r'[a-f0-9]{64}', activation)) and not release and not rollout
+          active = not activation and bool(re.fullmatch(r'[a-f0-9]{64}', release)) and bool(re.fullmatch(r'[a-f0-9]{64}', rollout))
+          assert cold != active
           PY
       - run: python -m pip install -r scripts/requirements-automation.txt
       - uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
@@ -66,8 +82,13 @@ jobs:
           CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python scripts/public_acceptance.py --bucket "$CONTROL_BUCKET" --session-id "$SESSION_ID" \
-            --execution-version "$EXECUTION_VERSION" --activation-sha256 "$ACTIVATION_SHA256"
+          if [ -n "$ACTIVATION_SHA256" ]; then
+            python scripts/public_acceptance.py --bucket "$CONTROL_BUCKET" --session-id "$SESSION_ID" \
+              --execution-version "$EXECUTION_VERSION" --activation-sha256 "$ACTIVATION_SHA256"
+          else
+            python scripts/active_public_acceptance.py --bucket "$CONTROL_BUCKET" --session-id "$SESSION_ID" \
+              --execution-version "$EXECUTION_VERSION" --release-id "$RELEASE_ID" --rollout-sha256 "$ROLLOUT_SHA256"
+          fi
   notify:
     needs: public
     if: always() && vars.LIFECYCLE_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.run_attempt == 1

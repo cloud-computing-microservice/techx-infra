@@ -102,6 +102,8 @@ python (Join-Path $PSScriptRoot 'test-ready-release-handoff.py')
 if ($LASTEXITCODE -ne 0) { throw 'Automatic READY review handoff, actual grant consumption, terminal manager and lost-response tests failed.' }
 python (Join-Path $PSScriptRoot 'test-active-rollout.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private active dispatch/task/lease, exact merge/CI/Application, runtime and immutable receipt tests failed.' }
+python (Join-Path $PSScriptRoot 'test-active-public-acceptance.py')
+if ($LASTEXITCODE -ne 0) { throw 'Active hosted public acceptance, rollout binding, separate evidence, parent consumption and CLI lease tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-handoff.py')

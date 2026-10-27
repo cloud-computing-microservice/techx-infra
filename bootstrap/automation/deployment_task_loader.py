@@ -35,9 +35,11 @@ def admitted_task(client, bucket, task_id, instance_id, now):
         raise ValueError("Invalid task identity")
     record = read_json(client, bucket, "automation/staging/session.json")
     if (record.get("account") != ACCOUNT or record.get("region") != "us-east-1" or record.get("environment") != "staging"
-            or record.get("status") not in ("PLANNING", "PROVISIONING")):
+            or record.get("status") not in ("PLANNING", "PROVISIONING", "TESTING")):
         raise ValueError("There is no active deployment session for this task")
     pointer = record.get("deploymentTask", {})
+    if (record["status"] == "TESTING") != ((pointer.get("mode"), pointer.get("stage")) == ("release", "active")):
+        raise ValueError("TESTING admits only the bound active rollout task")
     ref = pointer.get("reference", {})
     if (pointer.get("taskId") != task_id or pointer.get("instanceId") != instance_id or pointer.get("state") != "DISPATCHING"
             or ref.get("key") != f"control/staging/tasks/{task_id}.json" or not ref.get("versionId") or ref["versionId"] == "null"):
@@ -47,7 +49,7 @@ def admitted_task(client, bucket, task_id, instance_id, now):
     if (digest != ref.get("sha256") or task.get("schemaVersion") != 1 or task.get("taskId") != task_id
             or task.get("sessionId") != record.get("sessionId") or task.get("executionVersion") != record.get("executionVersion")
             or task.get("instanceId") != instance_id
-            or (task.get("mode"), task.get("stage")) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private")}
+            or (task.get("mode"), task.get("stage")) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private"), ("release", "active")}
             or type(task.get("attempt")) is not int or task["attempt"] < 1):
         raise ValueError("Task intent differs from the admitted pointer")
     def utc(value):
@@ -94,7 +96,7 @@ def run_task(clients, bucket, kms, task_id, base, *, run=subprocess.run, clock=N
     try:
         with log.open("xb") as output:
             log.chmod(0o600)
-            worker = {"bootstrap": "run_gitops_bootstrap.py", "promote": "run_chart_promotion.py", "activate": "run_edge_activation.py", "verify": "run_private_acceptance.py"}.get(task["mode"], "run_lifecycle_stage.py")
+            worker = {"bootstrap": "run_gitops_bootstrap.py", "promote": "run_chart_promotion.py", "activate": "run_edge_activation.py", "verify": "run_private_acceptance.py", "release": "run_active_rollout.py"}.get(task["mode"], "run_lifecycle_stage.py")
             run([sys.executable, str(infra / "scripts" / worker), task["mode"], "--stage", task["stage"],
                  "--attempt", str(task["attempt"]), "--execution", str(directory / "execution.json"),
                  "--execution-version", task["executionVersion"], "--bucket", bucket, "--kms-key", kms,

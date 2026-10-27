@@ -54,6 +54,9 @@ output "lifecycle_iam_simulation_cases_json" {
             ContextKeyName = "ec2:ResourceTag/${key}", ContextKeyType = "string", ContextKeyValues = [value]
         }] },
         { name = "no-promotion-approval-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/promotion-approvals/staging/simulation/approval.json"] },
+        { name = "read-active-manifest", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
+        { name = "write-private-active-rollout", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/rollout.json"] },
+        { name = "no-publish-active-candidate", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
         { name = "read-fixed-promotion-app", action = "secretsmanager:GetSecretValue", expected = "allowed", resources = ["arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/automation/promotion-app-Abc123"],
           context = [for key, value in { Project = "techx", Environment = "automation", Role = "github-app" } : {
             ContextKeyName = "aws:ResourceTag/${key}", ContextKeyType = "string", ContextKeyValues = [value]
@@ -69,6 +72,9 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "read-pinned-public-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
         { name = "read-pinned-active-candidate", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
         { name = "read-pinned-active-proposal", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/proposals/staging/simulation/active/candidate/proposal.json"] },
+        { name = "read-pinned-active-rollout", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/rollout.json"] },
+        { name = "read-pinned-active-merge", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/promotions/staging/simulation/approval/receipt.json"] },
+        { name = "no-active-rollout-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/rollout.json"] },
         { name = "no-active-candidate-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
         { name = "no-unversioned-active-candidate", action = "s3:GetObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
         { name = "no-public-evidence-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },

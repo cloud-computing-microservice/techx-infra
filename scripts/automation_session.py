@@ -59,7 +59,19 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
         raise ValueError("Verify the previous executor is stopped before taking over an expired lease")
     if operation != "cleanup" and now >= utc(record["cleanupStartAt"]):
         raise ValueError("Cleanup window has started")
-    if operation in ("release", "acceptance") and record["status"] != "READY":
+    if operation == "release" and record["status"] == "TESTING":
+        from active_release_contract import release_context
+        release_context(record)
+        task = record.get("deploymentTask", {})
+        dispatch = record.get("lifecycleDispatch", {})
+        manager = re.fullmatch(r"arn:aws:codebuild:us-east-1:058114477594:build/(techx-automation-lifecycle:[a-f0-9-]+)", owner)
+        instance = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", owner)
+        if not (manager and dispatch.get("phase") == "OBSERVED" and dispatch.get("buildId") == manager[1]
+                and dispatch.get("operation") == dict(mode="release", stage="active", attempt=1)
+                or instance and task.get("state") == "RUNNING" and task.get("mode") == "release"
+                and task.get("stage") == "active" and task.get("instanceId") == instance[1]):
+            raise ValueError("TESTING release lease is limited to the bound private manager/executor")
+    elif operation in ("release", "acceptance") and record["status"] != "READY":
         raise ValueError("Application operations require READY")
     if operation == "bootstrap-publish" and (record["status"] != "PROVISIONING"
             or record.get("stages", {}).get("foundation", {}).get("state") != "APPLIED"):

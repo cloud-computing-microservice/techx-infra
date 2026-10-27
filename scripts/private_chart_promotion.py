@@ -48,6 +48,9 @@ class PrivateChartPromotion:
         self.control = StageController(runtime.clients["s3"], store, runtime.bucket, clock)
         self.checks = ColdPromotionChecks(runtime.clients, store, runtime.bucket, runtime.execution, execution_version, clock=clock)
 
+    def approval_reference(self, record):
+        return promotion_reference(record)
+
     def guard(self):
         record, _ = self.control.owned(self.runtime.execution["sessionId"], self.owner, self.epoch)
         self.checks.guard(owner=self.owner, epoch=self.epoch)
@@ -141,7 +144,7 @@ class PrivateChartPromotion:
         self.owner, self.epoch = owner, epoch
         self.runtime.executor()
         record = self.guard()
-        self.approval_ref = deepcopy(promotion_reference(record))
+        self.approval_ref = deepcopy(self.approval_reference(record))
         approval, _ = read_json(self.runtime.clients["s3"], self.runtime.bucket, self.approval_ref["key"], self.approval_ref["versionId"])
         if checksum(approval) != self.approval_ref["sha256"]: raise ValueError("Private promotion approval checksum changed")
         self.request = deepcopy(approval["request"])

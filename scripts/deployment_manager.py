@@ -98,9 +98,16 @@ class DeploymentManager:
         for key in ("sessionId", "sourceRevisions", "approvedBudgetUsd", "deadline", "cleanupStartAt", "maximumHours", "action"):
             if record.get(key) != self.execution.get(key):
                 raise ValueError("Current session differs from admitted execution")
-        if (record.get("executionVersion") != self.version or record["status"] not in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING"))
+        active = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") == dict(mode="release", stage="active", attempt=1)
+        if (record.get("executionVersion") != self.version or not (active or record["status"] in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING")))
                 or self.clock() >= utc(record["cleanupStartAt"])):
             raise ValueError("Session is closed for deployment")
+        if active:
+            from active_release_contract import release_context
+            release_context(record)
+            ref = record["lifecycleDispatch"]
+            if ref.get("phase") == "OBSERVED" and ref.get("buildId") != self.owner.split(":build/", 1)[1]:
+                raise ValueError("Active task belongs to another actual manager build")
         verify_existing(self.clients["scheduler"], record, self.version, self.clock())
         if record["status"] == "READY":
             from private_acceptance_contract import validate_private_checkpoint
@@ -160,6 +167,17 @@ class DeploymentManager:
 
     def dispatch(self, private, mode, stage, attempt):
         record, etag = self.current()
+        if record["status"] == "TESTING" and mode != "release": raise ValueError("An active session cannot dispatch cold work")
+        if mode == "release":
+            # StartBuild may begin before its positive handle is checkpointed.
+            # Observe that same call; never create a task from a guessed build.
+            for observation in range(24):
+                record, etag = self.current()
+                ref = record.get("lifecycleDispatch", {})
+                if ref.get("phase") == "OBSERVED" and ref.get("buildId") == self.owner.split(":build/", 1)[1]: break
+                if ref.get("phase") != "CALLING": raise ValueError("Active manager has no protected call to observe")
+                self.sleep(1)
+            else: raise TimeoutError("Active manager is still awaiting its protected dispatch receipt")
         self.previous_terminal(record)
         instance = inspect_instance(self.clients["ec2"], self.execution, private)
         self.verify_document()
@@ -178,13 +196,17 @@ class DeploymentManager:
         elif mode == "activate" and stage == "exposure":
             from deployment_tasks import validate_activation
             validate_activation(record, attempt)
+        elif mode == "release" and stage == "active":
+            from active_release_contract import admitted_release, validate_release_start
+            validate_release_start(record, attempt)
+            admitted_release(self.clients["s3"], self.bucket, record, self.execution, self.version, self.clock())
         elif mode == "verify" and stage == "private":
             from private_acceptance_contract import validate_private_start
             validate_private_start(record, attempt)
         elif (mode != "apply" or record.get("stages", {}).get(stage, {}).get("state") != "AWAITING_APPROVAL"
                 or record["stages"][stage].get("attempt") != attempt or record.get("pendingPlan", {}).get("stage") != stage):
             raise ValueError("Task requires a supported plan or pending apply stage")
-        owned = claim(record, self.owner, "deploy", now=self.clock())
+        owned = claim(record, self.owner, "release" if mode == "release" else "deploy", now=self.clock())
         self.store.write(owned, etag)
         epoch, task_id = owned["lease"]["epoch"], uuid.uuid4().hex
         persisted = False

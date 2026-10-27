@@ -77,6 +77,11 @@ def intent_for(record, execution_version, target):
             ("lifecycleDispatch", "pendingPlan", "bootstrapRelease", "bootstrapProposal", "bootstrapChart")})
     if target["operation"] == "accept-public":
         body["predecessor"].update(stages=deepcopy(record["stages"]), status=record["status"])
+    if record["status"] == "READY":
+        if target["operation"] != "review-promotion" or record.get("releaseCandidate", {}).get("state") != "PROPOSED":
+            raise ValueError("READY can dispatch only review of its proposed active candidate")
+        body["predecessor"].update(status="READY", releaseCandidate=deepcopy(record["releaseCandidate"]),
+            acceptedRelease=deepcopy(record["acceptedRelease"]))
     dispatch_id = checksum(body)
     return dict(body, dispatchId=dispatch_id)
 
@@ -192,15 +197,20 @@ def verified_run(api, target, dispatch_id, run_id, context):
 class HandoffDriver:
     def __init__(self, dispatcher, apis): self.dispatcher, self.apis = dispatcher, apis
 
+    def current(self, **kwargs):
+        # READY permits only the separately bound review intent above. This
+        # read path does not enable Dispatcher.start or cold workload mutation.
+        return self.dispatcher.current(allow_ready=True, **kwargs)
+
     def load(self):
-        record, _ = self.dispatcher.current(idle=False)
+        record, _ = self.current(idle=False)
         state = record.get("workflowHandoff", {})
         value = load_intent(self.dispatcher.clients["s3"], self.dispatcher.bucket, record, state.get("intentReference"))
         return record, value
 
     def phase(self, dispatch_id, phase, **fields):
         for attempt in range(4):
-            record, etag = self.dispatcher.current(idle=False)
+            record, etag = self.current(idle=False)
             if record.get("workflowHandoff", {}).get("id") != dispatch_id: raise ValueError("Workflow handoff was superseded")
             updated = deepcopy(record)
             updated["workflowHandoff"].update(phase=phase, **fields)
@@ -212,7 +222,7 @@ class HandoffDriver:
 
     def receipt(self, intent, response):
         d = self.dispatcher
-        record, _ = d.current(idle=False)
+        record, _ = self.current(idle=False)
         response_identity(response, intent["target"]["repository"])
         value = dict(schemaVersion=1, dispatchId=intent["dispatchId"], intentReference=record["workflowHandoff"]["intentReference"], response=response)
         key = receipt_key(record["sessionId"], intent["dispatchId"])
@@ -224,7 +234,7 @@ class HandoffDriver:
     def call_once(self, intent):
         """The mutable session pointer alone cannot prove a POST is unconsumed."""
         d = self.dispatcher
-        record, _ = d.current()
+        record, _ = self.current()
         body = dict(schemaVersion=1, dispatchId=intent["dispatchId"], intentReference=record["workflowHandoff"]["intentReference"])
         key = intent_key(record["sessionId"], intent["dispatchId"]).replace("/intent.json", "/calling.json")
         try:
@@ -274,7 +284,7 @@ class HandoffDriver:
 
     def start(self, target):
         d = self.dispatcher
-        record, etag = d.current()
+        record, etag = self.current()
         intent = intent_for(record, d.version, target)
         dispatch_id = intent["dispatchId"]
         existing = record.get("workflowHandoff")
@@ -296,7 +306,7 @@ class HandoffDriver:
         if api.get("git/ref/heads/main").get("object", {}).get("sha") != target["sourceSha"]:
             raise ValueError("Target workflow main moved from the admitted source")
         self.phase(dispatch_id, "CALLING")
-        fresh, _ = d.current()
+        fresh, _ = self.current()
         if fresh.get("workflowHandoff", {}).get("id") != dispatch_id or fresh["workflowHandoff"]["phase"] != "CALLING":
             raise ValueError("Workflow dispatch was fenced before POST")
         try:
@@ -326,7 +336,7 @@ def guard_child(s3, bucket, *, dispatch_id, repository, workflow, source_sha, ru
     for _ in range(observations):
         record, _ = read_json(s3, bucket, "automation/staging/session.json")
         validate(record)
-        if (record["status"] not in ("PLANNING", "PROVISIONING")
+        if (record["status"] not in ("PLANNING", "PROVISIONING", "READY")
                 or clock() >= utc(record["cleanupStartAt"])):
             raise ValueError("Automatic child belongs to a closed staging session")
         # Use the protected intent itself, not mutable session pointer fields.
@@ -336,6 +346,11 @@ def guard_child(s3, bucket, *, dispatch_id, repository, workflow, source_sha, ru
         checked = dict(record, workflowHandoff=dict(id=dispatch_id))
         intent = load_intent(s3, bucket, checked, dict(key=key, versionId=object_version, sha256=checksum(value)))
         target = intent["target"]
+        if record["status"] == "READY" and (target["operation"] != "review-promotion"
+                or intent["predecessor"].get("status") != "READY"
+                or intent["predecessor"].get("releaseCandidate") != record.get("releaseCandidate")
+                or intent["predecessor"].get("acceptedRelease") != record.get("acceptedRelease")):
+            raise ValueError("READY review child does not match the protected active predecessor")
         if (target["repository"] != repository or target["workflow"] != workflow or target["sourceSha"] != source_sha
                 or target["inputs"] != inputs or record["sessionId"] != inputs["session_id"]):
             raise ValueError("Automatic child inputs/source differ from the protected workflow intent")

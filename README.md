@@ -330,6 +330,18 @@ original verified deadline. These paths have offline tests and remain disabled
 pending live acceptance. Active-session releases and bounded Git rollback still
 require further implementation.
 
+READY-session publication now has immutable candidate/manifest/proposal receipts.
+The protected platform main workflow checks its actual completed acceptance job
+and active publisher job before the helper obtains the release lease. The helper
+verifies the accepted cold baseline, source ancestry, scoped identity, original
+budget/window/schedule and exact scanned ECR artifacts. It writes a session-bound
+intent before publishing, then proposes only the two allowed chart release files.
+It never merges or changes the running Application/accepted baseline. Active
+chart notifications bind only a fully proposed candidate with matching immutable
+receipts and actual PR/run identity; the dispatcher receives version-read only.
+candidate promotion, repeated-release acceptance and rollback still require
+implementation; both flags remain disabled pending those paths and live tests.
+
 Bootstrap verification:
 
 ```powershell

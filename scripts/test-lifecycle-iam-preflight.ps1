@@ -15,16 +15,27 @@ $directory = Join-Path ([System.IO.Path]::GetTempPath()) ("techx-preflight-test-
 $path = Join-Path $directory 'outputs.json'
 try {
   $matrix = @{}
-  foreach ($name in @('manager', 'executor', 'dispatcher')) {
-    $matrix[$name] = @{
-      principalArn = "arn:aws:iam::058114477594:role/techx-automation-lifecycle-$name"
-      cases = @(@{ name = "fixture-$name"; action = 's3:PutObject'; resources = @('arn:aws:s3:::techx-test-control/staging/terraform.tfstate'); expected = 'allowed' })
+  foreach ($pair in @{
+      manager = 'lifecycle-manager'; executor = 'lifecycle-executor'; dispatcher = 'lifecycle-dispatcher'
+      public_acceptance = 'public-acceptance'; publisher = 'publisher'
+    }.GetEnumerator()) {
+    $matrix[$pair.Key] = @{
+      principalArn = "arn:aws:iam::058114477594:role/techx-automation-$($pair.Value)"
+      cases = @(@{ name = "fixture-$($pair.Key -replace '_', '-')"; action = 's3:GetObject'; resources = @('arn:aws:s3:::techx-test-control/automation/staging/session.json'); expected = 'allowed' })
     }
   }
   @{ lifecycle_iam_simulation_cases_json = @{ value = ($matrix | ConvertTo-Json -Depth 15 -Compress) } } |
     ConvertTo-Json -Depth 18 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
   $evidence = & (Join-Path $PSScriptRoot 'check-lifecycle-iam.ps1') -BootstrapOutputsFile $path
-  if (@($evidence).Count -ne 3 -or @($preflightTestState.calls | Sort-Object -Unique).Count -ne 3) { throw 'Preflight omitted a lifecycle role.' }
+  if (@($evidence).Count -ne 5 -or @($preflightTestState.calls | Sort-Object -Unique).Count -ne 5) { throw 'Preflight omitted a lifecycle/public/publisher role.' }
+  $publisher = $matrix.publisher
+  $matrix.Remove('publisher')
+  @{ lifecycle_iam_simulation_cases_json = @{ value = ($matrix | ConvertTo-Json -Depth 15 -Compress) } } |
+    ConvertTo-Json -Depth 18 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+  $failed = $false
+  try { & (Join-Path $PSScriptRoot 'check-lifecycle-iam.ps1') -BootstrapOutputsFile $path | Out-Null } catch { $failed = $true }
+  if (-not $failed -or $preflightTestState.calls.Count -ne 5) { throw 'Incomplete matrix must fail before invoking simulation.' }
+  $matrix.publisher = $publisher
   $matrix.executor.principalArn = 'arn:aws:iam::058114477594:role/unrelated-admin'
   @{ lifecycle_iam_simulation_cases_json = @{ value = ($matrix | ConvertTo-Json -Depth 15 -Compress) } } |
     ConvertTo-Json -Depth 18 | Set-Content -LiteralPath $path -Encoding utf8NoBOM

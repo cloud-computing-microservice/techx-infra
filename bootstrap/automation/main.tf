@@ -218,7 +218,7 @@ data "aws_iam_policy_document" "control" {
     sid       = "OnlyBootstrapPublisherCanWriteProposals"
     effect    = "Deny"
     actions   = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
-    resources = ["${aws_s3_bucket.control.arn}/proposals/staging/*"]
+    resources = ["${aws_s3_bucket.control.arn}/proposals/staging/*/bootstrap.json"]
     principals {
       type        = "*"
       identifiers = ["*"]
@@ -227,6 +227,21 @@ data "aws_iam_policy_document" "control" {
       test     = "ArnNotEquals"
       variable = "aws:PrincipalArn"
       values   = ["arn:aws:iam::058114477594:role/techx-automation-bootstrap-publisher"]
+    }
+  }
+  statement {
+    sid       = "OnlyActivePublisherCanWriteReleaseCandidates"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+    resources = ["${aws_s3_bucket.control.arn}/releases/staging/*/active/*", "${aws_s3_bucket.control.arn}/proposals/staging/*/active/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = ["arn:aws:iam::058114477594:role/techx-automation-publisher"]
     }
   }
   statement {
@@ -308,6 +323,21 @@ resource "aws_iam_role" "publisher" {
 }
 
 data "aws_iam_policy_document" "publisher" {
+  statement {
+    sid     = "ReadAdmittedExecutionAndAcceptedReceipts"
+    actions = ["s3:GetObjectVersion"]
+    resources = [
+      "${aws_s3_bucket.control.arn}/executions/staging-*.json",
+      "${aws_s3_bucket.control.arn}/private/staging/*/acceptance/*.json",
+      "${aws_s3_bucket.control.arn}/private/staging/*/exposure/*.json",
+      "${aws_s3_bucket.control.arn}/acceptance/staging/*/public/*"
+    ]
+  }
+  statement {
+    sid       = "PersistActiveCandidateOnly"
+    actions   = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.control.arn}/releases/staging/*/active/*", "${aws_s3_bucket.control.arn}/proposals/staging/*/active/*"]
+  }
   statement {
     sid       = "EcrAuthentication"
     actions   = ["ecr:GetAuthorizationToken"]

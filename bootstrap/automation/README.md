@@ -1084,3 +1084,41 @@ READY. Read-only READY observation cannot start another cold task. Test-only
 sessions request independent cleanup immediately; window sessions retain their
 original cleanup schedule/deadline. Live VPN/IAM/AMI and full cold-start
 acceptance remain unverified; both automation flags stay off.
+
+### READY candidate publisher (source only)
+
+The regular platform publisher now calls `run_ready_release.py` from the exact
+admitted infra revision. Its first-attempt main push/manual verify run must have
+an observed successful `acceptance / acceptance` job and an active
+`release / publish` job. A different source SHA, fork, rerun, changed baseline,
+non-descendant commit, unverified cleanup schedule or insufficient original
+window is rejected before ECR. The helper owns the heartbeat `release` lease;
+it does not reuse the deploy lease or alter original source revisions/deadlines.
+
+Before publishing it writes a versioned intent at
+`releases/staging/<session>/active/<releaseId>/intent.json`. Release identity
+includes session, execution version, source SHA and accepted baseline. Only one
+candidate can be pending. The manifest/scan receipt uses the same prefix, and
+the exact proposal goes to `proposals/staging/<session>/active/<releaseId>/`.
+The publisher rechecks immutable ECR tag/digests and completed scans independently
+of the application manifest renderer. Branch names include session/release ID;
+the existing guarded Git writer changes only the two release files, never main,
+and reconciles lost ref/PR responses only against the exact expected objects.
+
+The publisher can version-read the accepted cold/public/activation receipts and
+write only its active artifact prefixes plus the existing session CAS. Bucket
+denies keep cold proposals and private acceptance under their separate producer
+roles. It has no private-input/PKI, deployment or merge authority. The IAM matrix
+entry point now validates all five reviewed roles, including the public worker
+and regular publisher, before simulation.
+
+A candidate remains a proposal: this path does not update the Application or
+accepted baseline, and cannot use an unfinished candidate as the next baseline.
+Active callback/promotion/acceptance/rollback and actual OIDC/App/ECR behavior
+remain unverified. Keep flags off until the remaining plan gates are complete.
+
+The chart callback reader recognizes a fully proposed READY candidate using its
+actual intent/manifest/proposal versions, accepted baseline and current PR/run.
+Older or unrelated hints cannot select work. The dispatcher may read only pinned
+active artifact versions; the callback itself neither grants promotion nor
+changes the Application. Active orchestration/promotion is still unfinished.

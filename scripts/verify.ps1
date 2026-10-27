@@ -62,6 +62,8 @@ python (Join-Path $PSScriptRoot 'test-bootstrap-publish.py')
 if ($LASTEXITCODE -ne 0) { throw 'Cold publish source/CI/lease/artifact regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-bootstrap-proposal.py')
 if ($LASTEXITCODE -ne 0) { throw 'Cold chart proposal baseline/manifest/ref/recovery tests failed.' }
+python (Join-Path $PSScriptRoot 'test-ready-release-publish.py')
+if ($LASTEXITCODE -ne 0) { throw 'Active release baseline, trusted same-run CI, immutable candidate and proposal tests failed.' }
 python (Join-Path $PSScriptRoot 'test-chart-selection.py')
 if ($LASTEXITCODE -ne 0) { throw 'Protected chart PR/CI/tree/manifest selection tests failed.' }
 python (Join-Path $PSScriptRoot 'test-gitops-bootstrap.py')

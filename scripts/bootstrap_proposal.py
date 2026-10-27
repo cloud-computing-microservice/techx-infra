@@ -52,6 +52,15 @@ class ChartProposal:
         self.guard()
         return self.github.post(endpoint, payload)
 
+    def values(self, source, baseline):
+        values = (source / "techx-chart/values-staging.yaml").read_bytes()
+        if blob_sha(values) != baseline["values-staging.yaml"]["sha"]:
+            raise ValueError("Archived chart values differ from admitted Git tree")
+        return values
+
+    def message(self, record):
+        return f"chore(staging): bootstrap {record['sessionId']}"
+
     def ref(self):
         try:
             value = self.github.get(f"git/ref/heads/{self.branch}")
@@ -80,9 +89,7 @@ class ChartProposal:
     def perform(self, source, *, prepare_only=False):
         record, _ = self.guard()
         tree_sha, baseline = git_tree(self.github, self.baseline)
-        values = (source / "techx-chart/values-staging.yaml").read_bytes()
-        if blob_sha(values) != baseline["values-staging.yaml"]["sha"]:
-            raise ValueError("Archived chart values differ from admitted Git tree")
+        values = self.values(source, baseline)
         spec = importlib.util.spec_from_file_location("proposal_manifest", source / "techx-platform/scripts/prepare-chart-release.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -110,8 +117,8 @@ class ChartProposal:
         tree = self.write("git/trees", dict(base_tree=tree_sha, tree=entries))
         new_tree = sha(tree.get("sha"))
         author = dict(name="techx-release[bot]", email="techx-release[bot]@users.noreply.github.com",
-                      date=utc(self.publisher.execution["createdAt"]).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        commit = self.write("git/commits", dict(message=f"chore(staging): bootstrap {record['sessionId']}",
+                      date=utc(getattr(self, "commit_date", self.publisher.execution["createdAt"])).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        commit = self.write("git/commits", dict(message=self.message(record),
             tree=new_tree, parents=[self.baseline], author=author, committer=author))
         commit_sha = sha(commit.get("sha"))
         if commit.get("tree", {}).get("sha") != new_tree or [row.get("sha") for row in commit.get("parents", [])] != [self.baseline]:
@@ -134,7 +141,7 @@ class ChartProposal:
                     "Three immutable ECR digests passed the scan gate. Chart CI and human review are required before merge. "
                     "Do not merge after the session closes; this proposal does not authorize deployment.\n")
             try:
-                self.write("pulls", dict(title=f"chore(staging): bootstrap {record['sessionId']}", head=self.branch,
+                self.write("pulls", dict(title=self.message(record), head=self.branch,
                     base="main", body=body, draft=False, maintainer_can_modify=False))
             except Exception:
                 if self.pull(commit_sha) is None: raise

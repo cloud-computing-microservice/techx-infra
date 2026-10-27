@@ -1,4 +1,4 @@
-"""Bind a chart notification to the current immutable cold-release proposal.
+"""Bind a chart notification to the current immutable release proposal.
 
 A notification is only a wakeup hint. Candidate CI, human review, promotion
 grants and selected-release provenance are independently checked by their owners.
@@ -11,9 +11,19 @@ REVIEW = ".github/workflows/chart-review-event.yml"
 
 
 def bound_chart_run(s3, bucket, record, execution, execution_version, chart, run_id):
-    if record.get("status") != "PROVISIONING" or not record.get("bootstrapProposal"):
-        return False
-    proposal = read_proposal(s3, bucket, record, execution, execution_version)
+    if record.get("status") == "READY":
+        if record.get("releaseCandidate", {}).get("state") != "PROPOSED": return False
+        from ready_release_contract import accepted_baseline, read_candidate, read_manifest, read_proposal as active_proposal
+        accepted_baseline(s3, bucket, record, execution_version)
+        intent = read_candidate(s3, bucket, record, execution_version)
+        read_manifest(s3, bucket, record, execution_version)
+        proposal = active_proposal(s3, bucket, record, execution_version)
+        if proposal["reuse"]: return False
+        created_at = intent["createdAt"]
+    elif record.get("status") == "PROVISIONING" and record.get("bootstrapProposal"):
+        proposal = read_proposal(s3, bucket, record, execution, execution_version)
+        created_at = execution["createdAt"]
+    else: return False
     if reuse_proposal(proposal): return False  # Its protected review already sends a bound callback.
     run = chart.get(f"actions/runs/{run_id}")
     path, event = run.get("path"), run.get("event")
@@ -21,7 +31,7 @@ def bound_chart_run(s3, bucket, record, execution, execution_version, chart, run
             or type(run.get("run_attempt")) is not int or run["run_attempt"] < 1
             or path not in (VERIFY, VERIFY + "@main", REVIEW, REVIEW + "@main")
             or any(run.get(key, {}).get("full_name") != CHART_REPO for key in ("repository", "head_repository"))
-            or not utc(execution["createdAt"]) <= utc(run["created_at"]) < utc(execution["cleanupStartAt"])):
+            or not utc(created_at) <= utc(run["created_at"]) < utc(execution["cleanupStartAt"])):
         return False
     pull = chart.get(f"pulls/{proposal['prNumber']}")
     if (pull.get("number") != proposal["prNumber"] or pull.get("html_url") != proposal["pullRequest"]

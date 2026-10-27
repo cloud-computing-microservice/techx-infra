@@ -397,9 +397,36 @@ run "lifecycle_is_scoped_and_pinned" {
   assert {
     condition = length([for statement in data.aws_iam_policy_document.control.statement : statement if
       statement.sid == "OnlyBootstrapPublisherCanWriteProposals" && statement.effect == "Deny" &&
-      contains(statement.resources, "arn:aws:s3:::techx-test-control/proposals/staging/*")
+      contains(statement.resources, "arn:aws:s3:::techx-test-control/proposals/staging/*/bootstrap.json")
     ]) == 1
     error_message = "Only the cold publisher may write immutable proposal receipts."
+  }
+  assert {
+    condition = (
+      length([for statement in data.aws_iam_policy_document.control.statement : statement if
+        statement.sid == "OnlyActivePublisherCanWriteReleaseCandidates" && statement.effect == "Deny" &&
+        toset(statement.resources) == toset(["arn:aws:s3:::techx-test-control/releases/staging/*/active/*", "arn:aws:s3:::techx-test-control/proposals/staging/*/active/*"]) &&
+        anytrue([for condition in statement.condition : condition.test == "ArnNotEquals" && condition.variable == "aws:PrincipalArn" &&
+          toset(condition.values) == toset(["arn:aws:iam::058114477594:role/techx-automation-publisher"])
+        ])
+      ]) == 1 &&
+      length([for statement in data.aws_iam_policy_document.publisher.statement : statement if
+        statement.sid == "PersistActiveCandidateOnly" && toset(statement.actions) == toset(["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"]) &&
+        toset(statement.resources) == toset(["arn:aws:s3:::techx-test-control/releases/staging/*/active/*", "arn:aws:s3:::techx-test-control/proposals/staging/*/active/*"])
+      ]) == 1 &&
+      alltrue([for statement in data.aws_iam_policy_document.publisher.statement :
+        toset(statement.actions) == toset(["s3:GetObjectVersion"]) if statement.sid == "ReadAdmittedExecutionAndAcceptedReceipts"
+      ])
+    )
+    error_message = "Active candidate receipts must be publisher-only, separately scoped from cold proposals and private acceptance."
+  }
+  assert {
+    condition = length(jsondecode(aws_iam_role_policy.ready_candidate_read[0].policy).Statement) == 1 && alltrue([
+      for statement in jsondecode(aws_iam_role_policy.ready_candidate_read[0].policy).Statement :
+      statement.Effect == "Allow" && toset(statement.Action) == toset(["s3:GetObjectVersion"]) &&
+      toset(statement.Resource) == toset(["arn:aws:s3:::techx-test-control/releases/staging/*/active/*", "arn:aws:s3:::techx-test-control/proposals/staging/*/active/*"])
+    ])
+    error_message = "Active chart callback may read only pinned candidate versions; it cannot publish or read unversioned active artifacts."
   }
   assert {
     condition = (length([for statement in data.aws_iam_policy_document.control.statement : statement if

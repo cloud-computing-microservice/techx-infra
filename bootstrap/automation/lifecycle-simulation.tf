@@ -67,6 +67,10 @@ output "lifecycle_iam_simulation_cases_json" {
       cases = [
         { name = "fixed-manager-build", action = "codebuild:StartBuild", expected = "allowed", resources = [local.lifecycle_project_arn] },
         { name = "read-pinned-public-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
+        { name = "read-pinned-active-candidate", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
+        { name = "read-pinned-active-proposal", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/proposals/staging/simulation/active/candidate/proposal.json"] },
+        { name = "no-active-candidate-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
+        { name = "no-unversioned-active-candidate", action = "s3:GetObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
         { name = "no-public-evidence-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
         { name = "read-pinned-activation-receipt", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
         { name = "read-pinned-private-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/receipt.json"] },
@@ -94,6 +98,18 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "no-manager-build", action = "codebuild:StartBuild", expected = "denied", resources = [local.lifecycle_project_arn] }
       ]
     }
+    publisher = {
+      principalArn = "${local.simulation_account_prefix}:role/techx-automation-publisher"
+      cases = [
+        { name = "write-active-manifest", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
+        { name = "write-active-proposal", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/proposals/staging/simulation/active/candidate/proposal.json"] },
+        { name = "no-cold-proposal-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/proposals/staging/simulation/bootstrap.json"] },
+        { name = "read-pinned-baseline", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/baseline.json"] },
+        { name = "no-baseline-overwrite", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/baseline.json"] },
+        { name = "no-private-inputs-read", action = "s3:GetObjectVersion", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/inputs.json"] },
+        { name = "no-publisher-cluster-create", action = "eks:CreateCluster", expected = "denied", resources = ["arn:aws:eks:us-east-1:058114477594:cluster/techx-staging"] }
+      ]
+    }
   }) : null
 }
 
@@ -105,7 +121,8 @@ resource "aws_iam_role_policy" "lifecycle_simulation" {
     Effect = "Allow", Action = ["iam:SimulatePrincipalPolicy"], Resource = [
       "${local.simulation_account_prefix}:role/techx-automation-lifecycle-manager", local.deployment_role_arn,
       "${local.simulation_account_prefix}:role/techx-automation-lifecycle-dispatcher",
-      "${local.simulation_account_prefix}:role/techx-automation-public-acceptance"
+      "${local.simulation_account_prefix}:role/techx-automation-public-acceptance",
+      "${local.simulation_account_prefix}:role/techx-automation-publisher"
     ]
   }] })
 }

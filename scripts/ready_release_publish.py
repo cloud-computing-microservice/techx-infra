@@ -51,6 +51,9 @@ class ReadyPublisher:
         candidate = record.get("releaseCandidate")
         if candidate and candidate.get("id") != release_id:
             raise ValueError("Another release candidate must be resolved before publishing")
+        if candidate and (candidate.get("promotionApprovalReference")
+                or record.get("workflowHandoff", {}).get("phase", "CONSUMED") != "CONSUMED"):
+            raise ValueError("An active review/grant already owns this candidate; do not republish")
         return proof, baseline, release_id
 
     def guard(self):

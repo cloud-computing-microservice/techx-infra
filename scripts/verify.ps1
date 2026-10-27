@@ -98,6 +98,8 @@ python (Join-Path $PSScriptRoot 'test-chart-promotion.py')
 if ($LASTEXITCODE -ne 0) { throw 'Exact cold chart candidate, review, CI, branch authority and promotion race checks failed.' }
 python (Join-Path $PSScriptRoot 'test-ready-chart-promotion.py')
 if ($LASTEXITCODE -ne 0) { throw 'Active candidate promotion, original baseline, CI/review and separate grant tests failed.' }
+python (Join-Path $PSScriptRoot 'test-ready-release-handoff.py')
+if ($LASTEXITCODE -ne 0) { throw 'Automatic READY review handoff, actual grant consumption, terminal manager and lost-response tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-handoff.py')

@@ -7,7 +7,7 @@ import re
 
 from automation_budget import validate_estimate
 from automation_session import utc, validate
-from chart_promotion import ColdPromotionChecks
+from chart_promotion import ColdPromotionChecks, LIVE, PromotionPending
 from chart_selection import ALLOWED_FILES, blob, git_tree
 from cleanup_schedule import verify_existing
 from ready_release_contract import (VERIFY, accepted_baseline, read_candidate, read_manifest, read_proposal)
@@ -20,12 +20,14 @@ def completed_source(github, intent, record):
     proof = intent["sourceProof"]
     run_id, source_sha = proof["workflowRunId"], intent["sourceSha"]
     run = github.get(f"actions/runs/{run_id}")
-    if (run.get("id") != run_id or run.get("status") != "completed" or run.get("event") not in ("push", "workflow_dispatch")
+    if (run.get("id") != run_id or run.get("event") not in ("push", "workflow_dispatch")
             or type(run.get("run_attempt")) is not int or run["run_attempt"] != 1 or run.get("head_branch") != "main"
             or run.get("head_sha") != source_sha or run.get("path") not in (VERIFY, VERIFY + "@main")
             or any(run.get(key, {}).get("full_name") != PLATFORM_REPO for key in ("repository", "head_repository"))
             or not utc(record["createdAt"]) <= utc(run.get("created_at", "")) <= utc(intent["createdAt"])):
         raise ValueError("Active promotion requires the intent's actual completed source run")
+    if run.get("status") in LIVE: raise PromotionPending("The candidate's source publisher is still running")
+    if run.get("status") != "completed": raise ValueError("Unknown active source run state")
     response = github.get(f"actions/runs/{run_id}/jobs?filter=latest&per_page=100")
     jobs = response.get("jobs")
     if (not isinstance(jobs, list) or len(jobs) > 100 or type(response.get("total_count")) is not int

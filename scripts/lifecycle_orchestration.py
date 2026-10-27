@@ -3,7 +3,7 @@ from copy import deepcopy
 import time
 
 from automation_session import utc
-from chart_selection import (CHART_REPO, INFRA_REPO, read_proposal, read_release, read_selection, reuse_proposal, sha)
+from chart_selection import (CHART_REPO, INFRA_REPO, PLATFORM_REPO, read_proposal, read_release, read_selection, reuse_proposal, sha)
 from chart_promotion import candidate_ci, PromotionPending, pull_identity
 from continue_lifecycle import drive
 from deployment_tasks import validate_promotion
@@ -69,6 +69,9 @@ class Orchestrator:
     def consume_promotion(self, record, intent, run, source_run):
         """A successful dispatched review discovers its own protected grant."""
         d = self.dispatcher
+        if intent["predecessor"].get("status") == "READY":
+            from ready_release_handoff import ReadyReleaseHandoff
+            return ReadyReleaseHandoff(d, self.chart, self.apis[PLATFORM_REPO], self.apis[INFRA_REPO]).consume(record, intent, run, source_run)
         index, object_version = read_json(d.clients["s3"], d.bucket, promotion_index_key(record["sessionId"], run["id"]))
         version(object_version)
         expected = dict(schemaVersion=1, kind="cold-promotion-index", sessionId=record["sessionId"],
@@ -183,6 +186,34 @@ class Orchestrator:
                     self.dispatcher.cleanup()
                     raise ValueError("Dispatched workflow failed/cancelled; independent cleanup requested")
                 self.consume(record, intent, run)
+                continue
+            if record["status"] == "READY" and record.get("releaseCandidate"):
+                if record.get("lease"):
+                    last = dict(waiting="ACTIVE_RELEASE_BUSY")
+                    sleep(max(0, min(10, end - monotonic())))
+                    continue
+                observed = drive(self.dispatcher, self.coordinator, observations=1,
+                    sleep=lambda delay: sleep(max(0, min(delay, end - monotonic()))), monotonic=monotonic)
+                if observed.get("waiting") != "READY":
+                    last = observed
+                    continue
+                if PLATFORM_REPO not in self.apis:
+                    return dict(waiting="GITHUB_APP_CONFIGURATION", targetRepository=PLATFORM_REPO)
+                from ready_release_handoff import ReadyReleaseHandoff
+                active = ReadyReleaseHandoff(self.dispatcher, self.chart, self.apis[PLATFORM_REPO], self.apis[INFRA_REPO])
+                try:
+                    target = active.target(record)
+                except PromotionPending:
+                    last = dict(waiting="ACTIVE_CHART_REVIEW")
+                    sleep(max(0, min(10, end - monotonic())))
+                    continue
+                if target.get("waiting") == "ACTIVE_RELEASE_BUSY":
+                    last = target
+                    sleep(max(0, min(10, end - monotonic())))
+                    continue
+                if target.get("waiting"): return target
+                response = self.handoffs.start(target)
+                last = dict(waiting="WORKFLOW_RUNNING", repository=target["repository"], workflowRunId=response["workflow_run_id"], workflowRun=response["html_url"])
                 continue
             # One observation shares this loop's overall bound. It does not
             # start another 40-minute timer for every lifecycle stage.

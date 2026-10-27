@@ -32,6 +32,9 @@ class ReadyReleaseTests(unittest.TestCase):
         self.private.setUp(); self.addCleanup(self.private.doCleanups)
         self.private.complete_parent()
         f = self.f = self.private.f
+        # The cold public child is consumed before the private task in the
+        # actual orchestrator. This worker-level fixture completes it directly.
+        if f.record.get("workflowHandoff"): f.record["workflowHandoff"]["phase"] = "CONSUMED"
         self.source_sha, self.owner = "c" * 40, "cloud-computing-microservice/techx-platform:701:1"
         self.baseline = deepcopy(f.record["acceptedRelease"])
         self.main, self.descendant = self.source_sha, True

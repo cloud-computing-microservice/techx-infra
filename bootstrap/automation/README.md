@@ -1140,3 +1140,21 @@ Preview/approver roles can version-read only candidate and accepted evidence;
 they gain no session, candidate, PKI or deployment write permission. Automatic
 active handoff, private merge/Application update, acceptance and rollback still
 need integration and live verification. Both deployment flags remain false.
+
+### Automatic READY review handoff (source only)
+
+The orchestrator recognizes an active candidate after the previous manager and
+SSM task are observed successful/terminal. READY may dispatch only its proposed
+candidate's review; cold bootstrap/apply handoffs remain unavailable. The
+protected intent pins the entire candidate and accepted baseline. Automatic
+review children verify that predecessor and their actual dispatch receipt.
+
+Pending original publisher/PR CI or a publisher lease is a bounded wait, not a
+reason to invent a successful deployment or restart a manager. A candidate under
+review/grant cannot be republished. A successful review must expose its own
+separately typed active grant index; the parent rereads exact candidate artifacts,
+CI/file diff/PR reviews and the real successful review run/human approval before
+adding only `promotionApprovalReference` to the same candidate by CAS. Lost
+dispatch/CAS responses reconcile the existing run/grant without a second review.
+This path stops at `ACTIVE_PRIVATE_PROMOTION`: private merge, Application update,
+active acceptance/rollback and live acceptance still require implementation.

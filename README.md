@@ -349,8 +349,13 @@ issue a separate `ready-promotion-approval` after real human review. It verifies
 the accepted baseline, completed source CI, exact chart tree/head/CI, reviews
 and the opening App/main policy. Active grants cannot be consumed as cold grants;
 they retain original execution revisions and do not authorize a runner to merge.
-Active orchestration, private merge/Application update and acceptance/rollback
-remain unfinished. This is source/offline progress, not cloud acceptance.
+The orchestrator can dispatch and consume this active review under a separate
+protected handoff. It rechecks terminal CodeBuild/SSM and the same accepted
+receipts, binds the actual review run and grant index, and stores the grant only
+on the unchanged candidate by CAS. Pending source/PR CI and publisher leases
+remain bounded waits; a publisher cannot republish a candidate under review.
+Private merge/Application update and acceptance/rollback remain unfinished.
+This is source/offline progress, not cloud acceptance.
 
 ```powershell
 ./scripts/verify.ps1

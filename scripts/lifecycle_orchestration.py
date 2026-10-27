@@ -57,6 +57,15 @@ class Orchestrator:
             if (receipt["workflowRun"] != source_run or receipt["dispatchId"] != intent["dispatchId"]
                     or record["stages"]["exposure"] != intent["predecessor"]["stages"]["exposure"]):
                 raise ValueError("Public acceptance did not come from the exact dispatched predecessor/run")
+        elif op == "accept-active-public":
+            from active_public_contract import read_active_public_receipt
+            receipt = read_active_public_receipt(d.clients["s3"], d.bucket, record, d.version)
+            candidate = deepcopy(record["releaseCandidate"])
+            candidate.pop("publicAcceptance", None)
+            if (receipt["workflowRun"] != source_run or receipt["dispatchId"] != intent["dispatchId"]
+                    or candidate != intent["predecessor"].get("releaseCandidate")
+                    or record.get("acceptedRelease") != intent["predecessor"].get("acceptedRelease")):
+                raise ValueError("Active public result differs from its dispatched rollout/candidate")
         else:
             read_release(d.clients["s3"], d.bucket, record, d.execution, d.version)
             selected = read_selection(d.clients["s3"], d.bucket, record, d.execution, d.version)
@@ -116,6 +125,7 @@ class Orchestrator:
         waiting = result["waiting"]
         if waiting == "PLAN_APPROVAL": return target_for("review-plan", record, d.execution)
         if waiting == "PUBLIC_ACCEPTANCE": return target_for("accept-public", record, d.execution)
+        if waiting == "ACTIVE_PUBLIC_ACCEPTANCE": return target_for("accept-active-public", record, d.execution)
         if waiting in ("COLD_RELEASE", "CHART_PROPOSAL"):
             if waiting == "CHART_PROPOSAL":
                 raise ValueError("A completed cold workflow must publish both release and proposal evidence")

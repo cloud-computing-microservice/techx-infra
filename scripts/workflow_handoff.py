@@ -24,6 +24,7 @@ WORKFLOWS = {
     "select-chart": (INFRA_REPO, "staging-chart-select.yml"),
     "review-promotion": (INFRA_REPO, "staging-chart-promote.yml"),
     "accept-public": (INFRA_REPO, "staging-acceptance.yml"),
+    "accept-active-public": (INFRA_REPO, "staging-acceptance.yml"),
 }
 LIVE = {"queued", "requested", "waiting", "pending", "in_progress"}
 
@@ -62,6 +63,10 @@ def target_for(operation, record, execution, *, chart_sha=None, pr_number=None):
             from deployment_tasks import validate_exposure_checkpoint
             stage = validate_exposure_checkpoint(record)
             inputs["activation_sha256"] = stage["receiptReference"]["sha256"]
+        if operation == "accept-active-public":
+            from active_public_contract import active_public_context
+            context = active_public_context(record)
+            inputs.update(release_id=context["releaseContext"]["releaseId"], rollout_sha256=context["rollout"]["receiptReference"]["sha256"])
     source = execution["sourceRevisions"][repository.rsplit("/", 1)[1]]
     return dict(operation=operation, repository=repository, workflow=workflow, sourceSha=sha(source), inputs=inputs)
 
@@ -82,6 +87,9 @@ def intent_for(record, execution_version, target):
             raise ValueError("READY can dispatch only review of its proposed active candidate")
         body["predecessor"].update(status="READY", releaseCandidate=deepcopy(record["releaseCandidate"]),
             acceptedRelease=deepcopy(record["acceptedRelease"]))
+    if record["status"] == "TESTING":
+        if target["operation"] != "accept-active-public": raise ValueError("TESTING may hand off only its active public acceptance")
+        body["predecessor"].update(status="TESTING", releaseCandidate=deepcopy(record["releaseCandidate"]), acceptedRelease=deepcopy(record["acceptedRelease"]))
     dispatch_id = checksum(body)
     return dict(body, dispatchId=dispatch_id)
 
@@ -297,7 +305,7 @@ class HandoffDriver:
             ref = immutable_json(d.clients["s3"], d.bucket, intent_key(record["sessionId"], dispatch_id), intent)
             ref["sha256"] = checksum(intent)
             updated = deepcopy(record)
-            updated["workflowHandoff"] = dict(id=dispatch_id, phase="PREPARED", intentReference=ref)
+            updated["workflowHandoff"] = dict(id=dispatch_id, operation=target["operation"], phase="PREPARED", intentReference=ref)
             d.store.write(updated, etag)
         record, stored = self.load()
         if record["workflowHandoff"]["phase"] != "PREPARED" or stored != intent:
@@ -336,7 +344,7 @@ def guard_child(s3, bucket, *, dispatch_id, repository, workflow, source_sha, ru
     for _ in range(observations):
         record, _ = read_json(s3, bucket, "automation/staging/session.json")
         validate(record)
-        if (record["status"] not in ("PLANNING", "PROVISIONING", "READY")
+        if (record["status"] not in ("PLANNING", "PROVISIONING", "READY", "TESTING")
                 or clock() >= utc(record["cleanupStartAt"])):
             raise ValueError("Automatic child belongs to a closed staging session")
         # Use the protected intent itself, not mutable session pointer fields.
@@ -346,6 +354,17 @@ def guard_child(s3, bucket, *, dispatch_id, repository, workflow, source_sha, ru
         checked = dict(record, workflowHandoff=dict(id=dispatch_id))
         intent = load_intent(s3, bucket, checked, dict(key=key, versionId=object_version, sha256=checksum(value)))
         target = intent["target"]
+        if record["status"] == "TESTING":
+            if not isinstance(record.get("releaseCandidate"), dict): raise ValueError("TESTING public child lacks its active candidate")
+            candidate = deepcopy(record["releaseCandidate"])
+            # The child checks the predecessor before it creates its own public
+            # checkpoint; that checkpoint is the only permitted added field.
+            candidate.pop("publicAcceptance", None)
+            original = deepcopy(intent["predecessor"].get("releaseCandidate", {}))
+            original.pop("publicAcceptance", None)
+            if (target["operation"] != "accept-active-public" or intent["predecessor"].get("status") != "TESTING"
+                    or candidate != original or intent["predecessor"].get("acceptedRelease") != record.get("acceptedRelease")):
+                raise ValueError("TESTING public child differs from its protected rollout predecessor")
         if record["status"] == "READY" and (target["operation"] != "review-promotion"
                 or intent["predecessor"].get("status") != "READY"
                 or intent["predecessor"].get("releaseCandidate") != record.get("releaseCandidate")

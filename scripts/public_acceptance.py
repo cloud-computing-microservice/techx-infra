@@ -41,11 +41,15 @@ def hosted_runner(github, run_id, execution):
 
 
 class PublicAcceptance:
+    session_status = "PROVISIONING"
+    lease_operation = "deploy"
+    receipt_kind = "public-acceptance"
+
     def __init__(self, clients, store, bucket, execution, version, run_id, dispatch_id, activation_sha256, *, clock=None):
         validate(execution)
         if not re.fullmatch(r"[1-9][0-9]*", str(run_id)) or not re.fullmatch(r"[a-f0-9]{64}", dispatch_id):
             raise ValueError("Only an admitted public acceptance workflow may run")
-        if not re.fullmatch(r"[a-f0-9]{64}", activation_sha256): raise ValueError("An exact activation receipt is required")
+        if not re.fullmatch(r"[a-f0-9]{64}", activation_sha256): raise ValueError("An exact predecessor receipt is required")
         self.clients, self.store, self.bucket = clients, store, bucket
         self.execution, self.version = deepcopy(execution), version
         self.run_id, self.dispatch_id, self.activation_sha = str(run_id), dispatch_id, activation_sha256
@@ -53,29 +57,45 @@ class PublicAcceptance:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.workflow_run = f"https://github.com/{INFRA_REPO}/actions/runs/{self.run_id}"
 
+    def context(self, record): return public_context(record)
+    def predecessor_sha(self, context): return context["exposure"]["receiptReference"]["sha256"]
+    def stage(self, record): return record.get("stages", {}).get("publicAcceptance")
+    def set_stage(self, record, stage): record["stages"]["publicAcceptance"] = stage
+    def receipt_fields(self, record): return {}
+    def result_key(self, record): return result_key(record["sessionId"], self.dispatch_id)
+    def read_receipt(self, record): return read_public_receipt(self.clients["s3"], self.bucket, record, self.version)
+    def handoff_inputs(self):
+        return dict(session_id=self.execution["sessionId"], execution_version=self.version, activation_sha256=self.activation_sha)
+
+    def network_target(self, record):
+        activation = read_activation_receipt(self.clients["s3"], self.bucket, record, self.version)
+        read_release(self.clients["s3"], self.bucket, record, self.execution, self.version)
+        read_selection(self.clients["s3"], self.bucket, record, self.execution, self.version)
+        return activation["resources"]["target"]
+
     def validate_record(self, record, *, idle=False):
         validate(record)
         if (any(record.get(key) != self.execution.get(key) for key in ("sessionId", "account", "region", "environment",
                 "sourceRevisions", "deadline", "cleanupStartAt", "approvedBudgetUsd", "maximumHours", "action"))
-                or record.get("executionVersion") != self.version or record["status"] != "PROVISIONING"
+                or record.get("executionVersion") != self.version or record["status"] != self.session_status
                 or record.get("pendingPlan") is not None or self.clock() >= utc(record["cleanupStartAt"])):
             raise ValueError("Public acceptance session is closed or differs from immutable execution")
-        context = public_context(record)
-        if (context["exposure"]["receiptReference"]["sha256"] != self.activation_sha
+        context = self.context(record)
+        if (self.predecessor_sha(context) != self.activation_sha
                 or record.get("workflowHandoff", {}).get("id") != self.dispatch_id
                 or record["workflowHandoff"].get("phase") not in ("CALLING", "OBSERVED")
                 or hasattr(self, "context_hash") and checksum(context) != self.context_hash):
             raise ValueError("Public acceptance predecessor/handoff was superseded")
         if idle:
-            if record.get("lease") or record.get("stages", {}).get("publicAcceptance"):
+            if record.get("lease") or self.stage(record):
                 raise ValueError("Public acceptance is already consumed or the environment is busy")
         else:
             lease = record.get("lease", {})
-            if lease.get("owner") != self.owner or lease.get("operation") != "deploy" or lease.get("epoch") != self.epoch:
+            if lease.get("owner") != self.owner or lease.get("operation") != self.lease_operation or lease.get("epoch") != self.epoch:
                 raise ValueError("The public probe no longer owns its deployment lease")
-            claim(record, self.owner, "deploy", now=self.clock())
+            claim(record, self.owner, self.lease_operation, now=self.clock())
             if utc(lease["expiresAt"]) <= self.clock(): raise ValueError("Public probe lease expired")
-            stage = record.get("stages", {}).get("publicAcceptance")
+            stage = self.stage(record)
             if stage and (stage.get("state") != "RUNNING" or stage.get("dispatchId") != self.dispatch_id
                     or stage.get("workflowRun") != self.workflow_run or stage.get("contextSha256") != self.context_hash):
                 raise ValueError("Public acceptance checkpoint was replaced or completed")
@@ -96,43 +116,41 @@ class PublicAcceptance:
     def admit(self):
         guard_child(self.clients["s3"], self.bucket, dispatch_id=self.dispatch_id, repository=INFRA_REPO,
             workflow="staging-acceptance.yml", source_sha=self.execution["sourceRevisions"]["techx-infra"], run_id=self.run_id,
-            inputs=dict(session_id=self.execution["sessionId"], execution_version=self.version, activation_sha256=self.activation_sha),
+            inputs=self.handoff_inputs(),
             observations=24, clock=self.clock)
 
     def perform(self, github, *, probe_factory=PublicProbe):
         current, _ = self.store.read()
         self.epoch = current.get("lease", {}).get("epoch")
-        self.context_hash = checksum(public_context(current))
+        self.context_hash = checksum(self.context(current))
         record, etag = self.current()
         self.admit()
         runner = hosted_runner(github, self.run_id, self.execution)
-        if record.get("stages", {}).get("publicAcceptance"):
+        if self.stage(record):
             raise ValueError("Public probe execution was already consumed; do not repeat it")
-        activation = read_activation_receipt(self.clients["s3"], self.bucket, record, self.version)
-        read_release(self.clients["s3"], self.bucket, record, self.execution, self.version)
-        read_selection(self.clients["s3"], self.bucket, record, self.execution, self.version)
+        target = self.network_target(record)
         current, etag = self.current()
-        if current.get("stages", {}).get("publicAcceptance"):
+        if self.stage(current):
             raise ValueError("Public probe execution was already consumed")
         updated = deepcopy(current)
-        updated["stages"]["publicAcceptance"] = dict(state="RUNNING", attempt=1, dispatchId=self.dispatch_id,
-            workflowRun=self.workflow_run, contextSha256=self.context_hash)
+        self.set_stage(updated, dict(state="RUNNING", attempt=1, dispatchId=self.dispatch_id,
+            workflowRun=self.workflow_run, contextSha256=self.context_hash))
         self.store.write(updated, etag)
         try:
-            result = probe_factory(self.guard, record["sessionId"], self.dispatch_id).perform(activation["resources"]["target"])
+            result = probe_factory(self.guard, record["sessionId"], self.dispatch_id).perform(target)
             self.guard()
             if hosted_runner(github, self.run_id, self.execution) != runner:
                 raise ValueError("Hosted public probe identity changed")
-            receipt = dict(schemaVersion=1, kind="public-acceptance", sessionId=record["sessionId"], executionVersion=self.version,
+            receipt = dict(schemaVersion=1, kind=self.receipt_kind, sessionId=record["sessionId"], executionVersion=self.version,
                 contextSha256=self.context_hash, dispatchId=self.dispatch_id, workflowRun=self.workflow_run, runner=runner,
-                result=result, completedAt=self.clock().isoformat())
+                result=result, completedAt=self.clock().isoformat(), **self.receipt_fields(record))
             self.guard()
-            ref = immutable_json(self.clients["s3"], self.bucket, result_key(record["sessionId"], self.dispatch_id), receipt)
+            ref = immutable_json(self.clients["s3"], self.bucket, self.result_key(record), receipt)
             ref["sha256"] = checksum(receipt)
             current, etag = self.current()
             updated = deepcopy(current)
-            updated["stages"]["publicAcceptance"].update(state="PASSED", receiptReference=ref)
-            read_public_receipt(self.clients["s3"], self.bucket, updated, self.version)
+            self.set_stage(updated, dict(self.stage(updated), state="PASSED", receiptReference=ref))
+            self.read_receipt(updated)
             self.validate_record(current)
             self.store.write(updated, etag)
             return dict(state="PUBLIC_PASSED", private="pending", vpn="pending", receiptReference=ref)
@@ -144,10 +162,10 @@ class PublicAcceptance:
                 failure = dict(schemaVersion=1, sessionId=record["sessionId"], executionVersion=self.version,
                     dispatchId=self.dispatch_id, workflowRun=self.workflow_run, contextSha256=self.context_hash,
                     classification=error.check if isinstance(error, ProbeFailure) else type(error).__name__)
-                immutable_json(self.clients["s3"], self.bucket, result_key(record["sessionId"], self.dispatch_id).replace("result.json", "failure.json"), failure)
+                immutable_json(self.clients["s3"], self.bucket, self.result_key(record).replace("result.json", "failure.json"), failure)
                 current, etag = self.current()
                 failed = transition(current, self.owner, "FAILED_NEEDS_CLEANUP", now=self.clock())
-                failed["stages"]["publicAcceptance"].update(state="FAILED")
+                self.set_stage(failed, dict(self.stage(failed), state="FAILED"))
                 self.store.write(failed, etag)
             except Exception:
                 pass  # Cleanup takeover or unavailable evidence storage must win.

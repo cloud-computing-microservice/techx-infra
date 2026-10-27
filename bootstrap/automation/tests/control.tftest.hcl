@@ -461,6 +461,16 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Only the owned deployment executor may produce private active rollout/application evidence."
   }
   assert {
+    condition = length([for statement in jsondecode(aws_iam_role_policy.public_acceptance[0].policy).Statement : statement if
+      toset(statement.Action) == toset(["s3:GetObjectVersion"]) &&
+      try(toset(statement.Resource), toset([])) == toset([for prefix in [
+        "releases/staging/*/active/*", "proposals/staging/*/active/*", "promotions/staging/*/receipt.json",
+        "private/staging/*/active/*/rollout.json", "private/staging/*/active/*/application/intent.json"
+      ] : "arn:aws:s3:::techx-test-control/${prefix}"])
+    ]) == 1
+    error_message = "Hosted active public acceptance may only version-read rollout/candidate binding; private acceptance/task logs and inputs remain inaccessible."
+  }
+  assert {
     condition = (length([for statement in data.aws_iam_policy_document.control.statement : statement if
       statement.sid == "OnlyLifecycleDispatcherCanWriteHandoffs" && statement.effect == "Deny" &&
       contains(statement.resources, "arn:aws:s3:::techx-test-control/handoffs/staging/*") &&

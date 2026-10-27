@@ -48,7 +48,11 @@ def read_public_receipt(client, bucket, record, execution_version):
             or checksum(value) != ref["sha256"] or any(value.get(key) != val for key, val in expected.items())
             or not utc(record["createdAt"]) <= utc(value["completedAt"]) < utc(record["cleanupStartAt"])):
         raise ValueError("Public acceptance receipt differs from this immutable execution")
-    runner, result = value["runner"], value["result"]
+    validate_probe_result(value["runner"], value["result"])
+    return value
+
+
+def validate_probe_result(runner, result):
     if (not isinstance(runner, dict) or set(runner) != {"jobId", "runnerId", "runnerGroup", "labels"}
             or type(runner["jobId"]) is not int or runner["jobId"] < 1 or type(runner["runnerId"]) is not int or runner["runnerId"] < 1
             or runner["runnerGroup"] != "GitHub Actions" or runner["labels"] != ["ubuntu-24.04"]
@@ -56,4 +60,3 @@ def read_public_receipt(client, bucket, record, execution_version):
             or result.get("checks") != sorted(CHECKS) or result.get("private") != "pending" or result.get("vpn") != "pending"
             or not isinstance(result.get("observations"), list) or not 1 <= len(result["observations"]) <= 40):
         raise ValueError("Public probe did not prove the complete hosted-runner public suite")
-    return value

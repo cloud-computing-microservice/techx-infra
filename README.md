@@ -327,8 +327,8 @@ in one CAS. The manager still requires terminal SSM success; continuation also
 requires terminal CodeBuild success and the same evidence. A `deploy-test-destroy`
 session requests independent cleanup after acceptance; `deploy-window` keeps the
 original verified deadline. These paths have offline tests and remain disabled
-pending live acceptance. Active-session releases and bounded Git rollback still
-require further implementation.
+pending live acceptance. Active-session rollout and public checks are described
+below; private acceptance and bounded Git rollback still require implementation.
 
 READY-session publication now has immutable candidate/manifest/proposal receipts.
 The protected platform main workflow checks its actual completed acceptance job
@@ -339,8 +339,9 @@ intent before publishing, then proposes only the two allowed chart release files
 It never merges or changes the running Application/accepted baseline. Active
 chart notifications bind only a fully proposed candidate with matching immutable
 receipts and actual PR/run identity; the dispatcher receives version-read only.
-candidate promotion, repeated-release acceptance and rollback still require
-implementation; both flags remain disabled pending those paths and live tests.
+Candidate review/promotion and rollout are described below. Repeated-release
+private acceptance and rollback still require implementation; both flags remain
+disabled pending those paths and live tests.
 
 Bootstrap verification:
 
@@ -361,7 +362,13 @@ and writes a unique intent stamp; lost responses reconcile positive observations
 without replay. The task verifies Synced/Healthy and all three running image
 digests. Its private rollout receipt is reread by the parent. The session remains
 TESTING and the accepted baseline stays unchanged until active public/private
-acceptance, which is still unfinished together with rollback. This is source/
+acceptance. The protected hosted public handoff now runs the complete public
+suite against the exact versioned rollout and candidate. It keeps separate active
+receipts, checks the actual hosted job and original infra SHA, and the parent
+consumes only that dispatched run's evidence. It advances to
+`ACTIVE_PRIVATE_ACCEPTANCE`, still TESTING with the previous baseline. Active
+private acceptance, accepted-release history and rollback remain unfinished.
+This is source/
 offline progress, not cloud acceptance; the changed task loader requires a new
 reviewed AMI build before cloud use.
 

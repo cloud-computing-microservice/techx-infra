@@ -21,6 +21,10 @@ resource "aws_iam_role_policy" "public_acceptance" {
       "acceptance/staging/*/public/*"
     ] : "${aws_s3_bucket.control.arn}/${prefix}"] },
     { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = "${aws_s3_bucket.control.arn}/private/staging/*/exposure/*.json" },
+    { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = [for prefix in [
+      "releases/staging/*/active/*", "proposals/staging/*/active/*", "promotions/staging/*/receipt.json",
+      "private/staging/*/active/*/rollout.json", "private/staging/*/active/*/application/intent.json"
+    ] : "${aws_s3_bucket.control.arn}/${prefix}"] },
     { Effect = "Allow", Action = ["s3:PutObject"], Resource = ["${aws_s3_bucket.control.arn}/automation/staging/session.json", "${aws_s3_bucket.control.arn}/acceptance/staging/*/public/*"] },
     { Effect = "Allow", Action = ["scheduler:GetSchedule"], Resource = "arn:aws:scheduler:us-east-1:058114477594:schedule/techx-staging/cleanup-*" },
     { Effect = "Allow", Action = ["kms:Decrypt", "kms:GenerateDataKey"], Resource = aws_kms_key.control.arn,

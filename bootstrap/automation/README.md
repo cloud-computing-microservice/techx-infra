@@ -1122,3 +1122,21 @@ actual intent/manifest/proposal versions, accepted baseline and current PR/run.
 Older or unrelated hints cannot select work. The dispatcher may read only pinned
 active artifact versions; the callback itself neither grants promotion nor
 changes the Application. Active orchestration/promotion is still unfinished.
+
+### Active promotion preview and approval (source only)
+
+`staging-chart-promote.yml` selects the cold or READY reader from the actual
+session. The READY reader verifies pinned candidate receipts, accepted baseline,
+completed original application CI, current platform main, exact two-file chart
+tree and CI/review, plus the unchanged dedicated promotion App/main policy.
+The private-executor check requires its own release lease, not a cold deploy
+lease. Read-only previews cannot create approval records.
+
+A real protected human review can issue `ready-promotion-approval`, separately
+typed from cold approval. The grant pins release ID, intent/manifest/proposal,
+baseline, original execution revisions, exact preview and real workflow run.
+Consumption repeats all checks and human review after that run succeeds.
+Preview/approver roles can version-read only candidate and accepted evidence;
+they gain no session, candidate, PKI or deployment write permission. Automatic
+active handoff, private merge/Application update, acceptance and rollback still
+need integration and live verification. Both deployment flags remain false.

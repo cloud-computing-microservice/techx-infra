@@ -11,3 +11,19 @@ resource "aws_iam_role_policy" "ready_candidate_read" {
     ]
   }] })
 }
+
+resource "aws_iam_role_policy" "ready_promotion_read" {
+  for_each = var.enable_lifecycle_control ? {
+    preview = aws_iam_role.chart_reader[0].name
+    approve = aws_iam_role.promotion_approver[0].name
+  } : {}
+  name = "read-pinned-active-promotion-evidence"
+  role = each.value
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{
+    Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = [for prefix in [
+      "releases/staging/*/active/*", "proposals/staging/*/active/*",
+      "private/staging/*/acceptance/*.json", "private/staging/*/exposure/*.json",
+      "acceptance/staging/*/public/*"
+    ] : "${aws_s3_bucket.control.arn}/${prefix}"]
+  }] })
+}

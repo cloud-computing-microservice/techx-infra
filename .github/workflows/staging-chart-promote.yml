@@ -1,4 +1,4 @@
-name: Review exact cold chart promotion
+name: Review exact chart promotion
 run-name: ${{ inputs.dispatch_id != '' && format('TechX handoff {0}', inputs.dispatch_id) || github.workflow }}
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         required: false
         type: string
       session_id:
-        description: Existing cold session with an immutable changed-chart proposal
+        description: Existing cold or READY session with an immutable changed-chart proposal
         required: true
         type: string
       execution_version:

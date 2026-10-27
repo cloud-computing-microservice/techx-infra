@@ -1,4 +1,4 @@
-"""Preview and privately authorize one cold promotion; never merge on a runner."""
+"""Preview and privately authorize one exact chart promotion; never merge here."""
 import argparse
 from datetime import timedelta
 import json
@@ -11,7 +11,7 @@ from approve_plan import verified_reviewer
 from automation_session import S3SessionStore, utc
 from bootstrap_publish import archive_loader
 from chart_promotion import ColdPromotionChecks
-from chart_selection import CHART_REPO, INFRA_REPO, GitHub
+from chart_selection import CHART_REPO, INFRA_REPO, PLATFORM_REPO, GitHub
 from plan_approval import version
 from plan_review_store import ACCOUNT, checksum, encoded, immutable_json, read_json
 from select_bootstrap_chart import verified_selector
@@ -21,8 +21,9 @@ WORKFLOW = ".github/workflows/staging-chart-promote.yml"
 ENVIRONMENT = "staging-chart-promote"
 
 
-def read_promotion_approval(s3, bucket, execution, execution_version, reference, now):
+def read_promotion_approval(s3, bucket, execution, execution_version, reference, now, *, kind="cold-promotion"):
     """Read immutable grant bytes, never an actor-provided approval boolean."""
+    if kind not in ("cold-promotion", "ready-promotion"): raise ValueError("Unsupported promotion context")
     prefix = f"promotion-approvals/staging/{execution['sessionId']}/"
     if (not isinstance(reference, dict) or set(reference) != {"key", "versionId", "sha256"}
             or not isinstance(reference.get("key"), str) or not reference["key"].startswith(prefix)
@@ -34,7 +35,7 @@ def read_promotion_approval(s3, bucket, execution, execution_version, reference,
     request = value.get("request")
     if (set(value) != {"schemaVersion", "kind", "request", "requestSha256", "reviewer", "approvedAt", "expiresAt"}
             or type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1
-            or value.get("kind") != "cold-promotion-approval" or not isinstance(request, dict)
+            or value.get("kind") != kind + "-approval" or not isinstance(request, dict)
             or checksum(value) != reference["sha256"] or checksum(request) != value.get("requestSha256")
             or reference["key"] != prefix + checksum(request) + ".json"):
         raise ValueError("Private promotion approval bytes/checksum differ from the exact reference")
@@ -43,7 +44,7 @@ def read_promotion_approval(s3, bucket, execution, execution_version, reference,
             or expiry > approved + timedelta(minutes=15)
             or expiry > utc(execution["cleanupStartAt"]) - timedelta(minutes=3)):
         raise ValueError("Promotion approval is expired or extends its approved cleanup window")
-    expected = dict(schemaVersion=1, kind="cold-promotion", sessionId=execution["sessionId"],
+    expected = dict(schemaVersion=1, kind=kind, sessionId=execution["sessionId"],
         executionVersion=execution_version, sourceRevisions=execution["sourceRevisions"],
         approvedBudgetUsd=execution["approvedBudgetUsd"], deadline=execution["deadline"], cleanupStartAt=execution["cleanupStartAt"])
     if any(request.get(key) != item for key, item in expected.items()):
@@ -62,7 +63,7 @@ def authorize_promotion(checks, source, chart, infra, reference, *, owner, epoch
     """Revalidate an exact grant on an owned executor; this never performs merge."""
     if owner is None or epoch is None: raise ValueError("Grant consumption requires an owned private deployment lease")
     checks.guard(owner=owner, epoch=epoch)
-    value = read_promotion_approval(checks.clients["s3"], checks.bucket, checks.execution, checks.version, reference, checks.clock())
+    value = read_promotion_approval(checks.clients["s3"], checks.bucket, checks.execution, checks.version, reference, checks.clock(), kind=checks.kind)
     request = value["request"]
     approved, expiry = utc(value["approvedAt"]), utc(value["expiresAt"])
     run_url = request.get("workflowRun", "")
@@ -132,7 +133,7 @@ class PromotionReview(ColdPromotionChecks):
         now = self.clock()
         expiry = min(now + timedelta(minutes=15), utc(request["cleanupStartAt"]) - timedelta(minutes=3))
         if expiry <= now: raise ValueError("Promotion review has insufficient time before the cleanup margin")
-        value = dict(schemaVersion=1, kind="cold-promotion-approval", request=request, requestSha256=request_sha256,
+        value = dict(schemaVersion=1, kind=self.kind + "-approval", request=request, requestSha256=request_sha256,
                      reviewer=reviewer, approvedAt=now.isoformat(), expiresAt=expiry.isoformat())
         # Review can be withdrawn, source/main can move and cleanup can start
         # while API reads are in flight. None of those changes may issue a grant.
@@ -146,11 +147,18 @@ class PromotionReview(ColdPromotionChecks):
         ref["sha256"] = checksum(value)
         if self.dispatch_id:
             self.guard()
-            index = dict(schemaVersion=1, kind="cold-promotion-index", sessionId=self.execution["sessionId"],
+            index = dict(schemaVersion=1, kind=self.kind + "-index", sessionId=self.execution["sessionId"],
                 executionVersion=self.version, sourceRevisions=self.execution["sourceRevisions"],
                 dispatchId=self.dispatch_id, workflowRun=request["workflowRun"], approvalReference=ref)
             immutable_json(self.clients["s3"], self.bucket, promotion_index_key(self.execution["sessionId"], self.run_id), index)
         return ref
+
+
+from ready_chart_promotion import ReadyPromotionChecks
+
+
+class ReadyPromotionReview(PromotionReview, ReadyPromotionChecks):
+    """Reuse the protected human-review flow with a separate active context."""
 
 
 def main():
@@ -171,9 +179,14 @@ def main():
     bucket = os.environ["CONTROL_BUCKET"]
     execution, _ = read_json(clients["s3"], bucket, f"executions/{session}.json", object_version)
     if execution.get("sessionId") != session: raise ValueError("Promotion execution belongs to another session")
-    review = PromotionReview(clients, S3SessionStore(bucket), bucket, execution, object_version,
+    store = S3SessionStore(bucket)
+    current, _ = store.read()
+    active = current.get("status") == "READY"
+    review_type = ReadyPromotionReview if active else PromotionReview
+    extra = dict(platform=GitHub(PLATFORM_REPO, os.environ["GITHUB_TOKEN"])) if active else {}
+    review = review_type(clients, store, bucket, execution, object_version,
                              run_id=os.environ["GITHUB_RUN_ID"], read_only=args.mode == "preview",
-                             dispatch_id=os.environ.get("TECHX_DISPATCH_ID", ""))
+                             dispatch_id=os.environ.get("TECHX_DISPATCH_ID", ""), **extra)
     review.guard()
     chart, infra = GitHub(CHART_REPO, os.environ["CHART_READ_TOKEN"]), GitHub(INFRA_REPO, os.environ["GITHUB_TOKEN"])
     with tempfile.TemporaryDirectory(prefix="techx-promotion-review-") as directory:
@@ -194,7 +207,7 @@ def main():
         print(json.dumps(result, sort_keys=True))
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
-                output.write("### Cold chart promotion " + args.mode + "\n\n```json\n" + json.dumps(result, indent=2, sort_keys=True) + "\n```\n")
+                output.write("### Chart promotion " + args.mode + "\n\n```json\n" + json.dumps(result, indent=2, sort_keys=True) + "\n```\n")
 
 
 if __name__ == "__main__": main()

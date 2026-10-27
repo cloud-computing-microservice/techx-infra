@@ -104,6 +104,8 @@ def candidate_ci(github, proposal, execution):
 
 
 class ColdPromotionChecks:
+    kind = "cold-promotion"
+
     def __init__(self, clients, store, bucket, execution, execution_version, *, clock=None):
         validate(execution)
         version(execution_version)
@@ -134,17 +136,30 @@ class ColdPromotionChecks:
         verify_existing(self.clients["scheduler"], record, self.version, self.clock())
         return record
 
+    def artifacts(self, record):
+        return (read_release(self.clients["s3"], self.bucket, record, self.execution, self.version),
+                read_proposal(self.clients["s3"], self.bucket, record, self.execution, self.version))
+
+    def snapshot(self, record):
+        return {key: deepcopy(record.get(key)) for key in ("bootstrapRelease", "bootstrapProposal")}
+
+    def request_context(self, record):
+        return dict(kind="cold-promotion", releaseReference=record["bootstrapRelease"], proposalReference=record["bootstrapProposal"])
+
+    def tree(self, source, github, record, release, proposal):
+        return release_tree(github, source, self.execution, release, proposal["headSha"], candidate=True)
+
     def evaluate(self, source, github, *, app_id, app_slug, owner=None, epoch=None):
         record = self.guard(owner=owner, epoch=epoch)
-        release = read_release(self.clients["s3"], self.bucket, record, self.execution, self.version)
-        proposal = read_proposal(self.clients["s3"], self.bucket, record, self.execution, self.version)
+        snapshot = self.snapshot(record)
+        release, proposal = self.artifacts(record)
         if reuse_proposal(proposal): raise ValueError("Zero-diff baseline reuse has its own human review, not a merge")
         policy = protection(github, app_id, app_slug)
         expected = admitted(self.execution)
         if policy != {key: expected[key] for key in ("appId", "appSlug", "policySha256")}:
             raise ValueError("Promotion App or branch policy differs from the human-reviewed opening authority")
         pull, files = pull_identity(github, proposal)
-        tree = release_tree(github, source, self.execution, release, proposal["headSha"], candidate=True)
+        tree = self.tree(source, github, record, release, proposal)
         commit = github.get(f"git/commits/{proposal['headSha']}")
         if ([row.get("sha") for row in commit.get("parents", [])] != [proposal["baselineSha"]]
                 or tree["treeSha"] != proposal["treeSha"] or tree["changedFiles"] != files):
@@ -162,11 +177,10 @@ class ColdPromotionChecks:
         if github.get("git/ref/heads/main").get("object", {}).get("sha") != proposal["baselineSha"]:
             raise ValueError("Promotion main moved from the admitted baseline")
         current = self.guard(owner=owner, epoch=epoch)
-        if any(current.get(key) != record.get(key) for key in ("bootstrapRelease", "bootstrapProposal")):
+        if self.snapshot(current) != snapshot:
             raise ValueError("Promotion release/proposal was superseded during verification")
-        return dict(schemaVersion=1, kind="cold-promotion", sessionId=record["sessionId"], executionVersion=self.version,
-            sourceRevisions=self.execution["sourceRevisions"], releaseReference=record["bootstrapRelease"],
-            proposalReference=record["bootstrapProposal"], baselineSha=proposal["baselineSha"], headSha=proposal["headSha"],
+        return dict(schemaVersion=1, **self.request_context(record), sessionId=record["sessionId"], executionVersion=self.version,
+            sourceRevisions=self.execution["sourceRevisions"], baselineSha=proposal["baselineSha"], headSha=proposal["headSha"],
             treeSha=proposal["treeSha"], prNumber=proposal["prNumber"], pullRequest=proposal["pullRequest"],
             changedFiles=files, reviewers=reviewers, candidateCi=ci, branchPolicy=policy, manifest=release["manifest"],
             approvedBudgetUsd=record["approvedBudgetUsd"], deadline=record["deadline"], cleanupStartAt=record["cleanupStartAt"])

@@ -1158,3 +1158,29 @@ adding only `promotionApprovalReference` to the same candidate by CAS. Lost
 dispatch/CAS responses reconcile the existing run/grant without a second review.
 This path stops at `ACTIVE_PRIVATE_PROMOTION`: private merge, Application update,
 active acceptance/rollback and live acceptance still require implementation.
+
+### Private active rollout (source only)
+
+The orchestrator now continues the granted candidate through a separate typed
+`release / active / 1` task. The dispatcher binds candidate/baseline/grant in the
+dispatch identity and atomically enters TESTING. The manager waits for its own
+positive CodeBuild receipt, reuses the existing executor and publishes a
+single-consumer SSM task. A TESTING release lease is restricted to that actual
+manager or claimed EC2 task; cold plan/apply/bootstrap cannot use this path.
+
+The private worker reuses protected exact-head App merge/recovery with separate
+active grant checks. It observes the same merge's latest main CI within a bounded
+window, then patches only the existing session-owned Application's target SHA
+and unique intent annotation. Atomic JSON Patch tests UID/spec/session, with
+an immutable intent/call marker before mutation. Lost responses need positive
+UID/spec/stamp evidence, never another patch or merge. Argo Synced/Healthy,
+deployments, Pods and all three running digests must match the exact manifest.
+
+Private rollout/App receipts are executor-produced and pinned by version/hash;
+the dispatcher can version-read only. Parent validation follows the actual
+manifest, merge receipt and Application intent/spec observation. Completion
+retains TESTING and the original accepted baseline/source revisions, then waits
+at `ACTIVE_PUBLIC_ACCEPTANCE`. Active public/private acceptance, accepted-release
+history and rollback remain unfinished. Loader/recipe hashes changed: bake and
+verify a matching AMI before live tests. Both flags remain false; no cloud
+acceptance is implied by offline tests or recipe CI.

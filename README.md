@@ -354,8 +354,16 @@ protected handoff. It rechecks terminal CodeBuild/SSM and the same accepted
 receipts, binds the actual review run and grant index, and stores the grant only
 on the unchanged candidate by CAS. Pending source/PR CI and publisher leases
 remain bounded waits; a publisher cannot republish a candidate under review.
-Private merge/Application update and acceptance/rollback remain unfinished.
-This is source/offline progress, not cloud acceptance.
+The `release/active` private task now performs the exact approved App merge,
+waits for the same merged SHA's successful main CI, then pins the existing Argo
+Application to that revision. Its JSON Patch checks UID, accepted spec/session
+and writes a unique intent stamp; lost responses reconcile positive observations
+without replay. The task verifies Synced/Healthy and all three running image
+digests. Its private rollout receipt is reread by the parent. The session remains
+TESTING and the accepted baseline stays unchanged until active public/private
+acceptance, which is still unfinished together with rollback. This is source/
+offline progress, not cloud acceptance; the changed task loader requires a new
+reviewed AMI build before cloud use.
 
 ```powershell
 ./scripts/verify.ps1

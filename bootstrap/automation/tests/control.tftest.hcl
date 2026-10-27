@@ -441,6 +441,26 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Active promotion preview/approval may only version-read candidate and accepted evidence; no artifact, session, or PKI write authority."
   }
   assert {
+    condition = alltrue([for statement in jsondecode(aws_iam_role_policy.private_active_candidate_read[0].policy).Statement :
+      toset(statement.Action) == toset(["s3:GetObjectVersion"]) &&
+      toset(statement.Resource) == toset(["arn:aws:s3:::techx-test-control/releases/staging/*/active/*", "arn:aws:s3:::techx-test-control/proposals/staging/*/active/*"])
+      ]) && alltrue([for statement in jsondecode(aws_iam_role_policy.active_rollout_observe[0].policy).Statement :
+      toset(statement.Action) == toset(["s3:GetObjectVersion"]) &&
+      toset(statement.Resource) == toset(["arn:aws:s3:::techx-test-control/private/staging/*/active/*", "arn:aws:s3:::techx-test-control/promotions/staging/*"])
+    ])
+    error_message = "The executor may version-read candidates and dispatcher may version-read rollout/merge receipts without write authority."
+  }
+  assert {
+    condition = length([for statement in data.aws_iam_policy_document.control.statement : statement if
+      statement.sid == "OnlyExecutorCanWriteActiveRollout" && statement.effect == "Deny" &&
+      toset(statement.resources) == toset(["arn:aws:s3:::techx-test-control/private/staging/*/active/*"]) &&
+      anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
+        toset(condition.values) == toset(["arn:aws:iam::058114477594:role/techx-automation-lifecycle-executor"])
+      ])
+    ]) == 1
+    error_message = "Only the owned deployment executor may produce private active rollout/application evidence."
+  }
+  assert {
     condition = (length([for statement in data.aws_iam_policy_document.control.statement : statement if
       statement.sid == "OnlyLifecycleDispatcherCanWriteHandoffs" && statement.effect == "Deny" &&
       contains(statement.resources, "arn:aws:s3:::techx-test-control/handoffs/staging/*") &&

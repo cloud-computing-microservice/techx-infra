@@ -50,18 +50,26 @@ def completed_source(github, intent, record):
 class ReadyPromotionChecks(ColdPromotionChecks):
     kind = "ready-promotion"
 
-    def __init__(self, *args, platform, **kwargs):
+    def __init__(self, *args, platform, testing_task=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.platform = platform
+        if testing_task is not None and not re.fullmatch(r"[a-f0-9]{32}", testing_task): raise ValueError("Exact private rollout task required")
+        self.testing_task = testing_task
 
     def guard(self, *, owner=None, epoch=None):
         record, _ = self.store.read()
         validate(record)
+        testing = self.testing_task is not None and owner is not None and record["status"] == "TESTING"
         if (any(record.get(key) != self.execution.get(key) for key in CONTEXT) or record.get("executionVersion") != self.version
-                or record["status"] != "READY" or record.get("pendingPlan") is not None
+                or not (record["status"] == "READY" or testing) or record.get("pendingPlan") is not None
                 or record.get("releaseCandidate", {}).get("state") != "PROPOSED"
                 or self.clock() + timedelta(minutes=3) >= utc(record["cleanupStartAt"])):
             raise ValueError("Active promotion requires the proposed candidate in its original READY session/window")
+        if testing:
+            from deployment_tasks import read_task
+            task = read_task(self.clients["s3"], self.bucket, record, self.testing_task, self.clock())
+            if (task["mode"], task["stage"], task["attempt"]) != ("release", "active", 1) or record["deploymentTask"]["state"] != "RUNNING":
+                raise ValueError("Promotion is not this claimed private rollout task")
         lease = record.get("lease")
         if owner is None:
             if lease: raise ValueError("Active promotion preview requires an idle session")

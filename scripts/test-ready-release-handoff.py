@@ -7,7 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
+import botocore.session
 from botocore.exceptions import ClientError
+from botocore.validate import validate_parameters
 
 from chart_selection import INFRA_REPO, PLATFORM_REPO
 from lifecycle_dispatch import Dispatcher, environment, operation
@@ -34,7 +36,20 @@ class ActiveHandoffTests(unittest.TestCase):
         self.build = dict(id=build_id, arn=f.owner, projectName="techx-automation-lifecycle",
             serviceRole="arn:aws:iam::058114477594:role/techx-automation-lifecycle-manager", buildStatus="SUCCEEDED", buildComplete=True,
             environment=dict(environmentVariables=[dict(name=key, value=value, type="PLAINTEXT") for key, value in environment(f.record, op).items()]))
-        f.clients["codebuild"] = SimpleNamespace(batch_get_builds=lambda **kw: dict(builds=[deepcopy(self.build)]))
+        self.active_id = "techx-automation-lifecycle:abcdef98-1234"
+        self.active_build = dict(id=self.active_id, arn="arn:aws:codebuild:us-east-1:058114477594:build/" + self.active_id,
+            projectName="techx-automation-lifecycle", serviceRole=self.build["serviceRole"], buildStatus="IN_PROGRESS", buildComplete=False,
+            environment=dict(environmentVariables=[dict(name=key, value=value, type="PLAINTEXT") for key, value in environment(f.record, operation("release", "active")).items()]))
+        self.build_calls = []
+        model = botocore.session.get_session().get_service_model("codebuild")
+        def start_build(**kw):
+            validate_parameters(kw, model.operation_model("StartBuild").input_shape)
+            self.assertEqual(f.record["status"], "TESTING")
+            self.assertEqual(f.record["lifecycleDispatch"]["phase"], "CALLING")
+            self.build_calls.append(kw)
+            return dict(build=deepcopy(self.active_build))
+        f.clients["codebuild"] = SimpleNamespace(start_build=start_build,
+            batch_get_builds=lambda **kw: dict(builds=[deepcopy(self.active_build if kw["ids"] == [self.active_id] else self.build)]))
         # The real private worker above already wrote its durable result. SSM
         # observation must not replay the base fixture's old foundation worker.
         f.remote_result = lambda: None
@@ -93,13 +108,14 @@ class ActiveHandoffTests(unittest.TestCase):
         self.complete_review()
         self.assertEqual(len(self.posts), 1)
         self.assertEqual(self.posts[0]["operation"], "review-promotion")
-        self.assertEqual(self.observe(3)["waiting"], "ACTIVE_PRIVATE_PROMOTION")
+        self.assertEqual(self.observe(3)["waiting"], "OBSERVATION_LIMIT")
         self.assertEqual(self.f.record["releaseCandidate"]["promotionApprovalReference"], self.ref)
         self.assertEqual(self.f.record["acceptedRelease"], self.baseline)
-        self.assertEqual(self.f.record["status"], "READY")
+        self.assertEqual(self.f.record["status"], "TESTING")
         self.assertEqual(self.f.record["workflowHandoff"]["phase"], "CONSUMED")
-        self.assertEqual(self.observe()["waiting"], "ACTIVE_PRIVATE_PROMOTION")
+        self.assertEqual(self.observe()["waiting"], "OBSERVATION_LIMIT")
         self.assertEqual(len(self.posts), 1)
+        self.assertEqual(len(self.build_calls), 1)
 
     def test_pending_ci_or_source_run_waits_without_dispatch_or_cleanup(self):
         for obj, field, value in ((self.p.ci, "status", "in_progress"), (self.p.p.run, "status", "in_progress")):
@@ -146,7 +162,7 @@ class ActiveHandoffTests(unittest.TestCase):
                 lost.append(True)
                 raise TimeoutError("Grant CAS succeeded; response lost")
         self.f.store.write = lost_response
-        self.assertEqual(self.observe(3)["waiting"], "ACTIVE_PRIVATE_PROMOTION")
+        self.assertEqual(self.observe(3)["waiting"], "OBSERVATION_LIMIT")
         self.assertTrue(lost)
         self.assertEqual(len(self.posts), 1)
         self.assertEqual(self.f.record["releaseCandidate"]["promotionApprovalReference"], self.ref)

@@ -25,8 +25,8 @@ CONTEXT = ("sessionId", "sourceRevisions", "deadline", "cleanupStartAt", "approv
 def operation(mode, stage, attempt=1):
     if (type(attempt) is not int or not 1 <= attempt <= 999999
             or (mode, stage) not in {("prepare", "foundation"), ("plan", "foundation"), ("apply", "foundation"),
-                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"), ("activate", "exposure"), ("verify", "private")}
-            or mode in ("prepare", "bootstrap", "promote", "activate", "verify") and attempt != 1):
+                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"), ("activate", "exposure"), ("verify", "private"), ("release", "active")}
+            or mode in ("prepare", "bootstrap", "promote", "activate", "verify", "release") and attempt != 1):
         raise ValueError("Unsupported typed lifecycle operation")
     return dict(mode=mode, stage=stage, attempt=attempt)
 
@@ -47,17 +47,24 @@ def dispatch_identity(record, execution_version, op):
     if op["mode"] == "verify":
         from private_acceptance_contract import validate_private_start
         context["acceptanceSha256"] = validate_private_start(record, op["attempt"])
+    if op["mode"] == "release":
+        from active_release_contract import release_context
+        context["releaseContext"] = release_context(record)
     return hashlib.sha256(encoded(context)).hexdigest()
 
 
 def guard(record, execution, version, now, *, idle=True, allow_ready=False):
     validate(record)
     executor_config(execution["deploymentConfig"])
+    active = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") == operation("release", "active")
     if (any(record.get(key) != execution.get(key) for key in CONTEXT) or record.get("executionVersion") != version
-            or record["status"] not in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING")) or now >= utc(record["cleanupStartAt"])
+            or not (active or record["status"] in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING"))) or now >= utc(record["cleanupStartAt"])
             or idle and record.get("lease")):
         raise ValueError("Dispatch requires the same open, idle admitted staging session")
     validate_estimate(record, execution["costEstimate"])
+    if active:
+        from active_release_contract import release_context
+        release_context(record)
     if record["status"] == "READY":
         from private_acceptance_contract import validate_private_checkpoint
         if record.get("lifecycleDispatch", {}).get("operation") != operation("verify", "private"):
@@ -106,6 +113,11 @@ def completed_manager(clients, execution, record):
 def next_operation(record, previous):
     """Only supported edges are returned; external phases remain explicit waits."""
     stages = record.get("stages", {})
+    if record.get("status") == "TESTING":
+        from active_release_contract import validate_rollout_checkpoint
+        if previous != operation("release", "active"): raise ValueError("Active rollout requires its exact completed manager")
+        validate_rollout_checkpoint(record)
+        return dict(waiting="ACTIVE_PUBLIC_ACCEPTANCE", releaseId=record["releaseCandidate"]["id"])
     if record.get("status") == "READY":
         from private_acceptance_contract import validate_private_checkpoint
         validate_private_checkpoint(record)
@@ -181,8 +193,9 @@ class Dispatcher:
     def start(self, checked, op, *, initial=False):
         """CAS consumes an already-verified predecessor before any StartBuild."""
         operation(**op)
-        current, etag = self.current()
+        current, etag = self.current(allow_ready=op["mode"] == "release")
         if current != checked: raise ValueError("Session changed during dispatch admission")
+        if current["status"] == "TESTING": raise ValueError("An active task dispatch cannot be replayed")
         if initial:
             if current.get("lifecycleDispatch") or current.get("deploymentTask") or current.get("executorPrepared") or current.get("stages") or op != operation("prepare", "foundation"):
                 raise ValueError("Initial dispatch is limited to unconsumed executor preparation")
@@ -190,7 +203,13 @@ class Dispatcher:
             raise ValueError("Previous dispatch is unknown; never replay StartBuild")
         else:
             previous = completed_manager(self.clients, self.execution, current)
-            if op["mode"] == "apply":
+            if op["mode"] == "release":
+                if current["status"] != "READY" or previous != operation("verify", "private"):
+                    raise ValueError("Private rollout requires the accepted READY predecessor")
+                self.advance()
+                from active_release_contract import admitted_release
+                admitted_release(self.clients["s3"], self.bucket, current, self.execution, self.version, self.clock())
+            elif op["mode"] == "apply":
                 ref = current.get("pendingPlan", {})
                 if (previous != operation("plan", op["stage"], op["attempt"])
                         or ref.get("stage") != op["stage"] or ref.get("attempt") != op["attempt"]):
@@ -199,6 +218,7 @@ class Dispatcher:
                 raise ValueError("Operation is not the next supported lifecycle edge")
         dispatch_id = dispatch_identity(current, self.version, op)
         updated = deepcopy(current)
+        if op["mode"] == "release": updated["status"] = "TESTING"
         updated["lifecycleDispatch"] = dict(id=dispatch_id, operation=op, phase="PREPARED", createdAt=self.clock().isoformat())
         try:
             self.store.write(updated, etag)
@@ -257,6 +277,9 @@ class Dispatcher:
         if op.get("waiting") == "PUBLIC_ACCEPTANCE":
             from edge_activation import read_activation_receipt
             read_activation_receipt(self.clients["s3"], self.bucket, record, self.version)
+        if op.get("waiting") == "ACTIVE_PUBLIC_ACCEPTANCE":
+            from active_release_contract import read_rollout_receipt
+            read_rollout_receipt(self.clients["s3"], self.bucket, record, self.version)
         if op.get("mode") == "verify":
             from edge_activation import read_activation_receipt
             from public_acceptance_contract import read_public_receipt

@@ -245,6 +245,21 @@ data "aws_iam_policy_document" "control" {
     }
   }
   statement {
+    sid       = "OnlyExecutorCanWriteActiveRollout"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+    resources = ["${aws_s3_bucket.control.arn}/private/staging/*/active/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = ["arn:aws:iam::058114477594:role/techx-automation-lifecycle-executor"]
+    }
+  }
+  statement {
     sid       = "OnlyChartSelectorCanWriteSelections"
     effect    = "Deny"
     actions   = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]

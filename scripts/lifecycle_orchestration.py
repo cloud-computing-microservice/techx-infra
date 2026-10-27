@@ -211,6 +211,10 @@ class Orchestrator:
                     last = target
                     sleep(max(0, min(10, end - monotonic())))
                     continue
+                if target.get("waiting") == "ACTIVE_PRIVATE_PROMOTION":
+                    started = self.dispatcher.start(record, operation("release", "active"))
+                    last = dict(waiting="WORKLOAD_RUNNING", **started)
+                    continue
                 if target.get("waiting"): return target
                 response = self.handoffs.start(target)
                 last = dict(waiting="WORKFLOW_RUNNING", repository=target["repository"], workflowRunId=response["workflow_run_id"], workflowRun=response["html_url"])

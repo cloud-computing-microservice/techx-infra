@@ -14,10 +14,11 @@ CHECKS = {"argocd-authenticated", "runtime-digests", "dynamodb-irsa", "replica-s
 
 
 def evidence_record(record):
-    # Evidence is produced in PROVISIONING and remains readable after READY.
+    # Evidence is produced in PROVISIONING and remains a readable accepted
+    # baseline after READY, including while another candidate is TESTING.
     # This projection is read-only; mutation entry points keep their original
     # status gates and cannot use a READY session to create another deployment.
-    if record.get("status") not in ("PROVISIONING", "READY"):
+    if record.get("status") not in ("PROVISIONING", "READY", "TESTING"):
         raise ValueError("Private acceptance evidence belongs to a closed session")
     return dict(record, status="PROVISIONING")
 

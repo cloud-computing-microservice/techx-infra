@@ -429,6 +429,18 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Active chart callback may read only pinned candidate versions; it cannot publish or read unversioned active artifacts."
   }
   assert {
+    condition = length(aws_iam_role_policy.ready_promotion_read) == 2 && alltrue(flatten([
+      for policy in aws_iam_role_policy.ready_promotion_read : [for statement in jsondecode(policy.policy).Statement :
+        statement.Effect == "Allow" && toset(statement.Action) == toset(["s3:GetObjectVersion"]) &&
+        toset(statement.Resource) == toset([for prefix in [
+          "releases/staging/*/active/*", "proposals/staging/*/active/*", "private/staging/*/acceptance/*.json",
+          "private/staging/*/exposure/*.json", "acceptance/staging/*/public/*"
+        ] : "arn:aws:s3:::techx-test-control/${prefix}"])
+      ]
+    ]))
+    error_message = "Active promotion preview/approval may only version-read candidate and accepted evidence; no artifact, session, or PKI write authority."
+  }
+  assert {
     condition = (length([for statement in data.aws_iam_policy_document.control.statement : statement if
       statement.sid == "OnlyLifecycleDispatcherCanWriteHandoffs" && statement.effect == "Deny" &&
       contains(statement.resources, "arn:aws:s3:::techx-test-control/handoffs/staging/*") &&

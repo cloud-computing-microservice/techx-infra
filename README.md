@@ -344,6 +344,14 @@ implementation; both flags remain disabled pending those paths and live tests.
 
 Bootstrap verification:
 
+The protected promotion review workflow can also preview a READY candidate and
+issue a separate `ready-promotion-approval` after real human review. It verifies
+the accepted baseline, completed source CI, exact chart tree/head/CI, reviews
+and the opening App/main policy. Active grants cannot be consumed as cold grants;
+they retain original execution revisions and do not authorize a runner to merge.
+Active orchestration, private merge/Application update and acceptance/rollback
+remain unfinished. This is source/offline progress, not cloud acceptance.
+
 ```powershell
 ./scripts/verify.ps1
 ```

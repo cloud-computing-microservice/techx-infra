@@ -571,7 +571,12 @@ run "lifecycle_is_scoped_and_pinned" {
       for policy in aws_iam_role_policy.accepted_history_read :
       jsondecode(policy.policy).Statement[0].Action == ["s3:GetObjectVersion"] &&
       contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/accepted/staging/*/*.json") &&
-      contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/private/staging/*/active/*/acceptance/*.json")
+      contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/private/staging/*/active/*/acceptance/*.json") &&
+      alltrue([for prefix in [
+        "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",
+        "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json",
+        "private/staging/*/rollback/acceptance/*.json", "promotions/staging/*/intent.json"
+      ] : contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/${prefix}")])
       ]) && jsondecode(aws_iam_role_policy.accepted_history_write[0].policy).Statement[0].Action == ["s3:PutObject"] &&
       jsondecode(aws_iam_role_policy.accepted_history_write[0].policy).Statement[0].Resource == "arn:aws:s3:::techx-test-control/accepted/staging/*/*.json" &&
       length([for statement in data.aws_iam_policy_document.control.statement : statement if

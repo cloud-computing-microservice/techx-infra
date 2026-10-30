@@ -65,7 +65,10 @@ resource "aws_iam_role_policy" "accepted_history_read" {
       "accepted/staging/*/*.json", "releases/staging/*/active/*", "proposals/staging/*/active/*",
       "promotions/staging/*/receipt.json", "private/staging/*/active/*/rollout.json",
       "private/staging/*/active/*/application/intent.json", "private/staging/*/active/*/acceptance/*.json",
-      "private/staging/*/acceptance/*.json", "private/staging/*/exposure/*.json", "acceptance/staging/*/public/*"
+      "private/staging/*/acceptance/*.json", "private/staging/*/exposure/*.json", "acceptance/staging/*/public/*",
+      "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",
+      "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json",
+      "private/staging/*/rollback/acceptance/*.json", "promotions/staging/*/intent.json"
     ] : "${aws_s3_bucket.control.arn}/${prefix}"]
   }] })
 }

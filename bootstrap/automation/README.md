@@ -1324,8 +1324,8 @@ requires successful terminal CodeBuild/SSM, the durable task and receipt/merge/
 Application evidence before returning `ROLLBACK_PUBLIC_ACCEPTANCE`.
 `RollbackReleaseController` supplies this preparation/review/restore observation
 flow, but is not yet wired into main operational orchestration. Public binding is
-described below; private acceptance and an atomic accepted-history/READY handoff remain
-required. CLI/loader paths and SDK faults are tested offline; no AWS or GitHub
+described below; the private acceptance/history handoff follows in the next
+section. CLI/loader paths and SDK faults are tested offline; no AWS or GitHub
 merge is performed by these tests. Rebuild/verify the changed AMI before any
 authorized live run, and leave the opening opt-in hidden until integration ends.
 
@@ -1355,9 +1355,46 @@ The next boundary is `ROLLBACK_PRIVATE_ACCEPTANCE`, not READY. A CALLING handoff
 can recover a positive original receipt even while the probe has progressed;
 recovery never reposts the workflow. Unknown outcomes request cleanup. An early
 public observer keeps the existing live restore handle rather than dispatching
-another operation. Private VPN/runtime acceptance, accepted rollback history,
-atomic READY, main orchestration and actual cloud acceptance are still pending.
+another operation. Private acceptance and atomic READY are described below;
+main orchestration and actual cloud acceptance remain pending.
 Cleanup recognizes cold, active and rollback leases of the same HTTP-only public
 role. It can fence that probe without GitHub cancellation only after every
 infrastructure manager/EC2 executor is positively terminal; unknown holder types
 or an unproven terminal result still block takeover.
+
+### Private rollback acceptance and accepted history (source only)
+
+`RollbackReleaseController.observe_private()` consumes the terminal restoration
+and public handoff exactly once, then dispatches `verify/rollback/1`. The manager,
+SSM document, AMI loaders and fixed CLI bind the immutable task to that context.
+The rollback lease is restricted to the bound manager/executor; a public worker
+or an old cold/active task cannot claim this private work. Expiry stays within
+the original rollback intent and deployment window. Unknown manager starts are
+not repeated, and failure requests cleanup.
+
+`rollback_private_acceptance.py` runs the VPN/TUN/DNS/TLS, authenticated Argo,
+exact runtime digest, ECR scan, DynamoDB/IRSA, self-heal and order restart suite
+against the restored revision and its fresh public order. The manifest comes
+from the versioned accepted-baseline merge intent, not the failed candidate.
+Argo must keep the restored UID, session annotation, intent stamp and exact spec;
+identity is rechecked after readiness waits. Positive VPN disconnect is required.
+The versioned receipt is isolated at
+`private/staging/<session>/rollback/acceptance/<taskId>.json`. The child only
+publishes PASSED; the failed candidate and previous baseline remain unchanged.
+
+After child exit zero, the private parent rereads the full receipt chain and
+writes immutable `accepted-rollback-release` history. A single session CAS then
+sets READY and the new accepted baseline, removes the failed candidate and old
+active snapshot, and releases the lease. The rollback ledger is retained as the
+session's one-attempt cap. Generic lifecycle transitions cannot publish this
+FAILED-to-READY edge. A nonzero child, changed session/lease, expired intent,
+cleanup race, or invalid history cannot publish READY.
+
+Accepted-baseline readers verify a bounded mixed active/rollback history down
+to the original cold acceptance. Only the executor writes history; the five
+baseline readers gain version-only access to the fixed rollback proof objects,
+not VPN credentials/private inputs. SSM and CodeBuild must also be observed
+terminal/successful before the controller reports READY. Source fixtures cover
+the CLI/loader/manager and runtime fault boundaries; they are not cloud evidence.
+Main orchestration, private/partial-rollout failure admission, remaining recovery
+work, AMI bake and cloud gates remain required before exposing the opening opt-in.

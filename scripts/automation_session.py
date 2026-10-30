@@ -68,7 +68,11 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
         instance = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", owner)
         op = dispatch.get("operation", {})
         valid_phase = (op == dict(mode="rollback", stage="prepare", attempt=1) and value["phase"] in ("REQUESTED", "PREPARING", "PROPOSED")
-            or op == dict(mode="rollback", stage="rollout", attempt=1) and value["phase"] in ("APPROVED", "RESTORED"))
+            or op == dict(mode="rollback", stage="rollout", attempt=1) and value["phase"] in ("APPROVED", "RESTORED")
+            or op == dict(mode="verify", stage="rollback", attempt=1) and value["phase"] == "RESTORED")
+        if valid_phase and op == dict(mode="verify", stage="rollback", attempt=1):
+            from rollback_private_contract import private_context
+            private_context(record)
         public_run = re.fullmatch(r"arn:aws:sts::058114477594:assumed-role/techx-automation-public-acceptance/techx-public-([1-9][0-9]*)", owner)
         handoff = record.get("workflowHandoff", {})
         public = (public_run and value["phase"] == "RESTORED" and handoff.get("operation") == "accept-rollback-public"
@@ -78,7 +82,7 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
             public_context(record)
         if not (public or valid_phase
                 and (manager and dispatch.get("phase") == "OBSERVED" and dispatch.get("buildId") == manager[1]
-                    or instance and (task.get("mode"), task.get("stage"), task.get("state")) == ("rollback", op.get("stage"), "RUNNING")
+                    or instance and (task.get("mode"), task.get("stage"), task.get("state")) == (op.get("mode"), op.get("stage"), "RUNNING")
                     and task.get("instanceId") == instance[1])):
             raise ValueError("Rollback lease is limited to the exact private manager/executor task")
     if operation == "release" and record["status"] == "TESTING":

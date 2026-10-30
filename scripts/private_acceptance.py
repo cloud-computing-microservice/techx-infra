@@ -44,6 +44,7 @@ class PrivateAcceptance:
     def receipt_fields(self, record): return {}
     def receipt_key(self, record): return f"private/staging/{record['sessionId']}/acceptance/{self.task_id}.json"
     def read_receipt(self, record): return read_private_receipt(self.runtime.clients["s3"], self.runtime.bucket, record, self.version)
+    def validate_application(self, app): pass
 
     def validate_record(self, record):
         if (any(record.get(key) != self.runtime.execution.get(key) for key in ("sessionId", "account", "region", "environment",
@@ -154,6 +155,7 @@ class PrivateAcceptance:
             raise PrivateFailure("argocd-authentication")
         status, app = http.request("GET", "/argocd/api/v1/applications/techx-staging", token=token)
         if status != 200: raise PrivateFailure("argocd-authorization")
+        self.validate_application(app)
         source, observed = app.get("spec", {}).get("source", {}), app.get("status", {})
         if (source.get("targetRevision") != self.selected["chartSha"] or source.get("repoURL") != "https://github.com/cloud-computing-microservice/techx-chart.git"
                 or observed.get("sync", {}).get("status") != "Synced" or observed.get("sync", {}).get("revision") != self.selected["chartSha"]

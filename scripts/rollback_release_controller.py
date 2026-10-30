@@ -1,8 +1,4 @@
-"""Observe one bounded rollback through review and private restore.
-
-This source stops at ROLLBACK_PUBLIC_ACCEPTANCE. Restored images and a healthy
-Application alone do not authorize READY, a new accepted baseline or history.
-"""
+"""Observe one bounded rollback through protected review and fresh acceptance."""
 from copy import deepcopy
 
 from chart_promotion import PromotionPending, candidate_ci, pull_identity
@@ -22,6 +18,50 @@ class RollbackReleaseController:
         self.d, self.infra, self.chart, self.source, self.run_id = dispatcher, infra, chart, source, run_id
         self.prepare = RollbackPrepareController(dispatcher, infra, run_id)
         self.handoff = RollbackHandoffDriver(dispatcher, {INFRA_REPO: infra})
+
+    def observe_private(self):
+        d = self.d
+        controller(d.clients, self.infra, d.execution, self.run_id, d.clock())
+        scoped, _ = d.store.read()
+        if (scoped.get("executionVersion") != d.version or scoped.get("status") not in ("FAILED_NEEDS_CLEANUP", "READY")
+                or scoped.get("status") == "READY" and scoped.get("lifecycleDispatch", {}).get("operation") != operation("verify", "rollback")
+                or any(scoped.get(name) != d.execution.get(name) for name in CONTEXT)):
+            raise ValueError("Private rollback continuation belongs to another immutable session")
+        try:
+            from accepted_rollback_history import accepted_projection
+            from accepted_release_history import read_accepted_history
+            from rollback_private_contract import restoration_record
+            if scoped["status"] == "READY":
+                historical = accepted_projection(scoped)
+            else:
+                if not slot(scoped).get("restoration"):
+                    progress = self.observe_public()
+                    if progress.get("waiting") != "ROLLBACK_PRIVATE_ACCEPTANCE": return progress
+                scoped, _ = d.current(idle=False, allow_rollback=True)
+                historical = scoped
+            op = operation("verify", "rollback")
+            predecessor = restoration_record(historical)
+            predecessor["rollbackAttempt"].pop("privateAcceptance", None)
+            expected = dispatch_identity(predecessor, d.version, op)
+            actual = scoped.get("lifecycleDispatch", {})
+            if scoped["status"] != "READY" and actual == slot(historical)["restoration"]["lifecycleDispatch"]:
+                current, _ = d.current(allow_rollback=True)
+                if current != scoped: raise ValueError("Rollback changed before private acceptance dispatch")
+                return dict(d.start(current, op), waiting="ROLLBACK_PRIVATE_RUNNING")
+            if actual.get("id") != expected or actual.get("operation") != op or actual.get("phase") != "OBSERVED":
+                raise ValueError("Rollback private manager start is unknown; never repeat StartBuild")
+            build = observed_build(d.clients["codebuild"], scoped)
+            if build.get("buildStatus") == "IN_PROGRESS" and build.get("buildComplete") is False:
+                return dict(waiting="ROLLBACK_PRIVATE_RUNNING", buildId=build["id"])
+            if completed_manager(d.clients, d.execution, scoped) != op:
+                raise ValueError("Rollback private acceptance lacks its terminal successful manager")
+            accepted = read_accepted_history(d.clients["s3"], d.bucket, scoped, d.version)
+            latest, _ = d.current(allow_ready=True)
+            if latest != scoped: raise ValueError("Rollback changed during accepted history readback")
+            return dict(waiting="READY", sessionId=scoped["sessionId"], acceptedRelease=accepted)
+        except BaseException:
+            d.cleanup()
+            raise
 
     def observe_public(self):
         d = self.d

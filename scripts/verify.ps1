@@ -130,6 +130,8 @@ python (Join-Path $PSScriptRoot 'test-rollback-release-controller.py')
 if ($LASTEXITCODE -ne 0) { throw 'Automatic protected rollback review consumption, one private restore dispatch and terminal proof handoff tests failed.' }
 python (Join-Path $PSScriptRoot 'test-rollback-public-acceptance.py')
 if ($LASTEXITCODE -ne 0) { throw 'Protected hosted rollback public probe, exact restored evidence, terminal consumption and old-baseline retention tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-private-acceptance.py')
+if ($LASTEXITCODE -ne 0) { throw 'Rollback VPN/runtime acceptance, restored Application identity, terminal private handoff and immutable accepted-history tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-handoff.py')

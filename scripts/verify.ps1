@@ -110,6 +110,10 @@ python (Join-Path $PSScriptRoot 'test-active-private-acceptance.py')
 if ($LASTEXITCODE -ne 0) { throw 'Active private VPN/runtime, immutable accepted history, terminal READY handoff and fixed loader/CLI tests failed.' }
 python (Join-Path $PSScriptRoot 'test-rollback-proposal.py')
 if ($LASTEXITCODE -ne 0) { throw 'Exact accepted baseline Git restoration proposal, no rebase/merge and bounded intent tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-admission.py')
+if ($LASTEXITCODE -ne 0) { throw 'Read-only rollback admission from exact terminal hosted/public/rollout evidence and original immutable window failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-reservation.py')
+if ($LASTEXITCODE -ne 0) { throw 'Single-use rollback reservation, scoped controller, positive CAS recovery and unchanged original expiry tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-handoff.py')

@@ -281,6 +281,15 @@ These checks have offline regression coverage. Real App setup, private control
 secrets, branch enforcement, IAM/network and end-to-end acceptance remain live
 prerequisites; offline success does not authorize AWS deployment.
 
+Independent cleanup can recover a missing completion marker after its DESTROYED
+inventory checkpoint was committed. The dispatcher verifies that existing proof
+and requests the fixed cleanup project; only its executor produces the marker.
+Recovery pins the original inventory version and timestamp, performs no workload
+operations or lease takeover, and cannot reopen the environment or rewrite the
+current session. Existing markers remain read-only; changed sessions and unknown
+S3 errors cannot be treated as success. New sessions require fresh IDs. This
+recovery does not resolve unproven CALLING side effects or replace live inventory.
+
 After the reviewed edge apply, the typed private task `activate / exposure / 1`
 pins the committed edge/GitOps predecessors, state lineage/serial and resource
 IDs. It observes the actual CloudFront distribution/VPC origin and the single

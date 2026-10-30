@@ -60,7 +60,8 @@ class DestroyTests(unittest.TestCase):
             return dict(Body=io.BytesIO(encoded(self.execution)), VersionId=self.version)
         if args["Key"] == "automation/staging/session.json":
             return dict(Body=io.BytesIO(encoded(self.current)), VersionId="session-version")
-        return dict(Body=io.BytesIO(self.objects[args["Key"]]), VersionId="evidence-version")
+        return dict(Body=io.BytesIO(self.objects[args["Key"]]), VersionId="evidence-version",
+            LastModified=datetime(2026, 1, 1, 5, tzinfo=timezone.utc))
 
     def list_objects(self, **args):
         self.assertEqual(args["ExpectedBucketOwner"], ACCOUNT)
@@ -211,6 +212,7 @@ class DestroyTests(unittest.TestCase):
         marker.update(artifactSha256=digest, inventoryKey=f"cleanup/{self.session}/inventory-{digest}.json")
         self.objects[marker["inventoryKey"]] = payload
         self.objects[key] = encoded(marker)
+        self.current["cleanupEvidence"] = dict(inventoryEmpty=True, artifactSha256=digest, key=marker["inventoryKey"])
         with self.assertRaisesRegex(ValueError, "nonempty"): self.request()
 
     def test_incomplete_listing_or_absent_exact_version_fails_closed(self):
@@ -227,10 +229,17 @@ class DestroyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unexpected version"): self.request()
         self.assertFalse(self.calls)
 
-    def test_missing_marker_after_destroyed_checkpoint_requires_reconciliation_without_launch(self):
+    def test_missing_marker_after_destroyed_checkpoint_requests_cleanup_owned_reconciliation(self):
         self.complete()
         del self.objects[f"cleanup/{self.session}/complete.json"]
-        with self.assertRaisesRegex(ValueError, "reconcile evidence"): self.request()
+        self.assertEqual(self.request()["status"], "DESTROYED")
+        self.assertEqual(len(self.calls), 1)
+
+    def test_missing_marker_with_invalid_destroyed_proof_never_launches_repair(self):
+        self.complete()
+        del self.objects[f"cleanup/{self.session}/complete.json"]
+        self.current["cleanupEvidence"]["artifactSha256"] = "0" * 64
+        with self.assertRaises(ValueError): self.request()
         self.assertFalse(self.calls)
 
 

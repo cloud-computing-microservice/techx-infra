@@ -78,6 +78,8 @@ class Coordinator:
             current, etag = json.loads(response["Body"].read()), response["ETag"]
             if current.get("status") not in ("OFF", "DESTROYED"):
                 raise ValueError("An existing staging session must be cleaned up before another starts")
+            if current.get("sessionId") == record["sessionId"]:
+                raise ValueError("A new environment must use a fresh session identity; closed evidence is immutable")
         except self.clients["s3"].exceptions.NoSuchKey:
             etag = None
         self.store.write(record, etag)  # CAS reservation; publishers cannot claim PLANNING sessions.

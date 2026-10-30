@@ -99,7 +99,16 @@ class DeploymentManager:
             if record.get(key) != self.execution.get(key):
                 raise ValueError("Current session differs from admitted execution")
         active = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") in (dict(mode="release", stage="active", attempt=1), dict(mode="verify", stage="active", attempt=1))
-        if (record.get("executionVersion") != self.version or not (active or record["status"] in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING")))
+        rollback = record["status"] == "FAILED_NEEDS_CLEANUP" and record.get("lifecycleDispatch", {}).get("operation") == dict(mode="rollback", stage="prepare", attempt=1)
+        if rollback:
+            from cleanup_completion import CONTEXT as immutable_context
+            from rollback_task_contract import slot
+            value = slot(record)
+            if (self.execution.get("action") != "deploy-window-rollback"
+                    or any(record.get(name) != self.execution.get(name) for name in immutable_context)
+                    or self.clock() >= utc(value["intent"]["expiresAt"])):
+                raise ValueError("Rollback preparation immutable opt-in context changed or expired")
+        if (record.get("executionVersion") != self.version or not (active or rollback or record["status"] in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING")))
                 or self.clock() >= utc(record["cleanupStartAt"])):
             raise ValueError("Session is closed for deployment")
         if active:
@@ -108,6 +117,8 @@ class DeploymentManager:
             ref = record["lifecycleDispatch"]
             if ref.get("phase") == "OBSERVED" and ref.get("buildId") != self.owner.split(":build/", 1)[1]:
                 raise ValueError("Active task belongs to another actual manager build")
+        if rollback and record["lifecycleDispatch"].get("phase") == "OBSERVED" and record["lifecycleDispatch"].get("buildId") != self.owner.split(":build/", 1)[1]:
+            raise ValueError("Rollback task belongs to another actual manager build")
         verify_existing(self.clients["scheduler"], record, self.version, self.clock())
         if record["status"] == "READY":
             from deployment_tasks import validate_result
@@ -167,8 +178,10 @@ class DeploymentManager:
 
     def dispatch(self, private, mode, stage, attempt):
         record, etag = self.current()
+        if record["status"] == "FAILED_NEEDS_CLEANUP" and (mode, stage) != ("rollback", "prepare"):
+            raise ValueError("Failed sessions can dispatch only the exact reserved rollback task")
         if record["status"] == "TESTING" and (mode, stage) not in (("release", "active"), ("verify", "active")): raise ValueError("An active session cannot dispatch cold work")
-        if mode == "release" or (mode, stage) == ("verify", "active"):
+        if mode in ("release", "rollback") or (mode, stage) == ("verify", "active"):
             # StartBuild may begin before its positive handle is checkpointed.
             # Observe that same call; never create a task from a guessed build.
             for observation in range(24):
@@ -178,7 +191,10 @@ class DeploymentManager:
                 if ref.get("phase") != "CALLING": raise ValueError("Active manager has no protected call to observe")
                 self.sleep(1)
             else: raise TimeoutError("Active manager is still awaiting its protected dispatch receipt")
-        self.previous_terminal(record)
+        if mode == "rollback":
+            from rollback_task_contract import original_record
+            self.previous_terminal(dict(original_record(record), status="TESTING"))
+        else: self.previous_terminal(record)
         instance = inspect_instance(self.clients["ec2"], self.execution, private)
         self.verify_document()
         from lifecycle_stage import validate_planning
@@ -208,10 +224,13 @@ class DeploymentManager:
             from active_public_contract import read_active_public_receipt
             validate_active_private_start(record, attempt)
             read_active_public_receipt(self.clients["s3"], self.bucket, record, self.version)
+        elif mode == "rollback" and stage == "prepare":
+            from rollback_task_contract import validate_prepare_start
+            validate_prepare_start(record, attempt)
         elif (mode != "apply" or record.get("stages", {}).get(stage, {}).get("state") != "AWAITING_APPROVAL"
                 or record["stages"][stage].get("attempt") != attempt or record.get("pendingPlan", {}).get("stage") != stage):
             raise ValueError("Task requires a supported plan or pending apply stage")
-        owned = claim(record, self.owner, "release" if mode == "release" else "acceptance" if (mode, stage) == ("verify", "active") else "deploy", now=self.clock())
+        owned = claim(record, self.owner, "rollback" if mode == "rollback" else "release" if mode == "release" else "acceptance" if (mode, stage) == ("verify", "active") else "deploy", now=self.clock())
         self.store.write(owned, etag)
         epoch, task_id = owned["lease"]["epoch"], uuid.uuid4().hex
         persisted = False

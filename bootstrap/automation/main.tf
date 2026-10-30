@@ -248,7 +248,7 @@ data "aws_iam_policy_document" "control" {
     sid       = "OnlyExecutorCanWriteActiveRollout"
     effect    = "Deny"
     actions   = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
-    resources = ["${aws_s3_bucket.control.arn}/private/staging/*/active/*", "${aws_s3_bucket.control.arn}/accepted/staging/*"]
+    resources = ["${aws_s3_bucket.control.arn}/private/staging/*/active/*", "${aws_s3_bucket.control.arn}/accepted/staging/*", "${aws_s3_bucket.control.arn}/private/staging/*/rollback/*"]
     principals {
       type        = "*"
       identifiers = ["*"]

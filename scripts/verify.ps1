@@ -114,6 +114,10 @@ python (Join-Path $PSScriptRoot 'test-rollback-admission.py')
 if ($LASTEXITCODE -ne 0) { throw 'Read-only rollback admission from exact terminal hosted/public/rollout evidence and original immutable window failed.' }
 python (Join-Path $PSScriptRoot 'test-rollback-reservation.py')
 if ($LASTEXITCODE -ne 0) { throw 'Single-use rollback reservation, scoped controller, positive CAS recovery and unchanged original expiry tests failed.' }
+python (Join-Path $PSScriptRoot 'test-private-rollback-prepare.py')
+if ($LASTEXITCODE -ne 0) { throw 'Private rollback manager/task/lease, immutable intent, guarded baseline proposal and readback tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-prepare-controller.py')
+if ($LASTEXITCODE -ne 0) { throw 'Single manager rollback dispatch, lost response, private terminal proof and proposal handoff tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-handoff.py')

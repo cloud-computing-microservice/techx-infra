@@ -25,8 +25,8 @@ CONTEXT = ("sessionId", "sourceRevisions", "deadline", "cleanupStartAt", "approv
 def operation(mode, stage, attempt=1):
     if (type(attempt) is not int or not 1 <= attempt <= 999999
             or (mode, stage) not in {("prepare", "foundation"), ("plan", "foundation"), ("apply", "foundation"),
-                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active")}
-            or mode in ("prepare", "bootstrap", "promote", "activate", "verify", "release") and attempt != 1):
+                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active"), ("rollback", "prepare")}
+            or mode in ("prepare", "bootstrap", "promote", "activate", "verify", "release", "rollback") and attempt != 1):
         raise ValueError("Unsupported typed lifecycle operation")
     return dict(mode=mode, stage=stage, attempt=attempt)
 
@@ -51,15 +51,27 @@ def dispatch_identity(record, execution_version, op):
     if op["mode"] == "release":
         from active_release_contract import release_context
         context["releaseContext"] = release_context(record)
+    if op["mode"] == "rollback":
+        from rollback_task_contract import context as rollback_context
+        context["rollbackContext"] = rollback_context(record)
     return hashlib.sha256(encoded(context)).hexdigest()
 
 
-def guard(record, execution, version, now, *, idle=True, allow_ready=False):
+def guard(record, execution, version, now, *, idle=True, allow_ready=False, allow_rollback=False):
     validate(record)
     executor_config(execution["deploymentConfig"])
     active = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") in (operation("release", "active"), operation("verify", "active"))
+    rollback = allow_rollback and record["status"] == "FAILED_NEEDS_CLEANUP"
+    if rollback:
+        from cleanup_completion import CONTEXT as immutable_context
+        from rollback_task_contract import slot
+        value = slot(record)
+        if (execution.get("action") != "deploy-window-rollback"
+                or any(record.get(name) != execution.get(name) for name in immutable_context)
+                or now >= utc(value["intent"]["expiresAt"])):
+            raise ValueError("Rollback dispatch changed immutable opt-in context or expired")
     if (any(record.get(key) != execution.get(key) for key in CONTEXT) or record.get("executionVersion") != version
-            or not (active or record["status"] in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING"))) or now >= utc(record["cleanupStartAt"])
+            or not (active or rollback or record["status"] in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING"))) or now >= utc(record["cleanupStartAt"])
             or idle and record.get("lease")):
         raise ValueError("Dispatch requires the same open, idle admitted staging session")
     validate_estimate(record, execution["costEstimate"])
@@ -188,11 +200,11 @@ class Dispatcher:
         self.execution, self.version = deepcopy(execution), version
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
-    def current(self, *, idle=True, allow_ready=False):
+    def current(self, *, idle=True, allow_ready=False, allow_rollback=False):
         if self.clients["sts"].get_caller_identity().get("Account") != ACCOUNT:
             raise ValueError("Wrong lifecycle dispatch account")
         record, etag = self.store.read()
-        guard(record, self.execution, self.version, self.clock(), idle=idle, allow_ready=allow_ready)
+        guard(record, self.execution, self.version, self.clock(), idle=idle, allow_ready=allow_ready, allow_rollback=allow_rollback)
         verify_existing(self.clients["scheduler"], record, self.version, self.clock())
         return record, etag
 
@@ -203,7 +215,8 @@ class Dispatcher:
     def start(self, checked, op, *, initial=False):
         """CAS consumes an already-verified predecessor before any StartBuild."""
         operation(**op)
-        current, etag = self.current(allow_ready=op["mode"] == "release")
+        rollback = op["mode"] == "rollback"
+        current, etag = self.current(allow_ready=op["mode"] == "release", allow_rollback=rollback)
         if current != checked: raise ValueError("Session changed during dispatch admission")
         if current["status"] == "TESTING" and op != operation("verify", "active"): raise ValueError("An active task dispatch cannot be replayed")
         if initial:
@@ -212,8 +225,16 @@ class Dispatcher:
         elif current.get("lifecycleDispatch", {}).get("phase") != "OBSERVED":
             raise ValueError("Previous dispatch is unknown; never replay StartBuild")
         else:
-            previous = completed_manager(self.clients, self.execution, current)
-            if op["mode"] == "release":
+            if rollback:
+                from rollback_task_contract import original_record, validate_prepare_start
+                validate_prepare_start(current, op["attempt"])
+                previous = completed_manager(self.clients, self.execution, dict(original_record(current), status="TESTING"))
+                if previous != operation("release", "active"):
+                    raise ValueError("Rollback preparation requires its original terminal rollout")
+            else: previous = completed_manager(self.clients, self.execution, current)
+            if rollback:
+                pass  # Exact predecessor and single-use reservation checked above.
+            elif op["mode"] == "release":
                 if current["status"] != "READY" or previous != operation("verify", "private"):
                     raise ValueError("Private rollout requires the accepted READY predecessor")
                 self.advance()
@@ -249,12 +270,12 @@ class Dispatcher:
         # Once this call intent exists, no retry (including a workflow rerun
         # days later, after the AWS idempotency token expires) may resend it.
         try:
-            current, etag = self.current()
+            current, etag = self.current(allow_rollback=rollback)
             if current.get("lifecycleDispatch") != updated["lifecycleDispatch"]:
                 raise ValueError("Dispatch preparation was superseded")
             current["lifecycleDispatch"]["phase"] = "CALLING"
             self.store.write(current, etag)
-            latest, _ = self.current()
+            latest, _ = self.current(allow_rollback=rollback)
             if latest != current: raise ValueError("Session changed before manager API dispatch")
             result = self.clients["codebuild"].start_build(projectName=PROJECT, idempotencyToken=dispatch_id,
                 environmentVariablesOverride=[dict(name=key, value=value, type="PLAINTEXT") for key, value in environment(current, op).items()])
@@ -264,7 +285,7 @@ class Dispatcher:
                     or build.get("projectName") != PROJECT):
                 raise ValueError("StartBuild response does not identify the exact lifecycle project")
             for attempt in range(4):
-                current, etag = self.current(idle=False)
+                current, etag = self.current(idle=False, allow_rollback=rollback)
                 ref = current.get("lifecycleDispatch", {})
                 if ref.get("id") != dispatch_id or ref.get("phase") not in ("CALLING", "OBSERVED"):
                     raise ValueError("Manager dispatch was superseded")

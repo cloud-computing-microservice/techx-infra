@@ -43,6 +43,12 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "write-private-acceptance", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/receipt.json"] },
         { name = "write-active-private-acceptance", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/acceptance/task.json"] },
         { name = "write-accepted-history", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/accepted/staging/simulation/candidate.json"] },
+        { name = "write-private-rollback", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/rollback/intent.json"] },
+        { name = "read-rollback-predecessor-build", action = "codebuild:BatchGetBuilds", expected = "allowed", resources = [local.lifecycle_project_arn] },
+        { name = "no-foreign-rollback-build", action = "codebuild:BatchGetBuilds", expected = "denied", resources = ["arn:aws:codebuild:us-east-1:058114477594:project/unrelated"] },
+        { name = "no-executor-start-manager", action = "codebuild:StartBuild", expected = "denied", resources = [local.lifecycle_project_arn] },
+        { name = "read-protected-rollback-predecessor", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/handoffs/staging/simulation/dispatch/intent.json"] },
+        { name = "no-unversioned-rollback-handoff", action = "s3:GetObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/handoffs/staging/simulation/dispatch/intent.json"] },
         { name = "owned-vpn-client-export", action = "ec2:ExportClientVpnClientConfiguration", expected = "allowed", resources = ["arn:aws:ec2:us-east-1:058114477594:client-vpn-endpoint/cvpn-endpoint-00000000000000000"],
           context = [for key, value in { Project = "techx", Environment = "staging" } : {
             ContextKeyName = "ec2:ResourceTag/${key}", ContextKeyType = "string", ContextKeyValues = [value]
@@ -78,6 +84,9 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "read-pinned-accepted-history", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/accepted/staging/simulation/candidate.json"] },
         { name = "read-active-private-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/acceptance/task.json"] },
         { name = "no-dispatcher-accepted-history-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/accepted/staging/simulation/candidate.json"] },
+        { name = "read-private-rollback-proposal", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/rollback/proposal.json"] },
+        { name = "no-dispatcher-rollback-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/rollback/intent.json"] },
+        { name = "no-unversioned-rollback-proposal", action = "s3:GetObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/rollback/proposal.json"] },
         { name = "read-pinned-active-merge", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/promotions/staging/simulation/approval/receipt.json"] },
         { name = "no-active-rollout-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/rollout.json"] },
         { name = "no-active-candidate-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },

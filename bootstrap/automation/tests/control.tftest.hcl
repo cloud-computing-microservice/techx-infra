@@ -453,12 +453,31 @@ run "lifecycle_is_scoped_and_pinned" {
   assert {
     condition = length([for statement in data.aws_iam_policy_document.control.statement : statement if
       statement.sid == "OnlyExecutorCanWriteActiveRollout" && statement.effect == "Deny" &&
-      toset(statement.resources) == toset(["arn:aws:s3:::techx-test-control/private/staging/*/active/*", "arn:aws:s3:::techx-test-control/accepted/staging/*"]) &&
+      toset(statement.resources) == toset(["arn:aws:s3:::techx-test-control/private/staging/*/active/*", "arn:aws:s3:::techx-test-control/accepted/staging/*", "arn:aws:s3:::techx-test-control/private/staging/*/rollback/*"]) &&
       anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
         toset(condition.values) == toset(["arn:aws:iam::058114477594:role/techx-automation-lifecycle-executor"])
       ])
     ]) == 1
-    error_message = "Only the owned deployment executor may produce private active rollout/application evidence."
+    error_message = "Only the owned deployment executor may produce private rollout, rollback and accepted history evidence."
+  }
+  assert {
+    condition = jsondecode(aws_iam_role_policy.rollback_predecessor_read[0].policy) == {
+      Version = "2012-10-17", Statement = [
+        { Effect = "Allow", Action = ["codebuild:BatchGetBuilds"], Resource = "arn:aws:codebuild:us-east-1:058114477594:project/techx-automation-lifecycle" },
+        { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = "*" },
+        { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = "arn:aws:s3:::techx-test-control/handoffs/staging/*" }
+      ]
+    }
+    error_message = "Rollback predecessor reads must not grant StartBuild, SendCommand or unversioned handoff access."
+  }
+  assert {
+    condition = alltrue([for statement in jsondecode(aws_iam_role_policy.rollback_proposal_read[0].policy).Statement :
+      statement.Action == ["s3:GetObjectVersion"] && toset(statement.Resource) == toset([
+        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/intent.json",
+        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/proposal.json"
+      ])
+    ])
+    error_message = "Dispatcher may only version-read the fixed private rollback intent and proposal, without write or unversioned access."
   }
   assert {
     condition = length([for statement in jsondecode(aws_iam_role_policy.public_acceptance[0].policy).Statement : statement if

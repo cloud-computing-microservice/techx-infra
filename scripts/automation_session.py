@@ -45,7 +45,7 @@ def validate(record: dict):
 def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, previous_owner_stopped=False):
     validate(record)
     now = now or datetime.now(timezone.utc)
-    if operation not in ("deploy", "release", "bootstrap-publish", "acceptance", "cleanup"):
+    if operation not in ("deploy", "release", "bootstrap-publish", "acceptance", "cleanup", "rollback"):
         raise ValueError("Unknown lease operation")
     if not re.fullmatch(r"[a-zA-Z0-9:/_.-]{1,160}", owner):
         raise ValueError("Invalid lease owner")
@@ -59,6 +59,18 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
         raise ValueError("Verify the previous executor is stopped before taking over an expired lease")
     if operation != "cleanup" and now >= utc(record["cleanupStartAt"]):
         raise ValueError("Cleanup window has started")
+    if operation == "rollback":
+        from rollback_task_contract import slot
+        value = slot(record)
+        if now >= utc(value["intent"]["expiresAt"]): raise ValueError("Rollback intent expired")
+        task, dispatch = record.get("deploymentTask", {}), record.get("lifecycleDispatch", {})
+        manager = re.fullmatch(r"arn:aws:codebuild:us-east-1:058114477594:build/(techx-automation-lifecycle:[a-f0-9-]+)", owner)
+        instance = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", owner)
+        if not (dispatch.get("operation") == dict(mode="rollback", stage="prepare", attempt=1)
+                and (manager and dispatch.get("phase") == "OBSERVED" and dispatch.get("buildId") == manager[1]
+                    or instance and (task.get("mode"), task.get("stage"), task.get("state")) == ("rollback", "prepare", "RUNNING")
+                    and task.get("instanceId") == instance[1])):
+            raise ValueError("Rollback lease is limited to the exact private manager/executor task")
     if operation == "release" and record["status"] == "TESTING":
         from active_release_contract import release_context
         release_context(record)

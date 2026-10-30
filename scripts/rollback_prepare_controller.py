@@ -9,6 +9,40 @@ from copy import deepcopy
 from lifecycle_dispatch import completed_manager, dispatch_identity, observed_build, operation
 from rollback_reservation import arm_public_rollback, controller
 from rollback_task_contract import read_proposal_receipt, slot
+from workflow_handoff import HandoffDriver
+
+
+class RollbackHandoffDriver(HandoffDriver):
+    """The failed-session read path is restricted to its prepared review."""
+    def current(self, **kwargs):
+        return self.dispatcher.current(allow_rollback=True, **kwargs)
+
+    def start(self, target):
+        if target.get("operation") != "review-rollback": raise ValueError("Rollback may dispatch only its exact protected review")
+        from chart_selection import INFRA_REPO
+        from rollback_admission import preview_public_rollback
+        from rollback_task_contract import original_record, validate_prepare_checkpoint
+        from types import SimpleNamespace
+        record, etag = self.current()
+        value = validate_prepare_checkpoint(record)
+        if completed_manager(self.dispatcher.clients, self.dispatcher.execution, record) != operation("rollback", "prepare"):
+            raise ValueError("Rollback review handoff requires the terminal private preparation manager")
+        read_proposal_receipt(self.dispatcher.clients["s3"], self.dispatcher.bucket, record, self.dispatcher.version)
+        original_handoff = value["origin"]["workflowHandoff"]
+        if record.get("workflowHandoff") == original_handoff:
+            def original():
+                current, current_etag = self.current()
+                return original_record(current), current_etag
+            intent = preview_public_rollback(self.dispatcher.clients, self.dispatcher.bucket, SimpleNamespace(read=original),
+                self.dispatcher.execution, self.dispatcher.version, self.apis[INFRA_REPO], clock=self.dispatcher.clock,
+                created_at=value["intent"]["createdAt"])
+            latest, latest_etag = self.current()
+            if intent != value["intent"] or latest != record or latest_etag != etag:
+                raise ValueError("Original failed handoff changed before bounded rollback consumption")
+            updated = deepcopy(record)
+            updated["workflowHandoff"]["phase"] = "CONSUMED"
+            self.dispatcher.store.write(updated, etag)
+        return super().start(target)
 
 
 class RollbackPrepareController:

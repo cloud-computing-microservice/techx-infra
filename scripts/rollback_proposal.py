@@ -56,6 +56,32 @@ def validate_intent(value):
     return value
 
 
+def baseline_restore_tree(github, intent, source):
+    """Read the exact accepted release blobs; usable by producer and reviewer."""
+    validate_intent(intent)
+    base_tree, failed = git_tree(github, intent["failedChartSha"])
+    _, accepted = git_tree(github, intent["acceptedBaseline"]["chartSha"])
+    if ({key: item for key, item in failed.items() if key not in ALLOWED_FILES}
+            != {key: item for key, item in accepted.items() if key not in ALLOWED_FILES}
+            or any(name not in accepted or accepted[name]["mode"] != "100644" for name in ALLOWED_FILES)):
+        raise ValueError("Rollback cannot restore unrelated chart changes or executable release files")
+    manifest = json.loads(blob(github, accepted["releases/staging.json"]["sha"]))
+    baseline = intent["acceptedBaseline"]
+    validate_manifest(manifest, baseline["platformSha"])
+    names = dict(frontend="frontend", catalog="catalog-api", order="order-api")
+    images = {names[row["component"]]: row["image"].split(":staging-", 1)[0] + "@" + row["digest"] for row in manifest["images"]}
+    if images != baseline["images"]: raise ValueError("Rollback artifacts differ from accepted runtime digests")
+    values = blob(github, accepted["values-staging.yaml"]["sha"]).decode("utf-8-sig")
+    spec = importlib.util.spec_from_file_location("rollback_manifest", Path(source) / "techx-platform/scripts/prepare-chart-release.py")
+    renderer = importlib.util.module_from_spec(spec); spec.loader.exec_module(renderer)
+    # Rendering may validate the accepted bytes, but cannot silently repair them.
+    if renderer.render_values(values, manifest) != values:
+        raise ValueError("Accepted chart values do not select the accepted manifest")
+    expected = dict(deepcopy(failed), **{name: deepcopy(accepted[name]) for name in ALLOWED_FILES})
+    if expected == failed: raise ValueError("Rollback has no release diff; do not create a misleading PR")
+    return base_tree, failed, accepted, expected, manifest
+
+
 class BaselineRevert(ChartProposal):
     def __init__(self, github, intent, guard, *, clock):
         self.github, self.intent = github, deepcopy(validate_intent(intent))
@@ -77,27 +103,8 @@ class BaselineRevert(ChartProposal):
 
     def perform(self, source):
         record, _ = self.guard()
-        base_tree, failed = git_tree(self.github, self.baseline)
-        _, accepted = git_tree(self.github, self.intent["acceptedBaseline"]["chartSha"])
-        if ({key: item for key, item in failed.items() if key not in ALLOWED_FILES}
-                != {key: item for key, item in accepted.items() if key not in ALLOWED_FILES}
-                or any(name not in accepted or accepted[name]["mode"] != "100644" for name in ALLOWED_FILES)):
-            raise ValueError("Rollback cannot restore unrelated chart changes or executable release files")
-        manifest = json.loads(blob(self.github, accepted["releases/staging.json"]["sha"]))
         baseline = self.intent["acceptedBaseline"]
-        validate_manifest(manifest, baseline["platformSha"])
-        names = dict(frontend="frontend", catalog="catalog-api", order="order-api")
-        images = {names[row["component"]]: row["image"].split(":staging-", 1)[0] + "@" + row["digest"] for row in manifest["images"]}
-        if images != baseline["images"]: raise ValueError("Rollback artifacts differ from accepted runtime digests")
-        values = blob(self.github, accepted["values-staging.yaml"]["sha"]).decode("utf-8-sig")
-        spec = importlib.util.spec_from_file_location("rollback_manifest", Path(source) / "techx-platform/scripts/prepare-chart-release.py")
-        renderer = importlib.util.module_from_spec(spec); spec.loader.exec_module(renderer)
-        # The baseline must already select these digests. Rendering validates
-        # every image block but cannot silently repair or change accepted bytes.
-        if renderer.render_values(values, manifest) != values:
-            raise ValueError("Accepted chart values do not select the accepted manifest")
-        expected = dict(deepcopy(failed), **{name: deepcopy(accepted[name]) for name in ALLOWED_FILES})
-        if expected == failed: raise ValueError("Rollback has no release diff; do not create a misleading PR")
+        base_tree, _, accepted, expected, _ = baseline_restore_tree(self.github, self.intent, source)
         tree = self.write("git/trees", dict(base_tree=base_tree,
             tree=[dict(path=name, type="blob", **accepted[name]) for name in sorted(ALLOWED_FILES)]))
         tree_sha = sha(tree.get("sha"))

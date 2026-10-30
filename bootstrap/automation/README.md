@@ -1249,3 +1249,45 @@ and dispatcher identities may version-read its exact proofs, not overwrite them;
 the public acceptance role gets no additional private access. Original execution
 source revisions and cold checkpoints are retained. AMI rebake, actual AWS/VPN
 acceptance, bounded rollback and expanded recovery/inventory remain pending.
+
+### Bounded rollback preparation and protected review (source only)
+
+The draft opt-in action `deploy-window-rollback` is not exposed by the opening
+workflow. Its source admits a terminal failed active public check only after
+reading the exact protected workflow, hosted job, failure diagnostic, rollout
+manager/SSM results and accepted baseline. A session CAS reserves one attempt
+with a 30-minute intent that cannot extend the original cleanup window.
+
+`RollbackPrepareController` dispatches one `rollback / prepare / 1` manager.
+The manager and AMI loader bind one task to the owned persistent EC2 executor;
+the worker holds a rollback lease and persists the session's fixed immutable
+`private/staging/<session>/rollback/intent.json` and `proposal.json` objects.
+It restores only the two release blobs from the accepted chart, rechecks live
+scope before Git writes, and opens an unmerged PR. A lost StartBuild response
+is not replayed. The controller requires terminal CodeBuild and SSM success,
+the durable task checkpoint and versioned proposal readback before review.
+
+`RollbackHandoffDriver` consumes the positively verified failed public handoff
+and dispatches a separate `review-rollback` intent to `staging-chart-promote.yml`.
+The child binds the exact prepared task, rollback reservation, failed candidate,
+baseline and source. The rollback review refuses a blank dispatch ID. It checks
+the full restored Git tree, original parent, latest exact-head PR CI, fresh human
+PR approval and opening App-only branch policy, with repeated checks for races.
+After the protected environment's actual human approval, the bridge can write
+a separate `rollback-promotion-approval` and run index. Its expiry is bounded by
+15 minutes, the cleanup margin, and the rollback intent's original expiry.
+Cold and READY approval readers reject this distinct kind.
+
+The executor can read the fixed manager's terminal build and SSM result; preview
+and approval roles gain only evidence reads and failure-key discovery. Dispatcher
+can version-read the two rollback objects, not write them. Other writers are
+denied by the bucket policy. CodeBuild's project-scoped BatchGetBuilds permission
+follows the [AWS service authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_codebuild.html).
+
+This is not an operational rollback pipeline. Main orchestration, private grant
+consumption/merge, bounded main CI, Application update, public/private runtime
+acceptance, accepted rollback history and private/partial-rollout failure proofs
+still require integration. No grant, open PR or Synced/Healthy observation alone
+may publish READY or replace the accepted baseline. Original cleanup scheduling
+remains armed; unknown outcomes require cleanup. Rebuild and verify the AMI for
+the changed loader before live acceptance; source tests do not prove AWS behavior.

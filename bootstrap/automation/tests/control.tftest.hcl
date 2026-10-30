@@ -480,6 +480,25 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Dispatcher may only version-read the fixed private rollback intent and proposal, without write or unversioned access."
   }
   assert {
+    condition = length(aws_iam_role_policy.rollback_review_evidence) == 2 && alltrue([
+      for policy in aws_iam_role_policy.rollback_review_evidence :
+      jsondecode(policy.policy) == {
+        Version = "2012-10-17", Statement = [
+          { Effect = "Allow", Action = ["codebuild:BatchGetBuilds"], Resource = "arn:aws:codebuild:us-east-1:058114477594:project/techx-automation-lifecycle" },
+          { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = "*" },
+          { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = [
+            "arn:aws:s3:::techx-test-control/control/staging/tasks/*.json",
+            "arn:aws:s3:::techx-test-control/private/staging/*/rollback/intent.json",
+            "arn:aws:s3:::techx-test-control/private/staging/*/rollback/proposal.json"
+          ] },
+          { Effect = "Allow", Action = ["s3:ListBucket"], Resource = "arn:aws:s3:::techx-test-control",
+          Condition = { StringLike = { "s3:prefix" = ["acceptance/staging/*/active/*/public/*/failure.json"] } } }
+        ]
+      }
+    ])
+    error_message = "Rollback preview/approval may read exact immutable evidence and terminal outcomes, without dispatch, artifact write, private inputs or workload authority."
+  }
+  assert {
     condition = length([for statement in jsondecode(aws_iam_role_policy.public_acceptance[0].policy).Statement : statement if
       toset(statement.Action) == toset(["s3:GetObjectVersion"]) &&
       try(toset(statement.Resource), toset([])) == toset([for prefix in [

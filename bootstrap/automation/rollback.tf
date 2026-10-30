@@ -21,3 +21,24 @@ resource "aws_iam_role_policy" "rollback_proposal_read" {
     ]
   }] })
 }
+
+# Protected preview/approval roles can inspect the exact original failure and
+# successful private task. They cannot issue SSM commands, start builds, write
+# rollback artifacts, access private inputs, or deploy workloads.
+resource "aws_iam_role_policy" "rollback_review_evidence" {
+  for_each = var.enable_lifecycle_control ? {
+    preview = aws_iam_role.chart_reader[0].name
+    approve = aws_iam_role.promotion_approver[0].name
+  } : {}
+  name = "verify-bounded-rollback-preparation-and-original-failure"
+  role = each.value
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["codebuild:BatchGetBuilds"], Resource = local.lifecycle_project_arn },
+    { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = "*" },
+    { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = [for prefix in [
+      "control/staging/tasks/*.json", "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json"
+    ] : "${aws_s3_bucket.control.arn}/${prefix}"] },
+    { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.control.arn,
+    Condition = { StringLike = { "s3:prefix" = ["acceptance/staging/*/active/*/public/*/failure.json"] } } }
+  ] })
+}

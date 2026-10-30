@@ -69,7 +69,14 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
         op = dispatch.get("operation", {})
         valid_phase = (op == dict(mode="rollback", stage="prepare", attempt=1) and value["phase"] in ("REQUESTED", "PREPARING", "PROPOSED")
             or op == dict(mode="rollback", stage="rollout", attempt=1) and value["phase"] in ("APPROVED", "RESTORED"))
-        if not (valid_phase
+        public_run = re.fullmatch(r"arn:aws:sts::058114477594:assumed-role/techx-automation-public-acceptance/techx-public-([1-9][0-9]*)", owner)
+        handoff = record.get("workflowHandoff", {})
+        public = (public_run and value["phase"] == "RESTORED" and handoff.get("operation") == "accept-rollback-public"
+            and handoff.get("phase") in ("CALLING", "OBSERVED"))
+        if public:
+            from rollback_public_contract import public_context
+            public_context(record)
+        if not (public or valid_phase
                 and (manager and dispatch.get("phase") == "OBSERVED" and dispatch.get("buildId") == manager[1]
                     or instance and (task.get("mode"), task.get("stage"), task.get("state")) == ("rollback", op.get("stage"), "RUNNING")
                     and task.get("instanceId") == instance[1])):

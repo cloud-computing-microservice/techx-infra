@@ -73,5 +73,11 @@ class ReleaseControllerTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.observe()
         self.assertFalse(self.f.cleanup)
 
+    def test_public_observer_keeps_same_live_restore_without_premature_dispatch_or_cleanup(self):
+        self.f.identity["Arn"] = self.dispatcher_identity
+        self.assertEqual(self.controller.observe_public()["waiting"], "ROLLBACK_ROLLOUT_RUNNING")
+        self.assertEqual(len(self.p.starts), 1)
+        self.assertFalse(self.f.cleanup)
+
 
 if __name__ == "__main__": unittest.main()

@@ -18,7 +18,23 @@ class RollbackHandoffDriver(HandoffDriver):
         return self.dispatcher.current(allow_rollback=True, **kwargs)
 
     def start(self, target):
-        if target.get("operation") != "review-rollback": raise ValueError("Rollback may dispatch only its exact protected review")
+        if target.get("operation") not in ("review-rollback", "accept-rollback-public"):
+            raise ValueError("Rollback may dispatch only its exact protected review or public acceptance")
+        if target["operation"] == "accept-rollback-public":
+            from rollback_rollout_contract import read_rollback_rollout
+            record, _ = self.current(idle=False)
+            read_rollback_rollout(self.dispatcher.clients["s3"], self.dispatcher.bucket, record, self.dispatcher.version)
+            state = record.get("workflowHandoff", {})
+            if state.get("operation") == "accept-rollback-public" and state.get("phase") in ("CALLING", "OBSERVED", "CONSUMED"):
+                _, intent = self.load()
+                if intent["target"] != target: raise ValueError("Rollback public recovery changed its target")
+                return self.recover()
+            if record["rollbackAttempt"].get("publicAcceptance"):
+                raise ValueError("Rollback public acceptance cannot dispatch another attempt")
+            record, _ = self.current()
+            if completed_manager(self.dispatcher.clients, self.dispatcher.execution, record) != operation("rollback", "rollout"):
+                raise ValueError("Rollback public handoff requires its terminal restore manager")
+            return super().start(target)
         from chart_selection import INFRA_REPO
         from rollback_admission import preview_public_rollback
         from rollback_task_contract import original_record, validate_prepare_checkpoint

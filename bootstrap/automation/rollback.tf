@@ -42,3 +42,15 @@ resource "aws_iam_role_policy" "rollback_review_evidence" {
     Condition = { StringLike = { "s3:prefix" = ["acceptance/staging/*/active/*/public/*/failure.json"] } } }
   ] })
 }
+
+resource "aws_iam_role_policy" "rollback_public_evidence" {
+  count = var.enable_lifecycle_control ? 1 : 0
+  name  = "read-exact-restored-rollback-public-binding"
+  role  = aws_iam_role.public_acceptance[0].name
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{
+    Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = [for prefix in [
+      "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",
+      "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json", "promotions/staging/*/intent.json"
+    ] : "${aws_s3_bucket.control.arn}/${prefix}"]
+  }] })
+}

@@ -128,6 +128,8 @@ python (Join-Path $PSScriptRoot 'test-private-rollback-rollout.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private rollback exact-head merge, bounded CI, pinned Application, runtime digest, CLI and AMI task tests failed.' }
 python (Join-Path $PSScriptRoot 'test-rollback-release-controller.py')
 if ($LASTEXITCODE -ne 0) { throw 'Automatic protected rollback review consumption, one private restore dispatch and terminal proof handoff tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-public-acceptance.py')
+if ($LASTEXITCODE -ne 0) { throw 'Protected hosted rollback public probe, exact restored evidence, terminal consumption and old-baseline retention tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-handoff.py')

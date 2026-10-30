@@ -1323,8 +1323,41 @@ and FAILED_NEEDS_CLEANUP lifecycle state stay intact. The parent separately
 requires successful terminal CodeBuild/SSM, the durable task and receipt/merge/
 Application evidence before returning `ROLLBACK_PUBLIC_ACCEPTANCE`.
 `RollbackReleaseController` supplies this preparation/review/restore observation
-flow, but is not yet wired into main operational orchestration. New public and
-private acceptance plus an atomic accepted-history/READY handoff are still
+flow, but is not yet wired into main operational orchestration. Public binding is
+described below; private acceptance and an atomic accepted-history/READY handoff remain
 required. CLI/loader paths and SDK faults are tested offline; no AWS or GitHub
 merge is performed by these tests. Rebuild/verify the changed AMI before any
 authorized live run, and leave the opening opt-in hidden until integration ends.
+
+### Hosted rollback public acceptance (source only)
+
+The existing acceptance workflow has a third, mutually exclusive restored scope:
+`rollback_id` plus the exact private `rollout_sha256`, without cold activation or
+active release inputs. The input validator runs before AWS credentials. The
+protected `accept-rollback-public` handoff binds the restored reservation, task,
+candidate and baseline to an actual first-attempt hosted main workflow/job.
+The public role gains version-read access only to the fixed restored artifacts
+and sanitized merge intent, without private inputs, credentials or task writes.
+
+`rollback_public_acceptance.py` holds its run-scoped rollback lease and uses the
+same verified public DNS/TLS/storefront/API/order/cache/admin-block probes. It
+writes a separate versioned receipt under
+`acceptance/staging/<session>/rollback/<rollbackId>/public/<dispatch>/result.json`.
+The original cold and failed active results cannot satisfy this checkpoint.
+FAILED_NEEDS_CLEANUP, the failed candidate and the accepted baseline stay intact.
+Probe failure records a sanitized failed checkpoint and requires cleanup; it
+does not reserve another rollback or extend the original intent/window.
+
+`RollbackReleaseController.observe_public()` waits for actual successful terminal
+workflow and public job observations, verifies the same receipt/runner/context,
+and atomically consumes the handoff while retaining the restoration snapshot.
+The next boundary is `ROLLBACK_PRIVATE_ACCEPTANCE`, not READY. A CALLING handoff
+can recover a positive original receipt even while the probe has progressed;
+recovery never reposts the workflow. Unknown outcomes request cleanup. An early
+public observer keeps the existing live restore handle rather than dispatching
+another operation. Private VPN/runtime acceptance, accepted rollback history,
+atomic READY, main orchestration and actual cloud acceptance are still pending.
+Cleanup recognizes cold, active and rollback leases of the same HTTP-only public
+role. It can fence that probe without GitHub cancellation only after every
+infrastructure manager/EC2 executor is positively terminal; unknown holder types
+or an unproven terminal result still block takeover.

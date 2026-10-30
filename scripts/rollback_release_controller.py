@@ -23,6 +23,59 @@ class RollbackReleaseController:
         self.prepare = RollbackPrepareController(dispatcher, infra, run_id)
         self.handoff = RollbackHandoffDriver(dispatcher, {INFRA_REPO: infra})
 
+    def observe_public(self):
+        d = self.d
+        controller(d.clients, self.infra, d.execution, self.run_id, d.clock())
+        scoped, _ = d.store.read()
+        if (scoped.get("executionVersion") != d.version or scoped.get("status") != "FAILED_NEEDS_CLEANUP"
+                or any(scoped.get(name) != d.execution.get(name) for name in CONTEXT)):
+            raise ValueError("Public rollback continuation belongs to another immutable session")
+        try:
+            record, _ = d.current(idle=False, allow_rollback=True)
+            state = record.get("workflowHandoff", {})
+            if state.get("operation") != "accept-rollback-public":
+                progress = self.observe()
+                if progress.get("waiting") != "ROLLBACK_PUBLIC_ACCEPTANCE": return progress
+                record, _ = d.current(allow_rollback=True)
+                response = self.handoff.start(target_for("accept-rollback-public", record, d.execution))
+                return dict(waiting="ROLLBACK_PUBLIC_RUNNING", workflowRunId=response["workflow_run_id"])
+            if state.get("phase") == "PREPARED": self.handoff.start(target_for("accept-rollback-public", record, d.execution))
+            record, intent, run = self.handoff.observe()
+            state = record["workflowHandoff"]
+            if run["status"] in LIVE: return dict(waiting="ROLLBACK_PUBLIC_RUNNING", workflowRunId=run["id"])
+            if run.get("conclusion") != "success": raise ValueError("Rollback public workflow failed/cancelled; cleanup required")
+            from rollback_public_contract import read_public_receipt
+            proof = read_public_receipt(d.clients["s3"], d.bucket, record, d.version)
+            if proof["dispatchId"] != intent["dispatchId"] or proof["workflowRun"] != f"https://github.com/{INFRA_REPO}/actions/runs/{run['id']}":
+                raise ValueError("Rollback public receipt belongs to another dispatched run")
+            jobs = self.infra.get(f"actions/runs/{run['id']}/jobs?filter=latest&per_page=100")
+            rows = jobs.get("jobs", [])
+            public = [job for job in rows if job.get("name") == "public"]
+            if (type(jobs.get("total_count")) is not int or jobs["total_count"] != len(rows) or len(rows) > 10 or len(public) != 1
+                    or any(public[0].get(name) != expected for name, expected in dict(id=proof["runner"]["jobId"], run_id=run["id"],
+                        head_sha=d.execution["sourceRevisions"]["techx-infra"], runner_id=proof["runner"]["runnerId"],
+                        runner_group_name="GitHub Actions", labels=["ubuntu-24.04"], status="completed", conclusion="success").items())):
+                raise ValueError("Rollback public result lacks the same actual terminal hosted job")
+            current, etag = d.current(allow_rollback=True)
+            completed_manager(d.clients, d.execution, current)
+            if current != record: raise ValueError("Rollback changed during public workflow observation")
+            if state.get("phase") == "CONSUMED" and slot(current).get("restoration"):
+                return dict(waiting="ROLLBACK_PRIVATE_ACCEPTANCE", rollbackId=slot(current)["intent"]["rollbackId"])
+            ledger = deepcopy(current["rollbackAttempt"]); ledger.pop("publicAcceptance", None)
+            if (state.get("phase") != "OBSERVED" or intent["predecessor"].get("rollbackAttempt") != ledger
+                    or any(intent["predecessor"].get(name) != current.get(name) for name in
+                        ("status", "lifecycleDispatch", "deploymentTask", "releaseCandidate", "acceptedRelease"))):
+                raise ValueError("Rollback public predecessor changed before consumption")
+            updated = deepcopy(current)
+            updated["workflowHandoff"]["phase"] = "CONSUMED"
+            updated["rollbackAttempt"]["restoration"] = {name: deepcopy(updated[name]) for name in ("lifecycleDispatch", "deploymentTask", "workflowHandoff")}
+            slot(updated)
+            d.store.write(updated, etag)
+            return dict(waiting="ROLLBACK_PRIVATE_ACCEPTANCE", rollbackId=slot(updated)["intent"]["rollbackId"])
+        except BaseException:
+            d.cleanup()
+            raise
+
     def observe(self):
         d = self.d
         controller(d.clients, self.infra, d.execution, self.run_id, d.clock())

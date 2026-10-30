@@ -24,6 +24,8 @@ def slot(record):
     extras = {"REQUESTED": set(), "PREPARING": {"intentReference"},
               "PROPOSED": PREPARED, "APPROVED": APPROVED,
               "RESTORED": APPROVED | {"rolloutTaskId", "rolloutReference"}}.get(value.get("phase"))
+    if extras is not None and value.get("phase") == "RESTORED":
+        extras = extras | ({"publicAcceptance", "privateAcceptance", "restoration"} & set(value))
     if (not isinstance(value, dict) or extras is None or set(value) != BASE | extras
             or type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1
             or type(value.get("attempt")) is not int or value["attempt"] != 1
@@ -56,6 +58,15 @@ def slot(record):
                 or preparation["workflowHandoff"].get("operation") != "review-rollback"
                 or preparation["workflowHandoff"].get("phase") != "CONSUMED"):
             raise ValueError("Rollback approval lost its original prepared task or consumed review")
+    if "restoration" in extras:
+        restored = value["restoration"]
+        if (not isinstance(restored, dict) or set(restored) != {"lifecycleDispatch", "deploymentTask", "workflowHandoff"}
+                or any(not isinstance(restored.get(name), dict) for name in restored)
+                or restored["deploymentTask"].get("taskId") != value["rolloutTaskId"] or restored["deploymentTask"].get("state") != "SUCCEEDED"
+                or restored["lifecycleDispatch"].get("operation") != dict(mode="rollback", stage="rollout", attempt=1)
+                or restored["workflowHandoff"].get("operation") != "accept-rollback-public" or restored["workflowHandoff"].get("phase") != "CONSUMED"
+                or value.get("publicAcceptance", {}).get("state") != "PASSED"):
+            raise ValueError("Rollback lost its terminal restore and consumed public checkpoint")
     return value
 
 

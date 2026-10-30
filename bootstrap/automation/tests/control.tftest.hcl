@@ -482,6 +482,15 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Dispatcher may only version-read fixed private rollback proposal, rollout and Application evidence, without write or unversioned access."
   }
   assert {
+    condition = alltrue([for statement in jsondecode(aws_iam_role_policy.rollback_public_evidence[0].policy).Statement :
+      statement.Action == ["s3:GetObjectVersion"] && toset(statement.Resource) == toset([for prefix in [
+        "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",
+        "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json", "promotions/staging/*/intent.json"
+      ] : "arn:aws:s3:::techx-test-control/${prefix}"])
+    ])
+    error_message = "Hosted rollback public probes may only version-read restored binding, without private inputs, credentials or workload authority."
+  }
+  assert {
     condition = length(aws_iam_role_policy.rollback_review_evidence) == 2 && alltrue([
       for policy in aws_iam_role_policy.rollback_review_evidence :
       jsondecode(policy.policy) == {

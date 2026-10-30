@@ -328,7 +328,7 @@ requires terminal CodeBuild success and the same evidence. A `deploy-test-destro
 session requests independent cleanup after acceptance; `deploy-window` keeps the
 original verified deadline. These paths have offline tests and remain disabled
 pending live acceptance. Active-session rollout and public checks are described
-below; private acceptance and bounded Git rollback still require implementation.
+below; bounded Git rollback still requires implementation.
 
 READY-session publication now has immutable candidate/manifest/proposal receipts.
 The protected platform main workflow checks its actual completed acceptance job
@@ -340,7 +340,7 @@ It never merges or changes the running Application/accepted baseline. Active
 chart notifications bind only a fully proposed candidate with matching immutable
 receipts and actual PR/run identity; the dispatcher receives version-read only.
 Candidate review/promotion and rollout are described below. Repeated-release
-private acceptance and rollback still require implementation; both flags remain
+rollback still requires implementation; both flags remain
 disabled pending those paths and live tests.
 
 Bootstrap verification:
@@ -365,11 +365,21 @@ TESTING and the accepted baseline stays unchanged until active public/private
 acceptance. The protected hosted public handoff now runs the complete public
 suite against the exact versioned rollout and candidate. It keeps separate active
 receipts, checks the actual hosted job and original infra SHA, and the parent
-consumes only that dispatched run's evidence. It advances to
-`ACTIVE_PRIVATE_ACCEPTANCE`, still TESTING with the previous baseline. Active
-private acceptance, accepted-release history and rollback remain unfinished.
-This is source/
-offline progress, not cloud acceptance; the changed task loader requires a new
+consumes only that dispatched run's evidence, then dispatches `verify/active/1`
+while TESTING with the previous baseline. The private executor checks VPN,
+authenticated Argo, exact runtime digests, DynamoDB/IRSA, self-heal and the new
+public order/idempotency after another Order Pod replacement. It must disconnect
+the VPN before persisting its private versioned receipt.
+
+After that child exits successfully, its parent rereads the rollout/public/private
+proofs and writes immutable accepted history. READY, the new accepted baseline,
+the current history snapshot, candidate removal and lease release share one CAS.
+Dispatcher continuation additionally observes the exact SSM and CodeBuild terminal
+success. Baseline consumers read the versioned history chain down to cold evidence;
+the original execution revisions/checkpoints remain unchanged. History is bounded
+to 64 active releases per session. Cleanup fencing and child failure cannot publish
+READY. Bounded Git rollback remains unfinished. This is source/offline progress,
+not cloud acceptance; the changed task loader requires a new
 reviewed AMI build before cloud use.
 
 ```powershell

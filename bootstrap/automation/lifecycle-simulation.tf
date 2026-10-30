@@ -41,6 +41,8 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "state-write", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/staging/terraform.tfstate"] },
         { name = "private-promotion-call-write", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/promotions/staging/simulation/receipt.json"] },
         { name = "write-private-acceptance", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/receipt.json"] },
+        { name = "write-active-private-acceptance", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/acceptance/task.json"] },
+        { name = "write-accepted-history", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/accepted/staging/simulation/candidate.json"] },
         { name = "owned-vpn-client-export", action = "ec2:ExportClientVpnClientConfiguration", expected = "allowed", resources = ["arn:aws:ec2:us-east-1:058114477594:client-vpn-endpoint/cvpn-endpoint-00000000000000000"],
           context = [for key, value in { Project = "techx", Environment = "staging" } : {
             ContextKeyName = "ec2:ResourceTag/${key}", ContextKeyType = "string", ContextKeyValues = [value]
@@ -73,6 +75,9 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "read-pinned-active-candidate", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
         { name = "read-pinned-active-proposal", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/proposals/staging/simulation/active/candidate/proposal.json"] },
         { name = "read-pinned-active-rollout", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/rollout.json"] },
+        { name = "read-pinned-accepted-history", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/accepted/staging/simulation/candidate.json"] },
+        { name = "read-active-private-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/acceptance/task.json"] },
+        { name = "no-dispatcher-accepted-history-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/accepted/staging/simulation/candidate.json"] },
         { name = "read-pinned-active-merge", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/promotions/staging/simulation/approval/receipt.json"] },
         { name = "no-active-rollout-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/rollout.json"] },
         { name = "no-active-candidate-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },
@@ -102,6 +107,7 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "write-active-public-evidence", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/active/candidate/public/dispatch/result.json"] },
         { name = "no-active-private-task-log-read", action = "s3:GetObjectVersion", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/task.private.log"] },
         { name = "no-active-private-acceptance-read", action = "s3:GetObjectVersion", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/acceptance/task.json"] },
+        { name = "no-public-accepted-history-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/accepted/staging/simulation/candidate.json"] },
         { name = "read-pinned-exposure", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
         { name = "write-public-evidence", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
         { name = "no-private-inputs", action = "s3:GetObjectVersion", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/inputs.json"] },
@@ -116,6 +122,8 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "write-active-proposal", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/proposals/staging/simulation/active/candidate/proposal.json"] },
         { name = "no-cold-proposal-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/proposals/staging/simulation/bootstrap.json"] },
         { name = "read-pinned-baseline", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/baseline.json"] },
+        { name = "read-pinned-accepted-history", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/accepted/staging/simulation/candidate.json"] },
+        { name = "no-publisher-accepted-history-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/accepted/staging/simulation/candidate.json"] },
         { name = "no-baseline-overwrite", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/acceptance/baseline.json"] },
         { name = "no-private-inputs-read", action = "s3:GetObjectVersion", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/inputs.json"] },
         { name = "no-publisher-cluster-create", action = "eks:CreateCluster", expected = "denied", resources = ["arn:aws:eks:us-east-1:058114477594:cluster/techx-staging"] }

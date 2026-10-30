@@ -22,22 +22,39 @@ from workload_state import read_state
 
 
 class PrivateAcceptance:
+    session_status = "PROVISIONING"
+    task_stage = "private"
+
     def __init__(self, runtime, store, version, task_id, *, clock, sleep=time.sleep, tunnel_factory=VpnTunnel, http_factory=PrivateHTTP):
         self.runtime, self.store, self.version, self.task_id = runtime, store, version, task_id
         self.clock, self.sleep = clock, sleep
         self.controller = StageController(runtime.clients["s3"], store, runtime.bucket, clock)
         self.tunnel_factory, self.http_factory = tunnel_factory, http_factory
 
+    def context(self, record): return private_context(record)
+    def validate_start(self, record): return validate_private_start(record, 1)
+    def projected(self, record): return record
+    def stage(self, record): return record.get("stages", {}).get("private", {})
+    def set_stage(self, record, value): record["stages"]["private"] = value
+    def predecessors(self, record):
+        s3, bucket = self.runtime.clients["s3"], self.runtime.bucket
+        return (read_public_receipt(s3, bucket, record, self.version), read_activation_receipt(s3, bucket, record, self.version),
+            read_selection(s3, bucket, record, self.runtime.execution, self.version), read_release(s3, bucket, record, self.runtime.execution, self.version))
+    def public_reference(self, record): return record["stages"]["publicAcceptance"]["receiptReference"]
+    def receipt_fields(self, record): return {}
+    def receipt_key(self, record): return f"private/staging/{record['sessionId']}/acceptance/{self.task_id}.json"
+    def read_receipt(self, record): return read_private_receipt(self.runtime.clients["s3"], self.runtime.bucket, record, self.version)
+
     def validate_record(self, record):
         if (any(record.get(key) != self.runtime.execution.get(key) for key in ("sessionId", "account", "region", "environment",
                 "sourceRevisions", "deadline", "cleanupStartAt", "approvedBudgetUsd", "maximumHours", "action"))
-                or record.get("executionVersion") != self.version or record["status"] != "PROVISIONING" or record.get("pendingPlan") is not None):
+                or record.get("executionVersion") != self.version or record["status"] != self.session_status or record.get("pendingPlan") is not None):
             raise PrivateFailure("private-session-context")
         task = read_task(self.runtime.clients["s3"], self.runtime.bucket, record, self.task_id, self.clock())
-        if ((task["mode"], task["stage"], task["attempt"]) != ("verify", "private", 1)
+        if ((task["mode"], task["stage"], task["attempt"]) != ("verify", self.task_stage, 1)
                 or record["deploymentTask"].get("state") != "RUNNING"
                 or task["instanceId"] != self.runtime.private["deploymentExecutor"]["instanceId"]
-                or task["expectedAcceptanceSha256"] != checksum(private_context(record))
+                or task["expectedAcceptanceSha256"] != checksum(self.context(record))
                 or hasattr(self, "context_hash") and task["expectedAcceptanceSha256"] != self.context_hash):
             raise PrivateFailure("private-task-context")
         return record
@@ -52,7 +69,7 @@ class PrivateAcceptance:
     def binding_guard(self):
         record = self.guard()
         state = read_state(self.runtime.clients["s3"], self.runtime.bucket)
-        if checksum(state) != self.state_hash or edge_binding(state, record, self.runtime.execution, self.runtime.private) != self.binding:
+        if checksum(state) != self.state_hash or edge_binding(state, self.projected(record), self.runtime.execution, self.runtime.private) != self.binding:
             raise PrivateFailure("private-state-changed")
         return record
 
@@ -60,10 +77,10 @@ class PrivateAcceptance:
         self.binding_guard()
         current, etag = self.controller.owned(self.runtime.execution["sessionId"], self.owner, self.epoch)
         self.validate_record(current)
-        stage = current.get("stages", {}).get("private", {})
+        stage = self.stage(current)
         if stage.get("state") == "PASSED": raise PrivateFailure("private-task-consumed")
         updated = deepcopy(current)
-        updated["stages"].setdefault("private", {}).update(fields)
+        self.set_stage(updated, dict(stage, **fields))
         self.store.write(updated, etag)
 
     def wait_ready(self, *, observations=60):
@@ -190,15 +207,12 @@ class PrivateAcceptance:
     def perform(self, owner, epoch):
         self.owner, self.epoch = owner, epoch
         record = self.guard()
-        self.context_hash = validate_private_start(record, 1)
-        public = read_public_receipt(self.runtime.clients["s3"], self.runtime.bucket, record, self.version)
-        activation = read_activation_receipt(self.runtime.clients["s3"], self.runtime.bucket, record, self.version)
+        self.context_hash = self.validate_start(record)
+        public, activation, self.selected, release = self.predecessors(record)
         state = read_state(self.runtime.clients["s3"], self.runtime.bucket)
         self.state_hash = checksum(state)
         if self.state_hash != activation["stateSha256"]: raise PrivateFailure("private-state-changed")
-        self.binding = edge_binding(state, record, self.runtime.execution, self.runtime.private)
-        self.selected = read_selection(self.runtime.clients["s3"], self.runtime.bucket, record, self.runtime.execution, self.version)
-        release = read_release(self.runtime.clients["s3"], self.runtime.bucket, record, self.runtime.execution, self.version)
+        self.binding = edge_binding(state, self.projected(record), self.runtime.execution, self.runtime.private)
         spec = importlib.util.spec_from_file_location("private_manifest", self.runtime.source / "techx-platform/scripts/prepare-chart-release.py")
         validator = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(validator)
@@ -222,16 +236,16 @@ class PrivateAcceptance:
         if not tunnel.disconnected: raise PrivateFailure("vpn-disconnect-unproven")
         self.binding_guard()
         value = dict(schemaVersion=1, sessionId=record["sessionId"], executionVersion=self.version, taskId=self.task_id,
-            contextSha256=self.context_hash, stateSha256=self.state_hash, publicReference=record["stages"]["publicAcceptance"]["receiptReference"],
+            contextSha256=self.context_hash, stateSha256=self.state_hash, publicReference=self.public_reference(record),
             checks=sorted(CHECKS), vpn=tunnel.evidence(), privateObservations=http.observations,
             completedAt=self.clock().isoformat(),
-            release=dict(platformSha=release["manifest"]["commit"], chartSha=self.selected["chartSha"], images=images))
+            release=dict(platformSha=release["manifest"]["commit"], chartSha=self.selected["chartSha"], images=images), **self.receipt_fields(record))
         self.binding_guard()
         ref = immutable_json(self.runtime.clients["s3"], self.runtime.bucket,
-            f"private/staging/{record['sessionId']}/acceptance/{self.task_id}.json", value)
+            self.receipt_key(record), value)
         ref["sha256"] = checksum(value)
         proposed = deepcopy(self.guard())
-        proposed["stages"]["private"].update(state="PASSED", release=value["release"], receiptReference=ref)
-        read_private_receipt(self.runtime.clients["s3"], self.runtime.bucket, proposed, self.version)
+        self.set_stage(proposed, dict(self.stage(proposed), state="PASSED", release=value["release"], receiptReference=ref))
+        self.read_receipt(proposed)
         self.checkpoint(state="PASSED", release=value["release"], receiptReference=ref)
         return dict(state="PRIVATE_PASSED", receiptReference=ref)

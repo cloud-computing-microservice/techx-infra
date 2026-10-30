@@ -75,9 +75,19 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
         from active_public_contract import active_public_context
         active_public_context(record)
         handoff = record.get("workflowHandoff", {})
-        if (not re.fullmatch(r"arn:aws:sts::058114477594:assumed-role/techx-automation-public-acceptance/techx-public-[1-9][0-9]*", owner)
-                or handoff.get("operation") != "accept-active-public" or handoff.get("phase") not in ("CALLING", "OBSERVED")):
-            raise ValueError("TESTING public lease requires its protected active acceptance handoff")
+        public = (re.fullmatch(r"arn:aws:sts::058114477594:assumed-role/techx-automation-public-acceptance/techx-public-[1-9][0-9]*", owner)
+            and handoff.get("operation") == "accept-active-public" and handoff.get("phase") in ("CALLING", "OBSERVED"))
+        manager = re.fullmatch(r"arn:aws:codebuild:us-east-1:058114477594:build/(techx-automation-lifecycle:[a-f0-9-]+)", owner)
+        instance = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", owner)
+        task, dispatch = record.get("deploymentTask", {}), record.get("lifecycleDispatch", {})
+        private = (dispatch.get("operation") == dict(mode="verify", stage="active", attempt=1)
+            and (manager and dispatch.get("phase") == "OBSERVED" and dispatch.get("buildId") == manager[1]
+                or instance and task.get("state") == "RUNNING" and (task.get("mode"), task.get("stage")) == ("verify", "active")
+                and task.get("instanceId") == instance[1]))
+        if private:
+            from active_private_contract import active_private_context
+            active_private_context(record)
+        if not (public or private): raise ValueError("TESTING acceptance lease requires the exact public handoff or private manager/executor")
     elif operation in ("release", "acceptance") and record["status"] != "READY":
         raise ValueError("Application operations require READY")
     if operation == "bootstrap-publish" and (record["status"] != "PROVISIONING"

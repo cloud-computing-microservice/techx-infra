@@ -16,6 +16,7 @@ from automation_session import claim, release
 from chart_selection import INFRA_REPO
 from deployment_tasks import finish_task
 from plan_review_store import checksum, encoded
+from lifecycle_dispatch import operation
 from public_acceptance_contract import read_public_receipt
 from public_probe import PublicProbe
 
@@ -68,6 +69,26 @@ class ActivePublicTests(unittest.TestCase):
         f.record = claim(f.record, self.worker.owner, "acceptance", now=f.now)
         self.service = http_support.Storefront()
         self.target = r.h.p.p.private.public.edge.target
+        # Public completion now hands off a distinct private verification build.
+        # Observe service input/output for that exact operation, not the prior
+        # rollout's successful build handle/environment.
+        self.private_build_id = "techx-automation-lifecycle:abcdef97-1234"
+        self.private_build = dict(deepcopy(r.build), id=self.private_build_id,
+            arn="arn:aws:codebuild:us-east-1:058114477594:build/" + self.private_build_id,
+            buildStatus="IN_PROGRESS", buildComplete=False)
+        self.private_build_calls = []
+        codebuild = f.clients["codebuild"]
+        batch = codebuild.batch_get_builds
+        def start_private(**kw):
+            from botocore.validate import validate_parameters
+            import botocore.session
+            validate_parameters(kw, botocore.session.get_session().get_service_model("codebuild").operation_model("StartBuild").input_shape)
+            self.assertEqual(f.record["lifecycleDispatch"]["operation"], operation("verify", "active"))
+            self.private_build_calls.append(deepcopy(kw))
+            self.private_build["environment"] = dict(environmentVariables=deepcopy(kw["environmentVariablesOverride"]))
+            return dict(build=deepcopy(self.private_build))
+        codebuild.start_build = start_private
+        codebuild.batch_get_builds = lambda **kw: dict(builds=[deepcopy(self.private_build)]) if kw["ids"] == [self.private_build_id] else batch(**kw)
 
     def probe(self, guard, session, dispatch):
         return PublicProbe(guard, session, dispatch, transport=self.service,
@@ -87,9 +108,11 @@ class ActivePublicTests(unittest.TestCase):
         self.assertEqual(self.f.record["status"], "TESTING")
         self.f.record = release(self.f.record, self.worker.owner, self.f.record["lease"]["epoch"])
         self.run.update(status="completed", conclusion="success", updated_at=self.f.now.isoformat())
-        self.assertEqual(self.r.h.observe(3)["waiting"], "ACTIVE_PRIVATE_ACCEPTANCE")
+        self.assertEqual(self.r.h.observe(3)["waiting"], "OBSERVATION_LIMIT")
         self.assertEqual(self.f.record["workflowHandoff"]["phase"], "CONSUMED")
         self.assertEqual(len(self.dispatches), 1)
+        self.assertEqual(len(self.private_build_calls), 1)
+        self.assertEqual(self.f.record["lifecycleDispatch"]["operation"], operation("verify", "active"))
 
     def test_duplicate_public_worker_does_not_repeat_order_requests(self):
         self.perform()

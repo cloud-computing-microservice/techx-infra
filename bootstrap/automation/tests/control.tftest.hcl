@@ -453,7 +453,7 @@ run "lifecycle_is_scoped_and_pinned" {
   assert {
     condition = length([for statement in data.aws_iam_policy_document.control.statement : statement if
       statement.sid == "OnlyExecutorCanWriteActiveRollout" && statement.effect == "Deny" &&
-      toset(statement.resources) == toset(["arn:aws:s3:::techx-test-control/private/staging/*/active/*"]) &&
+      toset(statement.resources) == toset(["arn:aws:s3:::techx-test-control/private/staging/*/active/*", "arn:aws:s3:::techx-test-control/accepted/staging/*"]) &&
       anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
         toset(condition.values) == toset(["arn:aws:iam::058114477594:role/techx-automation-lifecycle-executor"])
       ])
@@ -516,6 +516,23 @@ run "lifecycle_is_scoped_and_pinned" {
         if contains(statement.Action, "secretsmanager:GetSecretValue")
     ]))
     error_message = "Only the owned executor writes merge calls and reads the two fixed tagged App keys; grants stay separate."
+  }
+  assert {
+    condition = (length(aws_iam_role_policy.accepted_history_read) == 5 && alltrue([
+      for policy in aws_iam_role_policy.accepted_history_read :
+      jsondecode(policy.policy).Statement[0].Action == ["s3:GetObjectVersion"] &&
+      contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/accepted/staging/*/*.json") &&
+      contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/private/staging/*/active/*/acceptance/*.json")
+      ]) && jsondecode(aws_iam_role_policy.accepted_history_write[0].policy).Statement[0].Action == ["s3:PutObject"] &&
+      jsondecode(aws_iam_role_policy.accepted_history_write[0].policy).Statement[0].Resource == "arn:aws:s3:::techx-test-control/accepted/staging/*/*.json" &&
+      length([for statement in data.aws_iam_policy_document.control.statement : statement if
+        statement.sid == "OnlyExecutorCanWriteActiveRollout" && statement.effect == "Deny" &&
+        contains(statement.resources, "arn:aws:s3:::techx-test-control/accepted/staging/*") &&
+        anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
+          toset(condition.values) == toset(["arn:aws:iam::058114477594:role/techx-automation-lifecycle-executor"])
+        ])
+    ]) == 1)
+    error_message = "Accepted release chains are version-read by baseline consumers and written only by the private executor; publisher/public/dispatcher cannot replace history."
   }
 }
 

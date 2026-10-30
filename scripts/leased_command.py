@@ -27,13 +27,15 @@ def terminate(process):
             process.wait(timeout=10)
 
 
-def execute(store, owner, operation, session_id, command, renew_seconds=30, popen=subprocess.Popen, success_status=None, ready_release=None):
+def execute(store, owner, operation, session_id, command, renew_seconds=30, popen=subprocess.Popen, success_status=None, ready_release=None, active_ready=None):
     if not command or not 1 <= renew_seconds <= 120:
         raise ValueError("A command and bounded heartbeat are required")
-    if success_status is not None and (operation != "deploy" or success_status != "READY"):
+    if success_status is not None and (success_status != "READY" or not (operation == "deploy" and active_ready is None or operation == "acceptance" and active_ready is not None)):
         raise ValueError("Only a completed deploy command may hand off READY")
     if ready_release is not None and success_status != "READY":
         raise ValueError("Accepted release payload requires the terminal READY handoff")
+    if active_ready is not None and (operation != "acceptance" or success_status != "READY" or ready_release is not None):
+        raise ValueError("Active READY requires only its private acceptance callback")
     record, etag = store.read()
     if record["sessionId"] != session_id:
         raise ValueError("Expected session changed")
@@ -72,13 +74,19 @@ def execute(store, owner, operation, session_id, command, renew_seconds=30, pope
                 # leave a deploy heartbeat trying to renew in READY.
                 claim(current, owner, operation, ttl_seconds=300)
                 accepted = ready_release(current) if ready_release is not None else None
-                if ready_release is not None:
+                active = active_ready(current) if active_ready is not None else None
+                if active_ready is not None and (not isinstance(active, dict) or set(active) != {"acceptedRelease", "acceptedActive"} or current["status"] != "TESTING"):
+                    raise ValueError("Active READY payload must contain only the accepted history and baseline")
+                if ready_release is not None or active_ready is not None:
                     latest, latest_etag = store.read()
                     if latest != current or latest_etag != current_etag:
                         raise ValueError("Session changed while verifying the accepted READY release")
                     claim(current, owner, operation, ttl_seconds=300)
                 finished = transition(current, owner, success_status)
                 if accepted is not None: finished["acceptedRelease"] = accepted
+                if active is not None:
+                    finished.update(active)
+                    finished.pop("releaseCandidate", None)
             except ValueError:
                 store.write(release(current, owner, epoch), current_etag)
                 raise

@@ -49,9 +49,9 @@ def read_reference(client, bucket, ref, key):
 
 
 def accepted_baseline(client, bucket, record, execution_version):
-    # Cold READY evidence remains immutable. Subsequent accepted-release
-    # receipts will have their own reader; never rewrite original source SHAs
-    # or reinterpret a candidate as an accepted release.
+    if record.get("acceptedActive"):
+        from accepted_release_history import read_accepted_history
+        return read_accepted_history(client, bucket, record, execution_version)
     from private_acceptance_contract import ready_release
     accepted = ready_release(client, bucket, record, execution_version)
     if accepted != record.get("acceptedRelease"): raise ValueError("Current baseline is not the accepted private release")

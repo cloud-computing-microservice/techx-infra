@@ -60,14 +60,19 @@ def read_private_receipt(client, bucket, record, execution_version):
     if (not isinstance(value, dict) or checksum(value) != ref["sha256"]
             or any(value.get(k) != v for k, v in expected.items()) or value.get("release") != stage.get("release")):
         raise ValueError("Private acceptance receipt differs from its exact task/public predecessor")
+    validate_private_result(value, record, record["sourceRevisions"]["techx-platform"], record["stages"]["gitops"]["chartSha"])
+    return value
+
+
+def validate_private_result(value, record, platform_sha, chart_sha):
     vpn, release = value.get("vpn", {}), value.get("release", {})
     if (vpn.get("disconnected") is not True or vpn.get("commonName") != "techx-demo-operator"
             or not re.fullmatch(r"cvpn-connection-[a-f0-9]{8,17}", vpn.get("connectionId", ""))
             or ipaddress.ip_address(vpn.get("clientIp", "")) not in ipaddress.ip_network("172.24.0.0/22")
             or not isinstance(release, dict) or set(release) != {"platformSha", "chartSha", "images"}
             or not re.fullmatch(r"[a-f0-9]{40}", release.get("platformSha", ""))
-            or release.get("platformSha") != record["sourceRevisions"]["techx-platform"]
-            or release.get("chartSha") != record["stages"]["gitops"]["chartSha"]
+            or release.get("platformSha") != platform_sha
+            or release.get("chartSha") != chart_sha
             or set(release.get("images", {})) != {"frontend", "catalog-api", "order-api"}):
         raise ValueError("Private VPN/release acceptance is incomplete")
     if not utc(record["createdAt"]) <= utc(value.get("completedAt", "")) < utc(record["cleanupStartAt"]):
@@ -75,7 +80,6 @@ def read_private_receipt(client, bucket, record, execution_version):
     for name, repository in {"frontend": "frontend", "catalog-api": "catalog", "order-api": "order"}.items():
         if not re.fullmatch(r"058114477594\.dkr\.ecr\.us-east-1\.amazonaws\.com/techx/" + repository + r"@sha256:[a-f0-9]{64}", release["images"][name]):
             raise ValueError("Accepted runtime artifact is outside the exact repository/digest contract")
-    return value
 
 
 def ready_release(client, bucket, record, execution_version):

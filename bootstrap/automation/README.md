@@ -1203,9 +1203,40 @@ does not stand in for new runtime evidence. Receipts are separate:
 The public role can version-read only the required private rollout/Application
 binding, not private task logs, inputs, credentials or private acceptance.
 
-The parent consumes only the exact dispatched run/candidate/receipt and advances
-to `ACTIVE_PRIVATE_ACCEPTANCE`. Success leaves TESTING, original execution source
+The parent consumes only the exact dispatched run/candidate/receipt and dispatches
+`verify/active/1`. Public success leaves TESTING, original execution source
 revisions and the accepted baseline unchanged. Failure retains diagnostics and
 requests independent cleanup; cleanup takeover always wins. Duplicate workers
 cannot repeat order requests. Offline tests include the real CLI parent/child
 lease path and full probe transport; actual hosted HTTP/AWS acceptance is pending.
+
+### Active private acceptance and accepted history (source only)
+
+The fixed manager/SSM loader dispatches `run_active_private_acceptance.py` for
+the single current active task. Only that manager or assigned EC2 may claim the
+TESTING acceptance lease after the public handoff is consumed. The worker rereads
+the accepted baseline, candidate and rollout and uses the existing real VPN,
+private HTTPS, authenticated Argo, runtime digest/ECR, DynamoDB/IRSA and resilience
+suite. Restart persistence uses this candidate's public order, not the cold order.
+Successful checks require a new Order Pod UID and positively disconnected VPN.
+
+The worker writes `private/staging/<session>/active/<releaseId>/acceptance/<taskId>.json`
+with version/hash; it cannot independently publish READY. Only after the child
+exits successfully does the parent reread the exact evidence and create
+`accepted/staging/<session>/<releaseId>.json`. That immutable history records
+the candidate, previous accepted baseline, tested release and acceptance time.
+One session CAS publishes READY, acceptedRelease and acceptedActive, removes the
+candidate and releases the lease. An intervening cleanup/CAS change or failed
+child preserves the old baseline. Orphan history is not accepted by its existence.
+The task loader verifies the atomic handoff and the dispatcher additionally needs
+the exact SSM/CodeBuild terminal success before reporting READY.
+
+Baseline readers verify every versioned history link and its active receipts down
+to original cold acceptance, with a 64-release session bound and no repeated IDs.
+Read-only snapshots allow observing the previous terminal task while the next
+candidate is TESTING; mutation entry points still require the live assigned task.
+Only the private executor may write accepted history. Publisher, preview, approval
+and dispatcher identities may version-read its exact proofs, not overwrite them;
+the public acceptance role gets no additional private access. Original execution
+source revisions and cold checkpoints are retained. AMI rebake, actual AWS/VPN
+acceptance, bounded rollback and expanded recovery/inventory remain pending.

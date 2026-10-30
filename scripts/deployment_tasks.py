@@ -142,11 +142,11 @@ def validate_task(task, record, now):
         raise ValueError("Invalid task executor identity")
     version(task["executionVersion"])
     if (record["sessionId"] != task["sessionId"] or record.get("executionVersion") != task["executionVersion"]
-            or record["status"] not in (("TESTING",) if task.get("mode") == "release" else ("PROVISIONING", "READY") if task.get("mode") == "verify" else ("PLANNING", "PROVISIONING"))):
+            or record["status"] not in (("TESTING",) if task.get("mode") == "release" else ("TESTING", "READY") if (task.get("mode"), task.get("stage")) == ("verify", "active") else ("PROVISIONING", "READY") if task.get("mode") == "verify" else ("PLANNING", "PROVISIONING"))):
         raise ValueError("Task does not belong to the active admitted session")
     if not utc(task["createdAt"]) <= now < utc(task["expiresAt"]) <= utc(record["cleanupStartAt"]):
         raise ValueError("Task expired or enters the cleanup window")
-    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private"), ("release", "active")}
+    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active")}
             or type(task["attempt"]) is not int or task["attempt"] < 1):
         raise ValueError("Unsupported deployment task action")
     if task["mode"] == "bootstrap" and task["expectedBootstrapChart"] != bootstrap_reference(record):
@@ -157,9 +157,16 @@ def validate_task(task, record, now):
         raise ValueError("Exposure task predecessor changed after dispatch")
     if task["mode"] == "verify":
         from private_acceptance_contract import private_context, validate_private_checkpoint
-        if task["attempt"] != 1 or task["expectedAcceptanceSha256"] != checksum(private_context(record)):
+        if task["stage"] == "active":
+            from active_private_contract import active_private_context
+            if record["status"] == "READY":
+                from accepted_release_history import accepted_projection
+                context = active_private_context(accepted_projection(record, task))
+            else: context = active_private_context(record)
+        else: context = private_context(record)
+        if task["attempt"] != 1 or task["expectedAcceptanceSha256"] != checksum(context):
             raise ValueError("Private task predecessor changed after dispatch")
-        if record["status"] == "READY": validate_private_checkpoint(record, task)
+        if record["status"] == "READY" and task["stage"] == "private": validate_private_checkpoint(record, task)
     if task["mode"] == "release":
         from active_release_contract import release_context
         if task["attempt"] != 1 or task["expectedReleaseContext"] != release_context(record):
@@ -186,7 +193,8 @@ def create_task(client, bucket, record, execution_version, instance_id, owner, m
     if mode == "activate": task["expectedExposureSha256"] = validate_activation(record, attempt)
     if mode == "verify":
         from private_acceptance_contract import validate_private_start
-        task["expectedAcceptanceSha256"] = validate_private_start(record, attempt)
+        from active_private_contract import validate_active_private_start
+        task["expectedAcceptanceSha256"] = (validate_active_private_start if stage == "active" else validate_private_start)(record, attempt)
     if mode == "release":
         from active_release_contract import validate_release_start
         task["expectedReleaseContext"] = validate_release_start(record, attempt)
@@ -231,7 +239,7 @@ def read_task(client, bucket, record, task_id, now):
 def claim_task(store, client, bucket, task_id, instance_id, now):
     record, etag = store.read()
     task = read_task(client, bucket, record, task_id, now)
-    if (task["instanceId"] != instance_id or record["status"] not in (("TESTING",) if task["mode"] == "release" else ("PLANNING", "PROVISIONING"))
+    if (task["instanceId"] != instance_id or record["status"] not in (("TESTING",) if task["mode"] == "release" or (task["mode"], task["stage"]) == ("verify", "active") else ("PLANNING", "PROVISIONING"))
             or record["deploymentTask"]["state"] != "DISPATCHING" or record.get("lease")):
         raise ValueError("Task already consumed, busy or assigned to another executor")
     updated = deepcopy(record)
@@ -247,6 +255,13 @@ def validate_result(record, task):
     if task["mode"] == "release":
         from active_release_contract import validate_rollout_checkpoint
         validate_rollout_checkpoint(record, task)
+        return
+    if (task["mode"], task["stage"]) == ("verify", "active"):
+        from accepted_release_history import accepted_projection
+        accepted_projection(record, task)
+        predecessor = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") == dict(mode="release", stage="active", attempt=1)
+        if record["status"] != "READY" and not predecessor:
+            raise ValueError("Active private task has not atomically published its accepted READY history")
         return
     stage = record.get("stages", {}).get(task["stage"], {})
     if stage.get("attempt") != task["attempt"]:

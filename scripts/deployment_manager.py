@@ -98,7 +98,7 @@ class DeploymentManager:
         for key in ("sessionId", "sourceRevisions", "approvedBudgetUsd", "deadline", "cleanupStartAt", "maximumHours", "action"):
             if record.get(key) != self.execution.get(key):
                 raise ValueError("Current session differs from admitted execution")
-        active = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") == dict(mode="release", stage="active", attempt=1)
+        active = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") in (dict(mode="release", stage="active", attempt=1), dict(mode="verify", stage="active", attempt=1))
         if (record.get("executionVersion") != self.version or not (active or record["status"] in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING")))
                 or self.clock() >= utc(record["cleanupStartAt"])):
             raise ValueError("Session is closed for deployment")
@@ -110,8 +110,8 @@ class DeploymentManager:
                 raise ValueError("Active task belongs to another actual manager build")
         verify_existing(self.clients["scheduler"], record, self.version, self.clock())
         if record["status"] == "READY":
-            from private_acceptance_contract import validate_private_checkpoint
-            validate_private_checkpoint(record, record["deploymentTask"])
+            from deployment_tasks import validate_result
+            validate_result(record, record["deploymentTask"])
         return record, etag
 
     def verify_document(self):
@@ -167,8 +167,8 @@ class DeploymentManager:
 
     def dispatch(self, private, mode, stage, attempt):
         record, etag = self.current()
-        if record["status"] == "TESTING" and mode != "release": raise ValueError("An active session cannot dispatch cold work")
-        if mode == "release":
+        if record["status"] == "TESTING" and (mode, stage) not in (("release", "active"), ("verify", "active")): raise ValueError("An active session cannot dispatch cold work")
+        if mode == "release" or (mode, stage) == ("verify", "active"):
             # StartBuild may begin before its positive handle is checkpointed.
             # Observe that same call; never create a task from a guessed build.
             for observation in range(24):
@@ -203,10 +203,15 @@ class DeploymentManager:
         elif mode == "verify" and stage == "private":
             from private_acceptance_contract import validate_private_start
             validate_private_start(record, attempt)
+        elif mode == "verify" and stage == "active":
+            from active_private_contract import validate_active_private_start
+            from active_public_contract import read_active_public_receipt
+            validate_active_private_start(record, attempt)
+            read_active_public_receipt(self.clients["s3"], self.bucket, record, self.version)
         elif (mode != "apply" or record.get("stages", {}).get(stage, {}).get("state") != "AWAITING_APPROVAL"
                 or record["stages"][stage].get("attempt") != attempt or record.get("pendingPlan", {}).get("stage") != stage):
             raise ValueError("Task requires a supported plan or pending apply stage")
-        owned = claim(record, self.owner, "release" if mode == "release" else "deploy", now=self.clock())
+        owned = claim(record, self.owner, "release" if mode == "release" else "acceptance" if (mode, stage) == ("verify", "active") else "deploy", now=self.clock())
         self.store.write(owned, etag)
         epoch, task_id = owned["lease"]["epoch"], uuid.uuid4().hex
         persisted = False

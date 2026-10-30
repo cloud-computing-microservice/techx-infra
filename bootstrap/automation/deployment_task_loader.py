@@ -38,7 +38,7 @@ def admitted_task(client, bucket, task_id, instance_id, now):
             or record.get("status") not in ("PLANNING", "PROVISIONING", "TESTING", "FAILED_NEEDS_CLEANUP")):
         raise ValueError("There is no active deployment session for this task")
     pointer = record.get("deploymentTask", {})
-    if (record["status"] == "FAILED_NEEDS_CLEANUP") != ((pointer.get("mode"), pointer.get("stage")) == ("rollback", "prepare")):
+    if (record["status"] == "FAILED_NEEDS_CLEANUP") != ((pointer.get("mode"), pointer.get("stage")) in (("rollback", "prepare"), ("rollback", "rollout"))):
         raise ValueError("Failed sessions admit only the exact reserved rollback preparation")
     if (record["status"] == "TESTING") != ((pointer.get("mode"), pointer.get("stage")) in (("release", "active"), ("verify", "active"))):
         raise ValueError("TESTING admits only bound active rollout/private verification tasks")
@@ -51,7 +51,7 @@ def admitted_task(client, bucket, task_id, instance_id, now):
     if (digest != ref.get("sha256") or task.get("schemaVersion") != 1 or task.get("taskId") != task_id
             or task.get("sessionId") != record.get("sessionId") or task.get("executionVersion") != record.get("executionVersion")
             or task.get("instanceId") != instance_id
-            or (task.get("mode"), task.get("stage")) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active"), ("rollback", "prepare")}
+            or (task.get("mode"), task.get("stage")) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active"), ("rollback", "prepare"), ("rollback", "rollout")}
             or type(task.get("attempt")) is not int or task["attempt"] < 1):
         raise ValueError("Task intent differs from the admitted pointer")
     def utc(value):
@@ -101,6 +101,7 @@ def run_task(clients, bucket, kms, task_id, base, *, run=subprocess.run, clock=N
             worker = {"bootstrap": "run_gitops_bootstrap.py", "promote": "run_chart_promotion.py", "activate": "run_edge_activation.py", "verify": "run_private_acceptance.py", "release": "run_active_rollout.py"}.get(task["mode"], "run_lifecycle_stage.py")
             if (task["mode"], task["stage"]) == ("verify", "active"): worker = "run_active_private_acceptance.py"
             if (task["mode"], task["stage"]) == ("rollback", "prepare"): worker = "run_rollback_prepare.py"
+            if (task["mode"], task["stage"]) == ("rollback", "rollout"): worker = "run_rollback_rollout.py"
             run([sys.executable, str(infra / "scripts" / worker), task["mode"], "--stage", task["stage"],
                  "--attempt", str(task["attempt"]), "--execution", str(directory / "execution.json"),
                  "--execution-version", task["executionVersion"], "--bucket", bucket, "--kms-key", kms,

@@ -147,7 +147,7 @@ def validate_task(task, record, now):
         raise ValueError("Task does not belong to the active admitted session")
     if not utc(task["createdAt"]) <= now < utc(task["expiresAt"]) <= utc(record["cleanupStartAt"]):
         raise ValueError("Task expired or enters the cleanup window")
-    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active"), ("rollback", "prepare")}
+    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active"), ("rollback", "prepare"), ("rollback", "rollout")}
             or type(task["attempt"]) is not int or task["attempt"] < 1):
         raise ValueError("Unsupported deployment task action")
     if task["mode"] == "bootstrap" and task["expectedBootstrapChart"] != bootstrap_reference(record):
@@ -173,9 +173,10 @@ def validate_task(task, record, now):
         if task["attempt"] != 1 or task["expectedReleaseContext"] != release_context(record):
             raise ValueError("Active task candidate/baseline/grant changed after dispatch")
     if task["mode"] == "rollback":
-        from rollback_task_contract import context, slot
+        from rollback_task_contract import context, rollout_context, slot
         value = slot(record)
-        if (task["attempt"] != 1 or task["expectedRollbackContext"] != context(record)
+        expected = (rollout_context if task["stage"] == "rollout" else context)(record)
+        if (task["attempt"] != 1 or task["expectedRollbackContext"] != expected
                 or utc(task["expiresAt"]) > utc(value["intent"]["expiresAt"])):
             raise ValueError("Rollback task reservation changed or outlives its fixed intent")
     if task["mode"] == "apply":
@@ -206,8 +207,8 @@ def create_task(client, bucket, record, execution_version, instance_id, owner, m
         from active_release_contract import validate_release_start
         task["expectedReleaseContext"] = validate_release_start(record, attempt)
     if mode == "rollback":
-        from rollback_task_contract import validate_prepare_start, slot
-        task["expectedRollbackContext"] = validate_prepare_start(record, attempt)
+        from rollback_task_contract import validate_prepare_start, validate_rollout_start, slot
+        task["expectedRollbackContext"] = (validate_rollout_start if stage == "rollout" else validate_prepare_start)(record, attempt)
         task["expiresAt"] = min(utc(task["expiresAt"]), utc(slot(record)["intent"]["expiresAt"])).isoformat()
     validate_task(task, record, now)
     ref = immutable_json(client, bucket, f"control/staging/tasks/{task_id}.json", task)
@@ -267,8 +268,8 @@ def validate_result(record, task):
     if record.get("lease"):
         raise ValueError("Remote task has not released its deployment lease")
     if task["mode"] == "rollback":
-        from rollback_task_contract import validate_prepare_checkpoint
-        validate_prepare_checkpoint(record, task)
+        from rollback_task_contract import validate_prepare_checkpoint, validate_rollout_checkpoint
+        (validate_rollout_checkpoint if task["stage"] == "rollout" else validate_prepare_checkpoint)(record, task)
         return
     if task["mode"] == "release":
         from active_release_contract import validate_rollout_checkpoint

@@ -25,7 +25,7 @@ CONTEXT = ("sessionId", "sourceRevisions", "deadline", "cleanupStartAt", "approv
 def operation(mode, stage, attempt=1):
     if (type(attempt) is not int or not 1 <= attempt <= 999999
             or (mode, stage) not in {("prepare", "foundation"), ("plan", "foundation"), ("apply", "foundation"),
-                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active"), ("rollback", "prepare")}
+                                     ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active"), ("rollback", "prepare"), ("rollback", "rollout")}
             or mode in ("prepare", "bootstrap", "promote", "activate", "verify", "release", "rollback") and attempt != 1):
         raise ValueError("Unsupported typed lifecycle operation")
     return dict(mode=mode, stage=stage, attempt=attempt)
@@ -52,8 +52,8 @@ def dispatch_identity(record, execution_version, op):
         from active_release_contract import release_context
         context["releaseContext"] = release_context(record)
     if op["mode"] == "rollback":
-        from rollback_task_contract import context as rollback_context
-        context["rollbackContext"] = rollback_context(record)
+        from rollback_task_contract import context as rollback_context, rollout_context
+        context["rollbackContext"] = (rollout_context if op["stage"] == "rollout" else rollback_context)(record)
     return hashlib.sha256(encoded(context)).hexdigest()
 
 
@@ -226,11 +226,15 @@ class Dispatcher:
             raise ValueError("Previous dispatch is unknown; never replay StartBuild")
         else:
             if rollback:
-                from rollback_task_contract import original_record, validate_prepare_start
-                validate_prepare_start(current, op["attempt"])
-                previous = completed_manager(self.clients, self.execution, dict(original_record(current), status="TESTING"))
-                if previous != operation("release", "active"):
-                    raise ValueError("Rollback preparation requires its original terminal rollout")
+                from rollback_task_contract import original_record, proposal_record, validate_prepare_start, validate_rollout_start
+                if op["stage"] == "prepare":
+                    validate_prepare_start(current, op["attempt"])
+                    predecessor, required = dict(original_record(current), status="TESTING"), operation("release", "active")
+                else:
+                    validate_rollout_start(current, op["attempt"])
+                    predecessor, required = proposal_record(current), operation("rollback", "prepare")
+                previous = completed_manager(self.clients, self.execution, predecessor)
+                if previous != required: raise ValueError("Rollback requires its exact terminal private predecessor")
             else: previous = completed_manager(self.clients, self.execution, current)
             if rollback:
                 pass  # Exact predecessor and single-use reservation checked above.

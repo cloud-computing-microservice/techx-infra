@@ -99,7 +99,7 @@ class DeploymentManager:
             if record.get(key) != self.execution.get(key):
                 raise ValueError("Current session differs from admitted execution")
         active = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") in (dict(mode="release", stage="active", attempt=1), dict(mode="verify", stage="active", attempt=1))
-        rollback = record["status"] == "FAILED_NEEDS_CLEANUP" and record.get("lifecycleDispatch", {}).get("operation") == dict(mode="rollback", stage="prepare", attempt=1)
+        rollback = record["status"] == "FAILED_NEEDS_CLEANUP" and record.get("lifecycleDispatch", {}).get("operation") in (dict(mode="rollback", stage="prepare", attempt=1), dict(mode="rollback", stage="rollout", attempt=1))
         if rollback:
             from cleanup_completion import CONTEXT as immutable_context
             from rollback_task_contract import slot
@@ -178,7 +178,7 @@ class DeploymentManager:
 
     def dispatch(self, private, mode, stage, attempt):
         record, etag = self.current()
-        if record["status"] == "FAILED_NEEDS_CLEANUP" and (mode, stage) != ("rollback", "prepare"):
+        if record["status"] == "FAILED_NEEDS_CLEANUP" and (mode, stage) not in (("rollback", "prepare"), ("rollback", "rollout")):
             raise ValueError("Failed sessions can dispatch only the exact reserved rollback task")
         if record["status"] == "TESTING" and (mode, stage) not in (("release", "active"), ("verify", "active")): raise ValueError("An active session cannot dispatch cold work")
         if mode in ("release", "rollback") or (mode, stage) == ("verify", "active"):
@@ -192,8 +192,8 @@ class DeploymentManager:
                 self.sleep(1)
             else: raise TimeoutError("Active manager is still awaiting its protected dispatch receipt")
         if mode == "rollback":
-            from rollback_task_contract import original_record
-            self.previous_terminal(dict(original_record(record), status="TESTING"))
+            from rollback_task_contract import original_record, proposal_record
+            self.previous_terminal(proposal_record(record) if stage == "rollout" else dict(original_record(record), status="TESTING"))
         else: self.previous_terminal(record)
         instance = inspect_instance(self.clients["ec2"], self.execution, private)
         self.verify_document()
@@ -224,9 +224,9 @@ class DeploymentManager:
             from active_public_contract import read_active_public_receipt
             validate_active_private_start(record, attempt)
             read_active_public_receipt(self.clients["s3"], self.bucket, record, self.version)
-        elif mode == "rollback" and stage == "prepare":
-            from rollback_task_contract import validate_prepare_start
-            validate_prepare_start(record, attempt)
+        elif mode == "rollback" and stage in ("prepare", "rollout"):
+            from rollback_task_contract import validate_prepare_start, validate_rollout_start
+            (validate_rollout_start if stage == "rollout" else validate_prepare_start)(record, attempt)
         elif (mode != "apply" or record.get("stages", {}).get(stage, {}).get("state") != "AWAITING_APPROVAL"
                 or record["stages"][stage].get("attempt") != attempt or record.get("pendingPlan", {}).get("stage") != stage):
             raise ValueError("Task requires a supported plan or pending apply stage")

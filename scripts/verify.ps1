@@ -122,6 +122,12 @@ python (Join-Path $PSScriptRoot 'test-rollback-chart-promotion.py')
 if ($LASTEXITCODE -ne 0) { throw 'Read-only rollback baseline tree, terminal preparation, fresh candidate CI and exact PR review tests failed.' }
 python (Join-Path $PSScriptRoot 'test-rollback-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Protected rollback workflow handoff, human approval, immutable grant and original expiry tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-grant.py')
+if ($LASTEXITCODE -ne 0) { throw 'Actual protected rollback grant/index consumption, positive CAS recovery and original window tests failed.' }
+python (Join-Path $PSScriptRoot 'test-private-rollback-rollout.py')
+if ($LASTEXITCODE -ne 0) { throw 'Private rollback exact-head merge, bounded CI, pinned Application, runtime digest, CLI and AMI task tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-release-controller.py')
+if ($LASTEXITCODE -ne 0) { throw 'Automatic protected rollback review consumption, one private restore dispatch and terminal proof handoff tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-handoff.py')

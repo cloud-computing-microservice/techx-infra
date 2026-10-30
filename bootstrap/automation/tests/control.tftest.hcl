@@ -474,10 +474,12 @@ run "lifecycle_is_scoped_and_pinned" {
     condition = alltrue([for statement in jsondecode(aws_iam_role_policy.rollback_proposal_read[0].policy).Statement :
       statement.Action == ["s3:GetObjectVersion"] && toset(statement.Resource) == toset([
         "arn:aws:s3:::techx-test-control/private/staging/*/rollback/intent.json",
-        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/proposal.json"
+        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/proposal.json",
+        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/rollout.json",
+        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/application/intent.json"
       ])
     ])
-    error_message = "Dispatcher may only version-read the fixed private rollback intent and proposal, without write or unversioned access."
+    error_message = "Dispatcher may only version-read fixed private rollback proposal, rollout and Application evidence, without write or unversioned access."
   }
   assert {
     condition = length(aws_iam_role_policy.rollback_review_evidence) == 2 && alltrue([

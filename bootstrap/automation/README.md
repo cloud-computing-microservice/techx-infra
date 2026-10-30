@@ -1280,14 +1280,51 @@ Cold and READY approval readers reject this distinct kind.
 
 The executor can read the fixed manager's terminal build and SSM result; preview
 and approval roles gain only evidence reads and failure-key discovery. Dispatcher
-can version-read the two rollback objects, not write them. Other writers are
+can version-read the fixed proposal, rollout and Application evidence, not write them. Other writers are
 denied by the bucket policy. CodeBuild's project-scoped BatchGetBuilds permission
 follows the [AWS service authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_codebuild.html).
 
-This is not an operational rollback pipeline. Main orchestration, private grant
-consumption/merge, bounded main CI, Application update, public/private runtime
-acceptance, accepted rollback history and private/partial-rollout failure proofs
-still require integration. No grant, open PR or Synced/Healthy observation alone
+This is not an operational rollback pipeline. Main orchestration, public/private
+runtime acceptance, accepted rollback history and private/partial-rollout failure
+proofs still require integration. Private grant/merge/restore source is described
+below. No grant, open PR or Synced/Healthy observation alone
 may publish READY or replace the accepted baseline. Original cleanup scheduling
 remains armed; unknown outcomes require cleanup. Rebuild and verify the AMI for
 the changed loader before live acceptance; source tests do not prove AWS behavior.
+
+### Private rollback merge and Application restoration (source only)
+
+`consume_grant` reads the actual successful first-attempt protected review,
+environment approval, run index, immutable grant and original prepared evidence.
+It repeats current PR/tree/CI/review checks and uses one CAS to store APPROVED,
+consume the review and retain its preparation snapshot. A lost successful CAS
+can only recover that same grant. No attempt or original expiry is reset.
+
+The typed `rollback / rollout / 1` task pins the grant, proposal, reservation and
+preparation snapshot. The dispatcher, manager, SSM document, AMI loader and EC2
+CLI keep the same immutable execution and original window. Only the assigned
+RUNNING executor may claim the rollback lease. The worker verifies the protected
+review again before using pinned private App credentials to merge the exact PR
+head. Existing one-use merge intent/calling/readback rules apply. Main movement
+after the calling marker stops the merge; lost responses require positive exact
+commit/parents/tree/App/window observations, never another merge API call.
+
+After actual CI of the merge SHA passes, the worker restores the pinned Argo CD
+Application with atomic tests for its original UID, session, failed-release spec
+and failed intent stamp. The new revision is the rollback merge commit, with the
+accepted baseline's manifest and runtime digests. The old accepted chart SHA is
+not mistaken for this new merge SHA. Patch response loss is reconciled only by
+the same UID/spec/session/new intent stamp; readiness additionally checks the
+three deployed/running image digests and reads Application identity again.
+
+The executor publishes the versioned fixed `rollback/rollout.json` receipt and
+RESTORED checkpoint. The failed candidate, original sources, accepted baseline
+and FAILED_NEEDS_CLEANUP lifecycle state stay intact. The parent separately
+requires successful terminal CodeBuild/SSM, the durable task and receipt/merge/
+Application evidence before returning `ROLLBACK_PUBLIC_ACCEPTANCE`.
+`RollbackReleaseController` supplies this preparation/review/restore observation
+flow, but is not yet wired into main operational orchestration. New public and
+private acceptance plus an atomic accepted-history/READY handoff are still
+required. CLI/loader paths and SDK faults are tested offline; no AWS or GitHub
+merge is performed by these tests. Rebuild/verify the changed AMI before any
+authorized live run, and leave the opening opt-in hidden until integration ends.

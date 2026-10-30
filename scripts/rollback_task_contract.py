@@ -9,10 +9,12 @@ from ready_release_contract import read_reference
 from rollback_proposal import validate_intent
 
 BASE = {"schemaVersion", "phase", "attempt", "intent", "contextSha256", "origin"}
+PREPARED = {"intentReference", "proposalReference", "prepareTaskId"}
+APPROVED = PREPARED | {"approvalReference", "preparation"}
 
 
 def key(record, name):
-    if name not in ("intent", "proposal"): raise ValueError("Unsupported rollback artifact")
+    if name not in ("intent", "proposal", "rollout"): raise ValueError("Unsupported rollback artifact")
     return f"private/staging/{record['sessionId']}/rollback/{name}.json"
 
 
@@ -20,7 +22,8 @@ def slot(record):
     value = record.get("rollbackAttempt", {})
     if not isinstance(value, dict): raise ValueError("Rollback reservation must be an object")
     extras = {"REQUESTED": set(), "PREPARING": {"intentReference"},
-              "PROPOSED": {"intentReference", "proposalReference", "prepareTaskId"}}.get(value.get("phase"))
+              "PROPOSED": PREPARED, "APPROVED": APPROVED,
+              "RESTORED": APPROVED | {"rolloutTaskId", "rolloutReference"}}.get(value.get("phase"))
     if (not isinstance(value, dict) or extras is None or set(value) != BASE | extras
             or type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1
             or type(value.get("attempt")) is not int or value["attempt"] != 1
@@ -36,7 +39,23 @@ def slot(record):
             or intent["rolloutReference"] != record.get("releaseCandidate", {}).get("rollout", {}).get("receiptReference")
             or any(intent[name] != record.get(name) for name in ("cleanupStartAt", "deadline"))):
         raise ValueError("Rollback task changed its failed candidate, accepted baseline or window")
-    for name in extras & {"intentReference", "proposalReference"}: reference(value[name], key(record, name.removesuffix("Reference")))
+    for name in extras & {"intentReference", "proposalReference", "rolloutReference"}: reference(value[name], key(record, name.removesuffix("Reference")))
+    if "approvalReference" in extras:
+        approval = value["approvalReference"]
+        prefix = re.escape(f"promotion-approvals/staging/{record['sessionId']}/")
+        if not isinstance(approval, dict) or not re.fullmatch(prefix + r"[a-f0-9]{64}\.json", approval.get("key", "")):
+            raise ValueError("Rollback has no exact session-scoped promotion approval")
+        reference(approval, approval["key"])
+        preparation = value["preparation"]
+        if (not isinstance(preparation, dict) or set(preparation) != {"lifecycleDispatch", "deploymentTask", "workflowHandoff"}
+                or any(not isinstance(preparation.get(name), dict) for name in ("lifecycleDispatch", "deploymentTask", "workflowHandoff"))
+                or preparation["deploymentTask"].get("taskId") != value["prepareTaskId"]
+                or preparation["deploymentTask"].get("state") != "SUCCEEDED"
+                or preparation["lifecycleDispatch"].get("operation") != dict(mode="rollback", stage="prepare", attempt=1)
+                or preparation["lifecycleDispatch"].get("phase") != "OBSERVED"
+                or preparation["workflowHandoff"].get("operation") != "review-rollback"
+                or preparation["workflowHandoff"].get("phase") != "CONSUMED"):
+            raise ValueError("Rollback approval lost its original prepared task or consumed review")
     return value
 
 
@@ -53,6 +72,42 @@ def original_record(record):
     return result
 
 
+def proposal_record(record):
+    """Read-only projection of the exact task that produced the reviewed PR."""
+    value = validate_prepare_checkpoint(record)
+    result = deepcopy(record)
+    if value["phase"] != "PROPOSED":
+        result.update(deepcopy(value["preparation"]))
+        result["rollbackAttempt"] = {name: deepcopy(value[name]) for name in BASE | PREPARED}
+        result["rollbackAttempt"]["phase"] = "PROPOSED"
+    result.pop("lease", None)
+    return result
+
+
+def rollout_context(record):
+    value = slot(record)
+    if value["phase"] not in ("APPROVED", "RESTORED"): raise ValueError("Rollback rollout requires its consumed grant")
+    return dict(context(record), proposalReference=deepcopy(value["proposalReference"]),
+        approvalReference=deepcopy(value["approvalReference"]), preparationSha256=checksum(value["preparation"]))
+
+
+def validate_rollout_start(record, attempt):
+    value = slot(record)
+    if (attempt != 1 or value["phase"] != "APPROVED"
+            or record.get("deploymentTask") != value["preparation"]["deploymentTask"]
+            or record.get("workflowHandoff") != value["preparation"]["workflowHandoff"]):
+        raise ValueError("Rollback rollout has already consumed its prepared predecessor")
+    return rollout_context(record)
+
+
+def validate_rollout_checkpoint(record, task=None):
+    value = slot(record)
+    if (value["phase"] != "RESTORED" or not re.fullmatch(r"[a-f0-9]{32}", value.get("rolloutTaskId", ""))
+            or task is not None and (task.get("taskId") != value["rolloutTaskId"] or task.get("expectedRollbackContext") != rollout_context(record))):
+        raise ValueError("Rollback has no exact restored runtime task checkpoint")
+    return value
+
+
 def validate_prepare_start(record, attempt):
     value = slot(record)
     if (attempt != 1 or value["phase"] != "REQUESTED"
@@ -64,7 +119,7 @@ def validate_prepare_start(record, attempt):
 
 def validate_prepare_checkpoint(record, task=None):
     value = slot(record)
-    if (value["phase"] != "PROPOSED" or not re.fullmatch(r"[a-f0-9]{32}", value.get("prepareTaskId", ""))
+    if (value["phase"] not in ("PROPOSED", "APPROVED", "RESTORED") or not re.fullmatch(r"[a-f0-9]{32}", value.get("prepareTaskId", ""))
             or task is not None and (task.get("taskId") != value["prepareTaskId"] or task.get("expectedRollbackContext") != context(record))):
         raise ValueError("Rollback task has no exact versioned proposal checkpoint")
     return value

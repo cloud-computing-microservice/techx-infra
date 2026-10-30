@@ -66,9 +66,12 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
         task, dispatch = record.get("deploymentTask", {}), record.get("lifecycleDispatch", {})
         manager = re.fullmatch(r"arn:aws:codebuild:us-east-1:058114477594:build/(techx-automation-lifecycle:[a-f0-9-]+)", owner)
         instance = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", owner)
-        if not (dispatch.get("operation") == dict(mode="rollback", stage="prepare", attempt=1)
+        op = dispatch.get("operation", {})
+        valid_phase = (op == dict(mode="rollback", stage="prepare", attempt=1) and value["phase"] in ("REQUESTED", "PREPARING", "PROPOSED")
+            or op == dict(mode="rollback", stage="rollout", attempt=1) and value["phase"] in ("APPROVED", "RESTORED"))
+        if not (valid_phase
                 and (manager and dispatch.get("phase") == "OBSERVED" and dispatch.get("buildId") == manager[1]
-                    or instance and (task.get("mode"), task.get("stage"), task.get("state")) == ("rollback", "prepare", "RUNNING")
+                    or instance and (task.get("mode"), task.get("stage"), task.get("state")) == ("rollback", op.get("stage"), "RUNNING")
                     and task.get("instanceId") == instance[1])):
             raise ValueError("Rollback lease is limited to the exact private manager/executor task")
     if operation == "release" and record["status"] == "TESTING":

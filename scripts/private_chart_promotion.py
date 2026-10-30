@@ -69,6 +69,8 @@ class PrivateChartPromotion:
 
     def window(self, approval):
         record = self.guard()
+        if self.chart.get("git/ref/heads/main").get("object", {}).get("sha") != self.request["baselineSha"]:
+            raise ValueError("Chart main moved before the exact approved merge call")
         limit = min(utc(approval["expiresAt"]), utc(record["lease"]["expiresAt"]), utc(record["cleanupStartAt"]))
         if self.clock() + timedelta(seconds=60) >= limit:
             raise ValueError("Insufficient owned approval/lease/window for the bounded merge call")

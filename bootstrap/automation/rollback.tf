@@ -16,7 +16,7 @@ resource "aws_iam_role_policy" "rollback_proposal_read" {
   name  = "observe-versioned-private-rollback-proposal"
   role  = aws_iam_role.lifecycle_dispatcher[0].name
   policy = jsonencode({ Version = "2012-10-17", Statement = [{
-    Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = [for name in ["intent", "proposal"] :
+    Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = [for name in ["intent", "proposal", "rollout", "application/intent"] :
       "${aws_s3_bucket.control.arn}/private/staging/*/rollback/${name}.json"
     ]
   }] })

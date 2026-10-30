@@ -22,6 +22,7 @@ from shop_dns_recovery import cleanup_shop_dns
 from cloudflare_dns import validate_shop_intent
 from public_acceptance_contract import OWNER as PUBLIC_PROBE_OWNER
 from leased_command import execute
+from cleanup_completion import CONTEXT as COMPLETION_CONTEXT, publish_completion
 
 
 def persist_diagnostics(clients, bucket, session_id, owner, directory):
@@ -221,7 +222,10 @@ def main():
     parser.add_argument("--worker", action="store_true")
     args = parser.parse_args()
     clients = aws_clients()
-    if clients["sts"].get_caller_identity()["Account"] != "058114477594": raise ValueError("Unexpected cleanup AWS account")
+    identity = clients["sts"].get_caller_identity()
+    if (identity.get("Account") != "058114477594" or not re.fullmatch(
+            r"arn:aws:sts::058114477594:assumed-role/techx-automation-cleanup-executor/[A-Za-z0-9+=,.@_-]+", identity.get("Arn", ""))):
+        raise ValueError("Only the dedicated cleanup executor role may produce completion evidence")
     owner = os.environ.get("CODEBUILD_BUILD_ARN", "")
     if not re.fullmatch(r"arn:aws:codebuild:us-east-1:058114477594:build/techx-automation-cleanup:[a-f0-9-]+", owner):
         raise ValueError("This cleanup entry point requires the dedicated CodeBuild executor")
@@ -232,7 +236,13 @@ def main():
     session_id = record["sessionId"]
     store = S3SessionStore(args.bucket)
     current, etag = store.read()
-    if current["sessionId"] != session_id: raise ValueError("Stale cleanup cannot touch a newer staging session")
+    if (current.get("executionVersion") != args.execution_version
+            or any(current.get(key) != record.get(key) for key in COMPLETION_CONTEXT)):
+        raise ValueError("Stale cleanup cannot touch a newer or different staging execution")
+    if current.get("status") == "DESTROYED":
+        publish_completion(clients["s3"], args.bucket, record, args.execution_version, store)
+        print("Verified cleanup completion evidence; no workload operations were repeated.")
+        return
     directory = args.execution.parent
     if args.worker:
         if current.get("lease", {}).get("owner") != owner or current.get("lease", {}).get("operation") != "cleanup":
@@ -264,10 +274,7 @@ def main():
     owned["cleanupEvidence"] = dict(inventoryEmpty=True, artifactSha256=digest, key=evidence_key)
     completed = transition(owned, owner, "DESTROYED")
     store.write(completed, etag)
-    marker = dict(executionVersion=args.execution_version, inventoryEmpty=True, artifactSha256=digest,
-                  checkedAt=datetime.now(timezone.utc).isoformat(), inventoryKey=evidence_key)
-    clients["s3"].put_object(Bucket=args.bucket, Key=f"cleanup/{session_id}/complete.json",
-                             Body=json.dumps(marker).encode(), ExpectedBucketOwner="058114477594")
+    publish_completion(clients["s3"], args.bucket, record, args.execution_version, store)
     print("Staging workload teardown and scoped inventory verification completed.")
 
 

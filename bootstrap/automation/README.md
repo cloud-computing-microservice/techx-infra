@@ -632,8 +632,17 @@ completion. A running build is observed for up to 40 minutes at the same handle;
 requires the exact cleanup project/role/session/backend, terminal successful
 CodeBuild, a cleanup-owned completion marker, its original inventory bytes/hash,
 all 19 empty inventory groups and the matching DESTROYED session checkpoint.
-Existing complete evidence is read-only. A DESTROYED checkpoint missing its
-marker needs reconciliation; this workflow does not repair or fabricate it.
+Existing complete evidence is read-only. For a DESTROYED checkpoint missing its
+marker, the dispatcher first verifies the matching content-addressed empty
+inventory and its original S3 service timestamp, then requests the same cleanup
+project. The dedicated cleanup executor uses a completion-only path: it does not
+take over a lease, restart teardown, read credentials or call workload APIs.
+It conditionally publishes the missing marker using the inventory's exact
+VersionId and original timestamp, then reads it back. It does not claim a fresh
+cloud inventory. Lost writes are reconciled by read; invalid existing markers,
+missing evidence, access errors or changed/new sessions fail closed. New-session
+opening cannot reuse an older session ID. Ordinary cleanup uses the same marker
+producer; historical markers remain verifiable without rewriting them.
 
 Repository main protection has also been read back on all three repos: PR and
 up-to-date required Actions checks, including administrators, no force/delete

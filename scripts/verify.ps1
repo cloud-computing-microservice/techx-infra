@@ -49,7 +49,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup bundle loader regression t
 python (Join-Path $PSScriptRoot 'test-cleanup-execution.py')
 if ($LASTEXITCODE -ne 0) { throw 'Cleanup fencing, ownership, network and inventory regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-run-cleanup.py')
-if ($LASTEXITCODE -ne 0) { throw 'Cleanup worker ordering and credential-isolation regression tests failed.' }
+if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup worker tests failed.' }
+python (Join-Path $PSScriptRoot 'test-cleanup-completion.py')
+if ($LASTEXITCODE -ne 0) { throw 'Cleanup completion recovery, immutable/versioned inventory and no-workload replay tests failed.' }
 python (Join-Path $PSScriptRoot 'test-automation-inputs.py')
 if ($LASTEXITCODE -ne 0) { throw 'Automation deployment input contract regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-bootstrap-assets.py')

@@ -148,6 +148,12 @@ class CoordinatorTests(unittest.TestCase):
                 initial_record(*args, approved_budget_usd=budget)
         with self.assertRaises(TypeError): initial_record(*args)
 
+    def test_closed_session_identity_cannot_be_reused_for_a_new_environment(self):
+        for state in ("OFF", "DESTROYED"):
+            self.current = dict(status=state, sessionId=self.record["sessionId"])
+            with self.subTest(state=state), self.assertRaisesRegex(ValueError, "fresh session"): self.start()
+        self.assertFalse(self.events)
+
     def test_estimate_window_cannot_change_on_resume(self):
         for hours in (True, 3, 4.0, None):
             self.estimate["maximumHours"] = hours

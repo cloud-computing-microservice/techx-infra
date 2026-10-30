@@ -5,16 +5,15 @@ passed. GitHub only requests/observes the AWS-owned cleanup protocol and cannot
 write session state, manufacture completion evidence or start deployment work.
 """
 import argparse
-from datetime import datetime, timezone
-import hashlib
 import json
 import os
 import re
 import time
 
-from automation_session import validate, utc
+from automation_session import validate
 from chart_selection import GitHub, INFRA_REPO, sha
-from cleanup_execution import ACCOUNT, CLEANUP_ROLE, assert_inventory
+from cleanup_execution import ACCOUNT, CLEANUP_ROLE
+from cleanup_completion import checkpoint_inventory, completion
 from lifecycle_dispatch import CONTEXT
 from plan_approval import version
 from plan_review_store import encoded, read_json
@@ -52,40 +51,6 @@ def current_session(s3, bucket, execution, execution_version):
             or any(current.get(key) != execution.get(key) for key in CONTEXT)):
         raise ValueError("Cleanup cannot target a stale, inactive or different staging execution")
     return current
-
-
-def completion(s3, bucket, execution, execution_version, current):
-    """Authenticate both the cleanup-only marker and its content-addressed inventory."""
-    key = f"cleanup/{execution['sessionId']}/complete.json"
-    listed = s3.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=2, ExpectedBucketOwner=ACCOUNT)
-    rows = listed.get("Contents", [])
-    if (listed.get("IsTruncated") is not False or not isinstance(rows, list)
-            or len(rows) > 1 or any(row.get("Key") != key for row in rows)):
-        raise ValueError("Cleanup marker listing is incomplete or ambiguous")
-    if not rows: return None
-    marker, marker_version = read_json(s3, bucket, key)
-    version(marker_version)
-    digest = marker.get("artifactSha256", "")
-    inventory_key = f"cleanup/{execution['sessionId']}/inventory-{digest}.json"
-    if (marker.get("executionVersion") != execution_version or marker.get("inventoryEmpty") is not True
-            or not re.fullmatch(r"[a-f0-9]{64}", digest) or marker.get("inventoryKey") != inventory_key
-            or utc(marker["checkedAt"]) < utc(execution["createdAt"])
-            or utc(marker["checkedAt"]) > datetime.now(timezone.utc)):
-        raise ValueError("Cleanup completion marker differs from this execution")
-    # Hash the original bytes, not reserialized JSON. The producer hashes its
-    # actual inventory file, whose whitespace need not match encoded().
-    response = s3.get_object(Bucket=bucket, Key=inventory_key, ExpectedBucketOwner=ACCOUNT)
-    payload = response["Body"].read(256 * 1024 + 1)
-    version(response.get("VersionId"))
-    if len(payload) > 256 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
-        raise ValueError("Cleanup inventory bytes do not match the protected marker")
-    assert_inventory(json.loads(payload))
-    expected = dict(inventoryEmpty=True, artifactSha256=digest, key=inventory_key)
-    if current["status"] != "DESTROYED" or current.get("cleanupEvidence") != expected:
-        raise ValueError("Session has no matching DESTROYED inventory checkpoint")
-    return dict(sessionId=execution["sessionId"], executionVersion=execution_version,
-                status="DESTROYED", inventoryEmpty=True, markerKey=key, markerVersion=marker_version,
-                inventoryKey=inventory_key, inventorySha256=digest, checkedAt=marker["checkedAt"])
 
 
 def observed_build(codebuild, build_id, execution, execution_version, bucket):
@@ -130,7 +95,9 @@ def request_cleanup(clients, github, *, bucket, session_id, execution_version, r
     completed = completion(clients["s3"], bucket, execution, execution_version, current)
     if completed: return completed
     if current["status"] == "DESTROYED":
-        raise ValueError("DESTROYED session is missing its protected marker; reconcile evidence before another cleanup request")
+        # The dispatcher remains read-only. Only the independently scoped
+        # cleanup producer can recover its marker from a valid committed proof.
+        checkpoint_inventory(clients["s3"], bucket, execution, execution_version, current, metadata=True)
     # Read again immediately before the only mutation. The AWS cleanup worker
     # also checks current session before fencing or touching workload resources.
     current_session(clients["s3"], bucket, execution, execution_version)

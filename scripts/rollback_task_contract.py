@@ -33,12 +33,13 @@ def slot(record):
             or checksum(dict(intent=value.get("intent"), origin=value.get("origin"))) != value.get("contextSha256")):
         raise ValueError("Rollback has no exact unaltered preparation reservation")
     intent = validate_intent(value["intent"])
+    from partial_rollout import failed_reference
     if (record.get("status") != "FAILED_NEEDS_CLEANUP" or record.get("action") != "deploy-window-rollback"
             or record.get("pendingPlan") is not None or intent["action"] != record["action"]
             or intent["sessionId"] != record.get("sessionId") or intent["executionVersion"] != record.get("executionVersion")
             or intent["acceptedBaseline"] != record.get("acceptedRelease")
             or intent["failedReleaseId"] != record.get("releaseCandidate", {}).get("id")
-            or intent["rolloutReference"] != record.get("releaseCandidate", {}).get("rollout", {}).get("receiptReference")
+            or intent["rolloutReference"] != failed_reference(record)
             or any(intent[name] != record.get(name) for name in ("cleanupStartAt", "deadline"))):
         raise ValueError("Rollback task changed its failed candidate, accepted baseline or window")
     for name in extras & {"intentReference", "proposalReference", "rolloutReference"}: reference(value[name], key(record, name.removesuffix("Reference")))

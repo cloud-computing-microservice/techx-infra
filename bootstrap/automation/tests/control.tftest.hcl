@@ -485,7 +485,8 @@ run "lifecycle_is_scoped_and_pinned" {
     condition = alltrue([for statement in jsondecode(aws_iam_role_policy.rollback_public_evidence[0].policy).Statement :
       statement.Action == ["s3:GetObjectVersion"] && toset(statement.Resource) == toset([for prefix in [
         "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",
-        "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json", "promotions/staging/*/intent.json"
+        "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json", "promotions/staging/*/intent.json",
+        "private/staging/*/active/*/partial-rollout.json"
       ] : "arn:aws:s3:::techx-test-control/${prefix}"])
     ])
     error_message = "Hosted rollback public probes may only version-read restored binding, without private inputs, credentials or workload authority."
@@ -572,6 +573,7 @@ run "lifecycle_is_scoped_and_pinned" {
       jsondecode(policy.policy).Statement[0].Action == ["s3:GetObjectVersion"] &&
       contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/accepted/staging/*/*.json") &&
       contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/private/staging/*/active/*/acceptance/*.json") &&
+      contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/private/staging/*/active/*/partial-rollout.json") &&
       alltrue([for prefix in [
         "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",
         "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json",

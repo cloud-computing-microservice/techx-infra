@@ -44,9 +44,12 @@ def validate_intent(value):
             raise ValueError("Rollback intent must pin its exact failure, rollout and accepted proof")
         version(ref["versionId"])
     prefix = f"private/staging/{value['sessionId']}/active/{value['failedReleaseId']}"
-    if value["rolloutReference"]["key"] != prefix + "/rollout.json":
+    partial = value["rolloutReference"]["key"] == prefix + "/partial-rollout.json"
+    if not partial and value["rolloutReference"]["key"] != prefix + "/rollout.json":
         raise ValueError("Rollback rollout reference belongs to another failed release")
-    if not (re.fullmatch(re.escape(prefix) + r"/acceptance/[a-f0-9]{32}\.failure\.json", value["failureReference"]["key"])
+    if partial and value["failureReference"] != value["rolloutReference"]:
+        raise ValueError("A partial rollback must pin the same positive Application/failure proof")
+    if not partial and not (re.fullmatch(re.escape(prefix) + r"/acceptance/[a-f0-9]{32}\.failure\.json", value["failureReference"]["key"])
             or re.fullmatch(re.escape(f"acceptance/staging/{value['sessionId']}/active/{value['failedReleaseId']}/public/")
                 + r"[a-f0-9]{64}/failure\.json", value["failureReference"]["key"])):
         raise ValueError("Rollback failure reference belongs to another release")

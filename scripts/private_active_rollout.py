@@ -56,6 +56,8 @@ class PrivateActiveRollout(PrivateChartPromotion):
                 or record.get("executionVersion") != self.version):
             raise ValueError("Active rollout differs from immutable execution")
         context = release_context(record)
+        if record["releaseCandidate"].get("partialRollout"):
+            raise ValueError("A failed partial rollout cannot rerun its private task")
         task = read_task(self.runtime.clients["s3"], self.runtime.bucket, record, self.task_id, self.clock())
         instance = self.runtime.private["deploymentExecutor"]["instanceId"]
         if ((task["mode"], task["stage"], task["attempt"]) != ("release", "active", 1)
@@ -91,6 +93,10 @@ class PrivateActiveRollout(PrivateChartPromotion):
     def application_predecessor(self, app, record, previous_spec): pass
 
     def application_patch_tests(self, record): return []
+
+    def unready_application(self, receipt, merge_ref, application, images, started_at, observations):
+        from partial_rollout import persist_partial
+        return persist_partial(self, receipt, merge_ref, application, images, started_at, observations)
 
     def application_manifest(self, record):
         return read_manifest(self.runtime.clients["s3"], self.runtime.bucket, record, self.version)["manifest"]
@@ -193,16 +199,20 @@ class PrivateActiveRollout(PrivateChartPromotion):
         manifest = self.application_manifest(self.guard())
         self.kube.selected = dict(chartSha=receipt["chartSha"])
         self.kube.images = {COMPONENTS[row["component"]]: row["image"].split(":staging-", 1)[0] + "@" + row["digest"] for row in manifest["images"]}
-        end = min(self.clock() + timedelta(minutes=10), self.execution_end(record))
+        started_at, observations = self.clock(), 0
+        end = min(started_at + timedelta(minutes=10), self.execution_end(record))
         for _ in range(120):
             if self.clock() >= end: break
             self.guard()
+            observations += 1
             if self.kube.observe_ready(allow_readiness_restart=False):
                 self.current_chart(receipt["chartSha"])
                 self.app_observation(self.kube.get("application", APPLICATION, "argocd"), expected_spec, intent["uid"], stamp)
                 return dict(uid=intent["uid"], intentReference=intent_ref, specSha256=checksum(expected_spec), stamp=stamp), deepcopy(self.kube.images)
             self.sleep(5)
-        raise TimeoutError("Argo/runtime did not reach this exact promoted revision in the original window")
+        return self.unready_application(receipt, merge_ref,
+            dict(uid=intent["uid"], intentReference=intent_ref, specSha256=checksum(expected_spec), stamp=stamp),
+            deepcopy(self.kube.images), started_at, observations)
 
     def checkpoint(self, receipt, ref, request):
         chosen = sha(receipt["chartSha"])

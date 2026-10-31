@@ -157,12 +157,15 @@ class DeploymentManager:
         The existing scheduler/deadline remain in force if no parent resumes.
         """
         from active_private_failure import failed_private_terminal
+        from partial_rollout import failed_partial_terminal
         from automation_budget import validate_estimate
         from cleanup_completion import CONTEXT
         from plan_review_store import read_json
         current, etag = self.store.read()
+        partial = bool(current.get("releaseCandidate", {}).get("partialRollout"))
+        expected_op = dict(mode="release" if partial else "verify", stage="active", attempt=1)
         if (current.get("status") != "FAILED_NEEDS_CLEANUP" or self.execution.get("action") != "deploy-window-rollback"
-                or current.get("lifecycleDispatch", {}).get("operation") != dict(mode="verify", stage="active", attempt=1)):
+                or current.get("lifecycleDispatch", {}).get("operation") != expected_op):
             return None
         identity = self.clients["sts"].get_caller_identity()
         now = self.clock()
@@ -179,7 +182,8 @@ class DeploymentManager:
             raise ValueError("Failed private manager has no original idle opted-in task/window")
         validate_estimate(current, self.execution["costEstimate"])
         verify_existing(self.clients["scheduler"], current, self.version, now)
-        ref = failed_private_terminal(self.clients, self.bucket, self.execution, current, self.version, now, require_manager=False)
+        ref = (failed_partial_terminal if partial else failed_private_terminal)(self.clients, self.bucket, self.execution,
+            current, self.version, now, require_manager=False)
         latest, latest_etag = self.store.read()
         if latest != current or latest_etag != etag or self.clock() + timedelta(minutes=30) >= utc(current["cleanupStartAt"]):
             raise ValueError("Private failure changed during manager disposition")
@@ -238,11 +242,14 @@ class DeploymentManager:
         elif mode == "rollback":
             from rollback_task_contract import original_record, proposal_record
             predecessor = proposal_record(record) if stage == "rollout" else dict(original_record(record), status="TESTING")
-            if stage == "prepare" and predecessor.get("lifecycleDispatch", {}).get("operation") == dict(mode="verify", stage="active", attempt=1):
+            partial = bool(predecessor.get("releaseCandidate", {}).get("partialRollout"))
+            if stage == "prepare" and (partial or predecessor.get("lifecycleDispatch", {}).get("operation") == dict(mode="verify", stage="active", attempt=1)):
                 # Dispatcher and the owned worker also require actual terminal
                 # CodeBuild. This manager has no permission to inspect builds.
                 from active_private_failure import failed_private_terminal
-                failed_private_terminal(self.clients, self.bucket, self.execution, predecessor, self.version, self.clock(), require_manager=False)
+                from partial_rollout import failed_partial_terminal
+                (failed_partial_terminal if partial else failed_private_terminal)(self.clients, self.bucket, self.execution,
+                    predecessor, self.version, self.clock(), require_manager=False)
             else: self.previous_terminal(predecessor)
         else: self.previous_terminal(record)
         instance = inspect_instance(self.clients["ec2"], self.execution, private)

@@ -57,6 +57,9 @@ class PrivateRollbackRollout(PrivateActiveRollout):
     def execution_end(self, record):
         return min(utc(slot(record)["intent"]["expiresAt"]), utc(record["cleanupStartAt"])) - timedelta(seconds=60)
 
+    def unready_application(self, *args):
+        raise TimeoutError("Rollback did not reach readiness in its original window; cleanup required")
+
     def application_context(self, record): return rollout_context(record)
 
     def application_key(self, record): return f"private/staging/{record['sessionId']}/rollback/application/intent.json"

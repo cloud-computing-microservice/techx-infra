@@ -197,7 +197,13 @@ class DeploymentManager:
             self.previous_terminal(restoration_record(record))
         elif mode == "rollback":
             from rollback_task_contract import original_record, proposal_record
-            self.previous_terminal(proposal_record(record) if stage == "rollout" else dict(original_record(record), status="TESTING"))
+            predecessor = proposal_record(record) if stage == "rollout" else dict(original_record(record), status="TESTING")
+            if stage == "prepare" and predecessor.get("lifecycleDispatch", {}).get("operation") == dict(mode="verify", stage="active", attempt=1):
+                # Dispatcher and the owned worker also require actual terminal
+                # CodeBuild. This manager has no permission to inspect builds.
+                from active_private_failure import failed_private_terminal
+                failed_private_terminal(self.clients, self.bucket, self.execution, predecessor, self.version, self.clock(), require_manager=False)
+            else: self.previous_terminal(predecessor)
         else: self.previous_terminal(record)
         instance = inspect_instance(self.clients["ec2"], self.execution, private)
         self.verify_document()

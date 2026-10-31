@@ -11,7 +11,7 @@ from deployment_tasks import read_task
 from plan_review_store import checksum, immutable_json
 from private_active_rollout import active_clients
 from promotion_authority import admitted
-from rollback_admission import preview_public_rollback
+from rollback_admission import preview_rollback
 from rollback_proposal import BaselineRevert
 from rollback_task_contract import context, key, original_record, read_proposal_receipt, slot
 
@@ -45,7 +45,7 @@ class PrivateRollbackPrepare:
         def original():
             current, etag = self.base()
             return original_record(current), etag
-        intent = preview_public_rollback(self.runtime.clients, self.runtime.bucket, SimpleNamespace(read=original),
+        intent = preview_rollback(self.runtime.clients, self.runtime.bucket, SimpleNamespace(read=original),
             self.runtime.execution, self.version, self.infra, clock=self.clock, created_at=slot(record)["intent"]["createdAt"])
         if intent != slot(record)["intent"]: raise ValueError("Private rollback predecessor differs from the reserved intent")
         policy = protection(self.chart, self.policy["appId"], self.policy["appSlug"])

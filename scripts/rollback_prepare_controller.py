@@ -7,7 +7,7 @@ FAILED_NEEDS_CLEANUP status are never changed by this module.
 from copy import deepcopy
 
 from lifecycle_dispatch import completed_manager, dispatch_identity, observed_build, operation
-from rollback_reservation import arm_public_rollback, controller
+from rollback_reservation import arm_rollback, controller
 from rollback_task_contract import read_proposal_receipt, slot
 from workflow_handoff import HandoffDriver
 
@@ -36,7 +36,7 @@ class RollbackHandoffDriver(HandoffDriver):
                 raise ValueError("Rollback public handoff requires its terminal restore manager")
             return super().start(target)
         from chart_selection import INFRA_REPO
-        from rollback_admission import preview_public_rollback
+        from rollback_admission import preview_rollback
         from rollback_task_contract import original_record, validate_prepare_checkpoint
         from types import SimpleNamespace
         record, etag = self.current()
@@ -49,7 +49,7 @@ class RollbackHandoffDriver(HandoffDriver):
             def original():
                 current, current_etag = self.current()
                 return original_record(current), current_etag
-            intent = preview_public_rollback(self.dispatcher.clients, self.dispatcher.bucket, SimpleNamespace(read=original),
+            intent = preview_rollback(self.dispatcher.clients, self.dispatcher.bucket, SimpleNamespace(read=original),
                 self.dispatcher.execution, self.dispatcher.version, self.apis[INFRA_REPO], clock=self.dispatcher.clock,
                 created_at=value["intent"]["createdAt"])
             latest, latest_etag = self.current()
@@ -79,7 +79,7 @@ class RollbackPrepareController:
             raise ValueError("Rollback preparation cannot consume a healthy or closing session")
         try:
             if not record.get("rollbackAttempt"):
-                arm_public_rollback(d.clients, d.bucket, d.store, d.execution, d.version, self.github, self.run_id, clock=d.clock)
+                arm_rollback(d.clients, d.bucket, d.store, d.execution, d.version, self.github, self.run_id, clock=d.clock)
             record, _ = d.current(idle=False, allow_rollback=True)
             value = slot(record)
             original = deepcopy(record)
@@ -90,7 +90,7 @@ class RollbackPrepareController:
             if dispatch == value["origin"]["lifecycleDispatch"]:
                 # A recovered reservation is revalidated with its original
                 # createdAt; retries never buy another 30 minutes or attempt.
-                arm_public_rollback(d.clients, d.bucket, d.store, d.execution, d.version, self.github, self.run_id, clock=d.clock)
+                arm_rollback(d.clients, d.bucket, d.store, d.execution, d.version, self.github, self.run_id, clock=d.clock)
                 latest, _ = d.current(allow_rollback=True)
                 if latest != record: raise ValueError("Rollback reservation changed before its single dispatch")
                 result = d.start(record, op)

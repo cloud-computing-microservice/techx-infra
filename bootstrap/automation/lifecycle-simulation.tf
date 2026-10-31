@@ -25,6 +25,12 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "no-foreign-pass-role", action = "iam:PassRole", expected = "denied", resources = ["${local.simulation_account_prefix}:role/techx-staging-node"],
         context = [{ ContextKeyName = "iam:PassedToService", ContextKeyType = "string", ContextKeyValues = ["ec2.amazonaws.com"] }] },
         { name = "no-cluster-create", action = "eks:CreateCluster", expected = "denied", resources = ["arn:aws:eks:us-east-1:058114477594:cluster/techx-staging"] },
+        { name = "read-failed-private-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/acceptance/task.failure.json"] },
+        { name = "read-pinned-promotion-grant", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/promotion-approvals/staging/simulation/approval.json"] },
+        { name = "no-promotion-grant-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/promotion-approvals/staging/simulation/approval.json"] },
+        { name = "no-manager-build-read", action = "codebuild:BatchGetBuilds", expected = "denied", resources = [local.lifecycle_project_arn] },
+        { name = "no-failed-private-overwrite", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/acceptance/task.failure.json"] },
+        { name = "no-unversioned-private-failure", action = "s3:GetObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/active/candidate/acceptance/task.failure.json"] },
         { name = "no-approval-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/approvals/staging/simulation/approval.json"] }
       ]
     }

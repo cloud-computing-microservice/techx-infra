@@ -567,7 +567,7 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Only the owned executor writes merge calls and reads the two fixed tagged App keys; grants stay separate."
   }
   assert {
-    condition = (length(aws_iam_role_policy.accepted_history_read) == 5 && alltrue([
+    condition = (length(aws_iam_role_policy.accepted_history_read) == 6 && alltrue([
       for policy in aws_iam_role_policy.accepted_history_read :
       jsondecode(policy.policy).Statement[0].Action == ["s3:GetObjectVersion"] &&
       contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/accepted/staging/*/*.json") &&

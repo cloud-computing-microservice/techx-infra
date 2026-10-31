@@ -16,7 +16,7 @@ from cleanup_schedule import verify_existing
 from deployment_tasks import read_task
 from lifecycle_dispatch import completed_manager, operation
 from plan_review_store import read_json
-from rollback_admission import preview_public_rollback
+from rollback_admission import preview_rollback
 from rollback_proposal import baseline_restore_tree
 from rollback_task_contract import original_record, proposal_record, read_proposal_receipt, rollout_context, slot, validate_prepare_checkpoint
 
@@ -69,7 +69,7 @@ class RollbackPromotionChecks(ColdPromotionChecks):
         def original():
             current, current_etag = self.base(owner, epoch)
             return original_record(current), current_etag
-        intent = preview_public_rollback(self.clients, self.bucket, SimpleNamespace(read=original), self.execution, self.version,
+        intent = preview_rollback(self.clients, self.bucket, SimpleNamespace(read=original), self.execution, self.version,
             self.infra, clock=self.clock, created_at=value["intent"]["createdAt"])
         if intent != value["intent"]: raise ValueError("Rollback review has different original failure or baseline proof")
         latest, latest_etag = self.base(owner, epoch)

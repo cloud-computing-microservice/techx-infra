@@ -1,4 +1,4 @@
-"""CAS reservation of a single public-failure rollback attempt, without dispatch.
+"""CAS reservation of one positively admitted rollback attempt, without dispatch.
 
 The private executor still has to persist the fixed single-use intent and pass
 task/lease/approval gates before any Git or workload mutation is permitted.
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from automation_session import utc
 from chart_selection import INFRA_REPO
 from plan_review_store import ACCOUNT, checksum
-from rollback_admission import preview_public_rollback
+from rollback_admission import preview_rollback
 from rollback_proposal import validate_intent
 
 CONTROLLERS = {"staging-orchestrate.yml", "staging-continue.yml", "staging-lifecycle.yml"}
@@ -51,13 +51,13 @@ def reservation(record):
     return slot
 
 
-def arm_public_rollback(clients, bucket, store, execution, execution_version, github, run_id, *, clock):
+def arm_rollback(clients, bucket, store, execution, execution_version, github, run_id, *, clock, source=None):
     controller(clients, github, execution, run_id, clock())
     record, etag = store.read()
     existing = record.get("rollbackAttempt")
     if existing:
         slot = reservation(record)
-        # Only the original public-failure snapshot is projected for read-only
+        # Only the original failed predecessor is projected for read-only
         # revalidation. This cannot authorize replay of an executor/merge task.
         def original():
             current, current_etag = store.read()
@@ -66,13 +66,13 @@ def arm_public_rollback(clients, bucket, store, execution, execution_version, gi
             projected.update(checked["origin"])
             projected.pop("rollbackAttempt")
             return projected, current_etag
-        value = preview_public_rollback(clients, bucket, SimpleNamespace(read=original), execution, execution_version,
-            github, clock=clock, created_at=slot["intent"]["createdAt"])
+        value = preview_rollback(clients, bucket, SimpleNamespace(read=original), execution, execution_version,
+            github, clock=clock, created_at=slot["intent"]["createdAt"], source=source)
         latest, latest_etag = store.read()
         if value != slot["intent"] or latest != record or latest_etag != etag:
             raise ValueError("Rollback reservation changed during positive recovery")
         return deepcopy(slot)
-    value = preview_public_rollback(clients, bucket, store, execution, execution_version, github, clock=clock)
+    value = preview_rollback(clients, bucket, store, execution, execution_version, github, clock=clock, source=source)
     latest, latest_etag = store.read()
     if latest != record or latest_etag != etag: raise ValueError("Session changed before rollback reservation CAS")
     origin = {key: deepcopy(record.get(key)) for key in ("lifecycleDispatch", "deploymentTask", "workflowHandoff")}
@@ -82,3 +82,8 @@ def arm_public_rollback(clients, bucket, store, execution, execution_version, gi
     updated["rollbackAttempt"] = slot
     store.write(updated, etag)
     return deepcopy(slot)
+
+
+def arm_public_rollback(*args, **kwargs):
+    """Retain the source restriction for callers of the old public-only API."""
+    return arm_rollback(*args, **kwargs, source="public")

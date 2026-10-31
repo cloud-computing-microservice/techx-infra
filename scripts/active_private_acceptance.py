@@ -42,6 +42,18 @@ class ActivePrivateAcceptance(PrivateAcceptance):
     def receipt_key(self, record): return private_result_key(record, self.task_id)
     def read_receipt(self, record): return read_active_private_receipt(self.runtime.clients["s3"], self.runtime.bucket, record, self.version)
 
+    def perform(self, owner, epoch):
+        try:
+            return super().perform(owner, epoch)
+        except BaseException as error:
+            # Preserve the original failure. Cleanup/lease loss, ambiguous S3
+            # writes and pre-checkpoint errors cannot manufacture authority.
+            from active_private_failure import persist_failure
+            try:
+                if self.failure_checkpoint_owned: persist_failure(self, error)
+            except Exception: pass
+            raise
+
     def predecessors(self, record):
         s3, bucket = self.runtime.clients["s3"], self.runtime.bucket
         accepted_baseline(s3, bucket, record, self.version)

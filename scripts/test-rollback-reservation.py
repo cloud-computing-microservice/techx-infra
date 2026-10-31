@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from chart_selection import INFRA_REPO
 from plan_review_store import encoded
-from rollback_reservation import arm_public_rollback
+from rollback_reservation import arm_rollback
 
 spec = importlib.util.spec_from_file_location("rollback_reservation_fixture", Path(__file__).with_name("test-rollback-admission.py"))
 support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support)
@@ -30,7 +30,7 @@ class ReservationTests(unittest.TestCase):
         self.a.p.r.h.infra.get = lambda endpoint: deepcopy(self.own) if endpoint == "actions/runs/300" else get(endpoint)
 
     def arm(self):
-        return arm_public_rollback(self.f.clients, self.d.bucket, self.f.store, self.a.execution, self.d.version,
+        return arm_rollback(self.f.clients, self.d.bucket, self.f.store, self.a.execution, self.d.version,
             self.a.p.r.h.infra, "300", clock=lambda: self.now)
 
     def test_one_cas_reservation_retains_failed_state_and_accepted_baseline(self):

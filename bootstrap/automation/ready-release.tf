@@ -53,6 +53,7 @@ resource "aws_iam_role_policy" "active_rollout_observe" {
 resource "aws_iam_role_policy" "accepted_history_read" {
   for_each = var.enable_lifecycle_control ? {
     dispatcher = aws_iam_role.lifecycle_dispatcher[0].name
+    manager    = aws_iam_role.lifecycle_manager[0].name
     executor   = aws_iam_role.deployment_executor[0].name
     publisher  = aws_iam_role.publisher.name
     preview    = aws_iam_role.chart_reader[0].name

@@ -1,4 +1,4 @@
-"""Read-only rollback intent preview from a terminal failed public acceptance.
+"""Read-only rollback preview from a positively terminal failed acceptance.
 
 This does not reserve an attempt, claim a lease, or authorize Git mutations.
 The private producer must persist the intent in the session's single-use slot
@@ -8,7 +8,7 @@ from copy import deepcopy
 from datetime import timedelta
 import re
 
-from active_public_contract import active_public_context, active_result_key
+from active_public_contract import active_public_context, active_result_key, read_active_public_receipt
 from active_release_contract import read_rollout_receipt
 from automation_session import utc, validate
 from chart_selection import INFRA_REPO
@@ -74,7 +74,45 @@ def public_failure(s3, bucket, record, execution, execution_version, github, now
     return reference
 
 
-def preview_public_rollback(clients, bucket, store, execution, execution_version, github, *, clock, created_at=None):
+def successful_public_predecessor(s3, bucket, record, execution, execution_version, github, now):
+    """Recover the successful rollout manager through its consumed public intent."""
+    projected = dict(record, status="TESTING")
+    handoff = record.get("workflowHandoff", {})
+    proof = read_active_public_receipt(s3, bucket, projected, execution_version)
+    if (handoff.get("operation") != "accept-active-public" or handoff.get("phase") != "CONSUMED"
+            or handoff.get("id") != proof["dispatchId"]):
+        raise ValueError("Private failure requires its consumed successful public handoff")
+    intent = load_intent(s3, bucket, projected, handoff.get("intentReference"))
+    if not isinstance(intent["predecessor"].get("deploymentTask"), dict):
+        raise ValueError("Consumed public intent lacks its original rollout task snapshot")
+    predecessor = dict(projected, **deepcopy(intent["predecessor"]))
+    if checksum(active_public_context(predecessor)) != checksum(active_public_context(projected)):
+        raise ValueError("Private failure changed the successful public rollout predecessor")
+    receipt = read_reference(s3, bucket, handoff.get("receiptReference"), receipt_key(record["sessionId"], handoff["id"]))
+    if (not isinstance(receipt, dict) or set(receipt) != {"schemaVersion", "dispatchId", "intentReference", "response"}
+            or type(receipt.get("schemaVersion")) is not int or receipt["schemaVersion"] != 1
+            or receipt["dispatchId"] != handoff["id"] or receipt["intentReference"] != handoff["intentReference"]):
+        raise ValueError("Successful public handoff lacks its exact dispatch receipt")
+    response = response_identity(receipt["response"], INFRA_REPO)
+    run_id = response["workflow_run_id"]
+    run = verified_run(github, intent["target"], handoff["id"], run_id, execution)
+    if (run.get("status") != "completed" or run.get("conclusion") != "success" or proof["workflowRun"] != response["html_url"]
+            or not utc(run["created_at"]) <= utc(proof["completedAt"]) <= utc(run.get("updated_at", "")) <= now):
+        raise ValueError("Private failure requires the actual successful terminal public workflow")
+    jobs = github.get(f"actions/runs/{run_id}/jobs?filter=latest&per_page=100")
+    rows = jobs.get("jobs", [])
+    if type(jobs.get("total_count")) is not int or jobs["total_count"] != len(rows) or len(rows) != 1:
+        raise ValueError("Complete successful public job evidence required")
+    job, runner = rows[0], proof["runner"]
+    if (job.get("name") != "public" or job.get("status") != "completed" or job.get("conclusion") != "success"
+            or job.get("run_id") != run_id or job.get("head_sha") != execution["sourceRevisions"]["techx-infra"]
+            or job.get("id") != runner["jobId"] or job.get("runner_id") != runner["runnerId"]
+            or job.get("runner_group_name") != runner["runnerGroup"] or job.get("labels") != runner["labels"]):
+        raise ValueError("Successful public receipt does not match the actual hosted job")
+    return predecessor
+
+
+def preview_rollback(clients, bucket, store, execution, execution_version, github, *, clock, created_at=None, source=None):
     s3 = clients["s3"]
     now = clock()
     created = utc(created_at) if created_at is not None else now
@@ -89,11 +127,20 @@ def preview_public_rollback(clients, bucket, store, execution, execution_version
             or not utc(execution["createdAt"]) <= created <= now < expires or expires >= utc(record["cleanupStartAt"])):
         raise ValueError("Rollback requires an idle opted-in failed session, an unused attempt and the original window")
     historical = dict(record, status="TESTING")
-    if completed_manager(clients, execution, historical) != operation("release", "active"):
+    private = record.get("lifecycleDispatch", {}).get("operation") == operation("verify", "active")
+    if source is not None and source != ("private" if private else "public"):
+        raise ValueError("Rollback failure source differs from the requested admission")
+    if private:
+        from active_private_failure import failed_private_terminal
+        failure = failed_private_terminal(clients, bucket, execution, historical, execution_version, now)
+        predecessor = successful_public_predecessor(s3, bucket, historical, execution, execution_version, github, now)
+    else:
+        predecessor = historical
+        failure = public_failure(s3, bucket, record, execution, execution_version, github, now)
+    if completed_manager(clients, execution, predecessor) != operation("release", "active"):
         raise ValueError("Rollback requires the actual terminal rollout manager and remote task")
     baseline = accepted_baseline(s3, bucket, historical, execution_version)
     rollout = read_rollout_receipt(s3, bucket, historical, execution_version)
-    failure = public_failure(s3, bucket, record, execution, execution_version, github, now)
     latest, latest_etag = store.read()
     if latest != record or latest_etag != etag or clock() >= expires:
         raise ValueError("Session/cleanup/window changed during rollback admission")
@@ -104,3 +151,7 @@ def preview_public_rollback(clients, bucket, store, execution, execution_version
         action=execution["action"], cleanupStartAt=record["cleanupStartAt"], deadline=record["deadline"])
     value["rollbackId"] = checksum(value)
     return validate_intent(value)
+
+
+def preview_public_rollback(*args, **kwargs):
+    return preview_rollback(*args, **kwargs, source="public")

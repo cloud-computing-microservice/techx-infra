@@ -240,10 +240,14 @@ class Dispatcher:
                 elif op["stage"] == "prepare":
                     validate_prepare_start(current, op["attempt"])
                     predecessor, required = dict(original_record(current), status="TESTING"), operation("release", "active")
+                    if predecessor.get("lifecycleDispatch", {}).get("operation") == operation("verify", "active"):
+                        from active_private_failure import failed_private_terminal
+                        failed_private_terminal(self.clients, self.bucket, self.execution, predecessor, self.version, self.clock())
+                        required = operation("verify", "active")
                 else:
                     validate_rollout_start(current, op["attempt"])
                     predecessor, required = proposal_record(current), operation("rollback", "prepare")
-                previous = completed_manager(self.clients, self.execution, predecessor)
+                previous = required if op == operation("rollback", "prepare") and required == operation("verify", "active") else completed_manager(self.clients, self.execution, predecessor)
                 if previous != required: raise ValueError("Rollback requires its exact terminal private predecessor")
             else: previous = completed_manager(self.clients, self.execution, current)
             if rollback:

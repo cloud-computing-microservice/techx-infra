@@ -394,3 +394,18 @@ reviewed AMI build before cloud use.
 ```powershell
 ./scripts/verify.ps1
 ```
+
+The pending bounded-rollback branch also records active private probe failures
+in an immutable `acceptance/<task>.failure.json` object. Only known application
+failures, the exact terminal failed CodeBuild/SSM task, a consumed successful
+hosted public run/job and an accepted rollout baseline permit admission. The
+public handoff retains the original successful rollout task for this readback.
+VPN disconnect must be positively observed (or the readiness failure must
+occur before creating a VPN client). Authentication/network/unknown errors,
+missing or ambiguous receipts and cleanup races require cleanup. Diagnostics
+contain fixed classifications and references, never raw errors or credentials.
+Private failures use the same single-use reservation, protected review,
+restoration, fresh public/private checks and atomic accepted READY history.
+Partial-rollout failure admission and main orchestration remain unfinished;
+the rollback opt-in is not yet exposed by the opening workflow. Offline tests
+do not establish cloud acceptance or authorize a deployment window.

@@ -6,6 +6,7 @@ locals {
       Version = "2012-10-17", Statement = [
         { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.control.arn },
         { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectVersion"], Resource = [for prefix in ["executions/*", "bundles/*", "private/staging/*/inputs.json", "automation/staging/session.json", "control/staging/tasks/*", "control/staging/executor-config.json"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
+        { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = "${aws_s3_bucket.control.arn}/promotion-approvals/staging/*/*.json" },
         { Effect = "Allow", Action = ["s3:PutObject"], Resource = [for prefix in ["private/staging/*/inputs.json", "automation/staging/session.json", "control/staging/tasks/*"] : "${aws_s3_bucket.control.arn}/${prefix}"] },
         { Effect = "Allow", Action = ["kms:Decrypt", "kms:GenerateDataKey"], Resource = aws_kms_key.control.arn, Condition = { StringEquals = { "kms:ViaService" = "s3.us-east-1.amazonaws.com" } } },
         { Effect = "Allow", Action = ["scheduler:GetSchedule"], Resource = "arn:aws:scheduler:us-east-1:058114477594:schedule/techx-staging/cleanup-*" },

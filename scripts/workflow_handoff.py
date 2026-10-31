@@ -98,7 +98,8 @@ def intent_for(record, execution_version, target):
             acceptedRelease=deepcopy(record["acceptedRelease"]))
     if record["status"] == "TESTING":
         if target["operation"] != "accept-active-public": raise ValueError("TESTING may hand off only its active public acceptance")
-        body["predecessor"].update(status="TESTING", releaseCandidate=deepcopy(record["releaseCandidate"]), acceptedRelease=deepcopy(record["acceptedRelease"]))
+        body["predecessor"].update(status="TESTING", releaseCandidate=deepcopy(record["releaseCandidate"]),
+            acceptedRelease=deepcopy(record["acceptedRelease"]), deploymentTask=deepcopy(record["deploymentTask"]))
     if record["status"] == "FAILED_NEEDS_CLEANUP":
         from rollback_task_contract import validate_prepare_checkpoint
         validate_prepare_checkpoint(record)

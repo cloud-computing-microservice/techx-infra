@@ -207,6 +207,8 @@ class PrivateAcceptance:
         self.checkpoint(resilience=dict(state="PASSED"))
 
     def perform(self, owner, epoch):
+        self.failure_tunnel = None
+        self.failure_checkpoint_owned = False
         self.owner, self.epoch = owner, epoch
         record = self.guard()
         self.context_hash = self.validate_start(record)
@@ -221,6 +223,7 @@ class PrivateAcceptance:
         validator.validate_manifest(release["manifest"])
         images = {COMPONENTS[row["component"]]: row["image"].split(":staging-", 1)[0] + "@" + row["digest"] for row in release["manifest"]["images"]}
         self.checkpoint(state="RUNNING", attempt=1, taskId=self.task_id, contextSha256=self.context_hash)
+        self.failure_checkpoint_owned = True
         self.kube = GitOpsBootstrap(self.runtime, self.store, self.version, self.task_id, clock=self.clock, sleep=self.sleep)
         self.kube.guard = self.binding_guard
         self.kube.selected, self.kube.images = self.selected, images
@@ -229,6 +232,7 @@ class PrivateAcceptance:
         self.artifacts(release)
         self.persistence(state)
         tunnel = self.tunnel_factory(self.runtime, self.binding_guard, self.binding, self.task_id, sleep=self.sleep)
+        self.failure_tunnel = tunnel
         with tunnel.opened():
             http = self.http_factory(tunnel, self.binding_guard)
             self.argocd(http)

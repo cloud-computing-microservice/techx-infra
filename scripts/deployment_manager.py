@@ -4,7 +4,7 @@ An ambiguous SendCommand is never retried. Only a completed SSM invocation plus
 the durable remote result permits the next task on the same persistent VM.
 """
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
 import re
@@ -19,6 +19,10 @@ MANAGER_ROLE = f"arn:aws:iam::{ACCOUNT}:role/techx-automation-lifecycle-manager"
 PROFILE = f"arn:aws:iam::{ACCOUNT}:instance-profile/techx-automation-lifecycle-executor"
 ACTIVE = {"Pending", "InProgress", "Delayed", "Cancelling"}
 TERMINAL = {"Success", "Cancelled", "TimedOut", "Failed"}
+
+
+class RollbackCandidateFailed(ValueError):
+    """Exit this manager as failed while the controller verifies rollback."""
 
 
 def observe_command(ssm, config, pointer):
@@ -144,6 +148,42 @@ class DeploymentManager:
         self.clients["lambda"].invoke(FunctionName=f"arn:aws:lambda:us-east-1:{ACCOUNT}:function:techx-automation-cleanup-launcher",
             InvocationType="Event", Payload=json.dumps(dict(sessionId=self.execution["sessionId"], executionVersion=self.version,
                                                                        requestedEarly=True)).encode())
+
+    def rollback_candidate(self, pointer):
+        """Read-only disposition of this manager's positively failed private task.
+
+        This grants no reservation or rollback mutation. The parent must still
+        observe this CodeBuild as terminal and independently admit the failure.
+        The existing scheduler/deadline remain in force if no parent resumes.
+        """
+        from active_private_failure import failed_private_terminal
+        from automation_budget import validate_estimate
+        from cleanup_completion import CONTEXT
+        from plan_review_store import read_json
+        current, etag = self.store.read()
+        if (current.get("status") != "FAILED_NEEDS_CLEANUP" or self.execution.get("action") != "deploy-window-rollback"
+                or current.get("lifecycleDispatch", {}).get("operation") != dict(mode="verify", stage="active", attempt=1)):
+            return None
+        identity = self.clients["sts"].get_caller_identity()
+        now = self.clock()
+        validate(current); validate(self.execution)
+        admitted, _ = read_json(self.clients["s3"], self.bucket, f"executions/{self.execution['sessionId']}.json", self.version)
+        task = current.get("deploymentTask", {})
+        if (admitted != self.execution or any(current.get(k) != self.execution.get(k) for k in CONTEXT)
+                or current.get("executionVersion") != self.version or current.get("lease") or current.get("pendingPlan") is not None
+                or current.get("rollbackAttempt") or now + timedelta(minutes=30) >= utc(current["cleanupStartAt"])
+                or identity.get("Account") != ACCOUNT or not re.fullmatch(
+                    rf"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-lifecycle-manager/[^/]+", identity.get("Arn", ""))
+                or task.get("managerArn") != self.owner or any(pointer.get(k) != task.get(k) for k in
+                    ("taskId", "commandId", "reference", "managerArn", "mode", "stage", "attempt", "instanceId"))):
+            raise ValueError("Failed private manager has no original idle opted-in task/window")
+        validate_estimate(current, self.execution["costEstimate"])
+        verify_existing(self.clients["scheduler"], current, self.version, now)
+        ref = failed_private_terminal(self.clients, self.bucket, self.execution, current, self.version, now, require_manager=False)
+        latest, latest_etag = self.store.read()
+        if latest != current or latest_etag != etag or self.clock() + timedelta(minutes=30) >= utc(current["cleanupStartAt"]):
+            raise ValueError("Private failure changed during manager disposition")
+        return ref
 
     def fail_dispatch(self, task_id):
         record, etag = self.store.read()
@@ -291,6 +331,7 @@ class DeploymentManager:
             raise ValueError("Bounded task observation is required")
         try:
             for _ in range(max_observations):
+                if self.rollback_candidate(pointer): raise RollbackCandidateFailed("Private candidate failed; await terminal manager admission")
                 record, _ = self.current(allow_ready=pointer.get("mode") == "verify")
                 active = record.get("deploymentTask", {})
                 if active.get("taskId") != pointer["taskId"] or active.get("commandId") != pointer.get("commandId"):
@@ -299,6 +340,7 @@ class DeploymentManager:
                 if result is not None and result["Status"] in TERMINAL:
                     # The remote process can finish between the session read
                     # and this SSM observation. Fetch its terminal checkpoint.
+                    if self.rollback_candidate(pointer): raise RollbackCandidateFailed("Private candidate failed; await terminal manager admission")
                     record, _ = self.current(allow_ready=pointer.get("mode") == "verify")
                     active = record.get("deploymentTask", {})
                     if active.get("taskId") != pointer["taskId"] or active.get("commandId") != pointer.get("commandId"):
@@ -312,6 +354,8 @@ class DeploymentManager:
                     return active
                 self.sleep(5)
             raise TimeoutError("Remote task observation timed out; the same command may still be running")
+        except RollbackCandidateFailed:
+            raise
         except BaseException:
             self.request_cleanup()
             raise

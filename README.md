@@ -406,6 +406,16 @@ missing or ambiguous receipts and cleanup races require cleanup. Diagnostics
 contain fixed classifications and references, never raw errors or credentials.
 Private failures use the same single-use reservation, protected review,
 restoration, fresh public/private checks and atomic accepted READY history.
-Partial-rollout failure admission and main orchestration remain unfinished;
-the rollback opt-in is not yet exposed by the opening workflow. Offline tests
-do not establish cloud acceptance or authorize a deployment window.
+The main orchestrator now routes positively admitted failures through that
+controller before requesting cleanup. A known private failure exits its
+manager nonzero without early cleanup; the parent waits for that same manager
+to be terminal before reservation. Known public failures can wait for their
+same hosted job to finish. Missing schedule, cancelled parents, unknown
+failures or exhausted windows still request cleanup. A failed opening is
+never reclassified as an active release failure. Rollback review reads use
+the admitted source archive and a chart-only read token on the protected
+orchestrator environment, without merge scope.
+Partial-rollout failure admission and opening/continuation opt-in wiring
+remain unfinished; the rollback option is not exposed by the opening UI.
+Offline tests do not establish cloud acceptance or authorize a deployment
+window. The existing cleanup schedule and deadline are unchanged.

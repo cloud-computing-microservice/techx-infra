@@ -33,18 +33,27 @@ def verified_caller(github, run_id, execution):
         raise ValueError("Opening workflow may continue only the execution it admitted")
 
 
-def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, sleep=time.sleep, monotonic=time.monotonic):
+def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, sleep=time.sleep, monotonic=time.monotonic, failure_disposition=None):
     if type(observations) is not int or not 1 <= observations <= 240:
         raise ValueError("Continuation observation must be bounded to 40 minutes")
     end = monotonic() + 2400
     for _ in range(observations):
         if monotonic() >= end: break
-        record, _ = dispatcher.current(idle=False, allow_ready=True)
+        if failure_disposition is not None and dispatcher.store.read()[0].get("status") == "FAILED_NEEDS_CLEANUP":
+            return failure_disposition()
+        try:
+            record, _ = dispatcher.current(idle=False, allow_ready=True)
+        except ValueError:
+            if failure_disposition is not None and dispatcher.store.read()[0].get("status") == "FAILED_NEEDS_CLEANUP":
+                return failure_disposition()
+            raise
         build = observed_build(dispatcher.clients["codebuild"], record)
         if build.get("buildStatus") == "IN_PROGRESS" and build.get("buildComplete") is False:
             sleep(max(0, min(10, end - monotonic())))
             continue
         if build.get("buildStatus") != "SUCCEEDED" or build.get("buildComplete") is not True:
+            if failure_disposition is not None and dispatcher.store.read()[0].get("status") == "FAILED_NEEDS_CLEANUP":
+                return failure_disposition()
             dispatcher.cleanup()
             raise ValueError("Manager failed or returned an unknown terminal result; independent cleanup requested")
         if record["status"] == "READY":
@@ -61,6 +70,8 @@ def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, s
             return result
     # Read the exact current pointer again. Never restart because observation
     # expired; an operator or future caller can continue this same AWS build.
+    if failure_disposition is not None and dispatcher.store.read()[0].get("status") == "FAILED_NEEDS_CLEANUP":
+        return failure_disposition()
     record, _ = dispatcher.current(idle=False, allow_ready=True)
     build = observed_build(dispatcher.clients["codebuild"], record)
     return dict(sessionId=record["sessionId"], executionVersion=dispatcher.version, waiting="OBSERVATION_LIMIT",

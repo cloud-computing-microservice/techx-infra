@@ -6,7 +6,7 @@ from pathlib import Path
 
 from automation_session import S3SessionStore
 from deployment_executor import ExecutorFactory
-from deployment_manager import DeploymentManager
+from deployment_manager import DeploymentManager, RollbackCandidateFailed
 from plan_review_store import read_json
 
 
@@ -35,6 +35,15 @@ def main():
             pointer = manager.dispatch(private, args.mode, args.stage, args.attempt)
             completed = manager.wait(pointer)
             print(json.dumps(dict(status=completed["state"], taskId=completed["taskId"], stage=completed["stage"], attempt=completed["attempt"])))
+    except RollbackCandidateFailed:
+        # Revalidate at the final entry-point boundary. A normal nonzero exit
+        # makes CodeBuild FAILED; it does not claim rollback has succeeded.
+        try:
+            if not manager.rollback_candidate(pointer): raise ValueError("Private failure no longer qualifies for parent admission")
+        except BaseException:
+            manager.request_cleanup()
+            raise
+        raise
     except BaseException:
         manager.request_cleanup()
         raise

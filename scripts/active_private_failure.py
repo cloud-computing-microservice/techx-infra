@@ -105,7 +105,7 @@ def read_failure(s3, bucket, record, execution_version, now):
     return ref
 
 
-def failed_private_terminal(clients, bucket, execution, record, execution_version, now, *, require_manager=True):
+def failed_private_terminal(clients, bucket, execution, record, execution_version, now, *, require_manager=True, allow_pending=False):
     """A failed checkpoint alone cannot prove the remote command has stopped."""
     from deployment_manager import observe_command
     from deployment_tasks import executor_config
@@ -117,12 +117,17 @@ def failed_private_terminal(clients, bucket, execution, record, execution_versio
         raise ValueError("Private rollback predecessor must be the active acceptance manager")
     ref = read_failure(clients["s3"], bucket, record, execution_version, now)
     pointer = record["deploymentTask"]
+    pending = False
     if require_manager:
         build = observed_build(clients["codebuild"], record)
-        if (build.get("buildStatus") != "FAILED" or build.get("buildComplete") is not True
+        pending = allow_pending and build.get("buildStatus") == "IN_PROGRESS" and build.get("buildComplete") is False
+        if (not pending and (build.get("buildStatus") != "FAILED" or build.get("buildComplete") is not True)
                 or pointer.get("managerArn") != build["arn"]):
             raise ValueError("Private failure needs the exact positively terminal failed manager")
     result = observe_command(clients["ssm"], executor_config(execution["deploymentConfig"]), pointer)
     if result is None or result.get("Status") != "Failed" or type(result.get("ResponseCode")) is not int or result["ResponseCode"] != 1:
         raise ValueError("Private failure needs the exact positively terminal failed remote task")
+    if pending:
+        from rollback_pending import RollbackPending
+        raise RollbackPending("ROLLBACK_FAILED_MANAGER_RUNNING")
     return ref

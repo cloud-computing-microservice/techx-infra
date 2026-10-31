@@ -15,9 +15,46 @@ from workflow_handoff import DispatchUncertain, HandoffDriver, LIVE, target_for
 
 
 class Orchestrator:
-    def __init__(self, dispatcher, coordinator, apis, chart):
+    def __init__(self, dispatcher, coordinator, apis, chart, *, run_id=None, rollback_source=None):
         self.dispatcher, self.coordinator, self.apis, self.chart = dispatcher, coordinator, apis, chart
         self.handoffs = HandoffDriver(dispatcher, apis)
+        self.run_id, self.rollback_source, self.rollback_controller = run_id, rollback_source, None
+
+    def failed_candidate(self):
+        """Only an independently admitted original failure enters rollback."""
+        from cleanup_completion import CONTEXT
+        from rollback_admission import preview_rollback
+        from rollback_pending import RollbackPending
+        from rollback_reservation import arm_rollback, controller
+        from rollback_release_controller import RollbackReleaseController
+        d = self.dispatcher
+        current, _ = d.store.read()
+        if (current.get("status") != "FAILED_NEEDS_CLEANUP" or current.get("executionVersion") != d.version
+                or any(current.get(k) != d.execution.get(k) for k in CONTEXT)):
+            raise ValueError("Failed candidate callback belongs to another session")
+        # Stale/wrong controller identities fail before any cleanup handler.
+        controller(d.clients, self.apis[INFRA_REPO], d.execution, self.run_id, d.clock())
+        try:
+            from automation_budget import validate_estimate
+            from cleanup_schedule import verify_existing
+            validate_estimate(current, d.execution["costEstimate"])
+            verify_existing(d.clients["scheduler"], current, d.version, d.clock())
+            if not current.get("rollbackAttempt"):
+                try:
+                    preview_rollback(d.clients, d.bucket, d.store, d.execution, d.version, self.apis[INFRA_REPO],
+                        clock=d.clock, allow_pending=True)
+                except RollbackPending as pending:
+                    return dict(waiting=pending.waiting)
+            if self.rollback_controller is None:
+                if self.rollback_source is None: raise ValueError("Rollback needs the verified immutable source archive")
+                source = self.rollback_source()
+                self.rollback_controller = RollbackReleaseController(d, self.apis[INFRA_REPO], self.chart, source, self.run_id)
+            if not current.get("rollbackAttempt"):
+                arm_rollback(d.clients, d.bucket, d.store, d.execution, d.version, self.apis[INFRA_REPO], self.run_id, clock=d.clock)
+            return self.rollback_controller.observe_private()
+        except BaseException:
+            d.cleanup()
+            raise
 
     def consume(self, record, intent, run):
         d = self.dispatcher
@@ -179,20 +216,40 @@ class Orchestrator:
         last = {}
         for _ in range(observations):
             if monotonic() >= end: break
-            record, _ = self.dispatcher.current(idle=False, allow_ready=True)
+            peek, _ = self.dispatcher.store.read()
+            if peek.get("status") == "FAILED_NEEDS_CLEANUP":
+                last = self.failed_candidate()
+                if last.get("waiting") == "READY": return last
+                sleep(max(0, min(10, end - monotonic())))
+                continue
+            try:
+                record, _ = self.dispatcher.current(idle=False, allow_ready=True)
+            except ValueError:
+                if self.dispatcher.store.read()[0].get("status") != "FAILED_NEEDS_CLEANUP": raise
+                last = self.failed_candidate()
+                if last.get("waiting") == "READY": return last
+                continue
             state = record.get("workflowHandoff", {})
             if state and state.get("phase") != "CONSUMED":
                 _, intent = self.handoffs.load()
                 if intent["target"]["repository"] not in self.apis:
                     return dict(waiting="GITHUB_APP_CONFIGURATION", targetRepository=intent["target"]["repository"])
                 if state.get("phase") == "PREPARED": self.handoffs.start(intent["target"])
-                record, intent, run = self.handoffs.observe()
+                try:
+                    record, intent, run = self.handoffs.observe()
+                except ValueError:
+                    if self.dispatcher.store.read()[0].get("status") != "FAILED_NEEDS_CLEANUP": raise
+                    last = self.failed_candidate()
+                    continue
                 last = dict(waiting="WORKFLOW_RUNNING", repository=intent["target"]["repository"], workflowRunId=run["id"],
                             workflowRun=f"https://github.com/{intent['target']['repository']}/actions/runs/{run['id']}")
                 if run["status"] in LIVE:
                     sleep(max(0, min(10, end - monotonic())))
                     continue
                 if run.get("conclusion") != "success":
+                    if self.dispatcher.store.read()[0].get("status") == "FAILED_NEEDS_CLEANUP":
+                        last = self.failed_candidate()
+                        continue
                     self.dispatcher.cleanup()
                     raise ValueError("Dispatched workflow failed/cancelled; independent cleanup requested")
                 self.consume(record, intent, run)
@@ -203,7 +260,8 @@ class Orchestrator:
                     sleep(max(0, min(10, end - monotonic())))
                     continue
                 observed = drive(self.dispatcher, self.coordinator, observations=1,
-                    sleep=lambda delay: sleep(max(0, min(delay, end - monotonic()))), monotonic=monotonic)
+                    sleep=lambda delay: sleep(max(0, min(delay, end - monotonic()))), monotonic=monotonic,
+                    failure_disposition=self.failed_candidate)
                 if observed.get("waiting") != "READY":
                     last = observed
                     continue
@@ -232,10 +290,14 @@ class Orchestrator:
             # One observation shares this loop's overall bound. It does not
             # start another 40-minute timer for every lifecycle stage.
             result = drive(self.dispatcher, self.coordinator, observations=1,
-                           sleep=lambda delay: sleep(max(0, min(delay, end - monotonic()))), monotonic=monotonic)
+                           sleep=lambda delay: sleep(max(0, min(delay, end - monotonic()))), monotonic=monotonic,
+                           failure_disposition=self.failed_candidate)
             last = result
             if result.get("waiting") == "READY": return result
             if result.get("waiting") == "OBSERVATION_LIMIT": continue
+            if result.get("waiting", "").startswith("ROLLBACK_"):
+                sleep(max(0, min(10, end - monotonic())))
+                continue
             if result.get("waiting"):
                 target = self.target(result)
                 if target.get("waiting"):

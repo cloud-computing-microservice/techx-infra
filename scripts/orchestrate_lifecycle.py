@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import tempfile
 
 from automation_session import S3SessionStore, utc, validate
 from chart_callback import bound_chart_run
@@ -105,7 +106,8 @@ def resolve(clients, store, bucket, github, *, run_id, source_sha, event_name, e
                          and source.get("path") in (f".github/workflows/{target['workflow']}", f".github/workflows/{target['workflow']}@main"))
         if not bound: return dict(waiting="UNRELATED_CALLBACK")
         bound_failure = bound_failure or source.get("conclusion") != "success"
-    return dict(execution=execution, executionVersion=object_version, boundFailure=bound_failure)
+    return dict(execution=execution, executionVersion=object_version, boundFailure=bound_failure,
+                openingFailed=root.get("conclusion") != "success")
 
 
 def request_cleanup(clients, store, execution, object_version):
@@ -136,7 +138,7 @@ def main():
     bucket, token = os.environ["CONTROL_BUCKET"], os.environ["GITHUB_TOKEN"]
     store = S3SessionStore(bucket)
     infra = WorkflowAPI(INFRA_REPO, token)
-    chart = GitHub(CHART_REPO, token)
+    chart = GitHub(CHART_REPO, os.environ.get("CHART_READ_TOKEN") or token)
     context = resolve(clients, store, bucket, infra, run_id=run_id, source_sha=source_sha,
                       event_name=os.environ["GITHUB_EVENT_NAME"], event=json.loads(event_path.read_bytes()), chart=chart)
     if context.get("waiting"):
@@ -145,14 +147,26 @@ def main():
     execution, object_version = context["execution"], context["executionVersion"]
     dispatcher = Dispatcher(clients, store, bucket, execution, object_version)
     try:
-        if context["boundFailure"] or dispatcher.clock() >= utc(execution["cleanupStartAt"]):
+        current, _ = store.read()
+        candidate_failure = (not context["openingFailed"] and execution.get("action") == "deploy-window-rollback"
+                             and current.get("status") == "FAILED_NEEDS_CLEANUP")
+        if context["boundFailure"] and not candidate_failure or dispatcher.clock() >= utc(execution["cleanupStartAt"]):
             requested = request_cleanup(clients, store, execution, object_version)
             summary(dict(waiting="CLEANUP_REQUESTED", requestAcknowledged=requested))
             return
         apis = {INFRA_REPO: infra}
         if os.environ.get("LIFECYCLE_APP_TOKEN"):
             apis[PLATFORM_REPO] = WorkflowAPI(PLATFORM_REPO, os.environ["LIFECYCLE_APP_TOKEN"])
-        result = Orchestrator(dispatcher, Coordinator(clients, store, bucket), apis, chart).run()
+        with tempfile.TemporaryDirectory(prefix="techx-rollback-controller-") as directory:
+            root = Path(directory) / "execution"
+            def rollback_source():
+                from bootstrap_publish import archive_loader
+                archive_loader(clients["s3"], bucket, execution["sessionId"], object_version, root)
+                if json.loads((root / "execution.json").read_bytes()) != execution:
+                    raise ValueError("Rollback archive differs from the admitted execution")
+                return root / "source"
+            result = Orchestrator(dispatcher, Coordinator(clients, store, bucket), apis, chart,
+                run_id=run_id, rollback_source=rollback_source).run()
         if result.get("waiting") == "READY" and execution["action"] == "deploy-test-destroy":
             result = dict(waiting="CLEANUP_REQUESTED", requestAcknowledged=request_cleanup(clients, store, execution, object_version))
         summary(result)

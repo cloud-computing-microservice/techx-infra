@@ -17,7 +17,8 @@ from lifecycle_dispatch import completed_manager, operation
 from plan_review_store import checksum, read_json
 from ready_release_contract import accepted_baseline, read_reference
 from rollback_proposal import validate_intent
-from workflow_handoff import listed_json, load_intent, receipt_key, response_identity, verified_run
+from workflow_handoff import LIVE, listed_json, load_intent, receipt_key, response_identity, verified_run
+from rollback_pending import RollbackPending
 
 PUBLIC_FAILURES = {"http-status", "storefront-content", "health-readiness", "health-json", "catalog", "store-config", "product-detail",
                    "order-create", "order-replay", "order-conflict", "order-lookup", "api-content-type", "api-json", "http-redirect",
@@ -25,7 +26,7 @@ PUBLIC_FAILURES = {"http-status", "storefront-content", "health-readiness", "hea
                    "static-asset-discovery", "static-asset-path"}
 
 
-def public_failure(s3, bucket, record, execution, execution_version, github, now):
+def public_failure(s3, bucket, record, execution, execution_version, github, now, *, allow_pending=False):
     projected = dict(record, status="TESTING")  # Read-only historical proof view.
     stage, handoff = record["releaseCandidate"].get("publicAcceptance", {}), record.get("workflowHandoff", {})
     context_hash = checksum(active_public_context(projected))
@@ -47,16 +48,19 @@ def public_failure(s3, bucket, record, execution, execution_version, github, now
     response = response_identity(receipt["response"], INFRA_REPO)
     run_id = response["workflow_run_id"]
     run = verified_run(github, intent["target"], handoff["id"], run_id, execution)
-    if (run.get("status") != "completed" or run.get("conclusion") != "failure"
+    pending = allow_pending and run.get("status") in LIVE and run.get("conclusion") is None
+    if (not pending and (run.get("status") != "completed" or run.get("conclusion") != "failure")
             or stage.get("workflowRun") != response["html_url"]
-            or not utc(run["created_at"]) <= utc(run.get("updated_at", "")) <= now):
+            or not utc(run["created_at"]) <= now
+            or not pending and not utc(run["created_at"]) <= utc(run.get("updated_at", "")) <= now):
         raise ValueError("Rollback requires the same actual terminal failed public run")
     jobs = github.get(f"actions/runs/{run_id}/jobs?filter=latest&per_page=100")
     rows = jobs.get("jobs", [])
     if type(jobs.get("total_count")) is not int or jobs["total_count"] != len(rows) or len(rows) != 1:
         raise ValueError("Complete public failure job evidence required")
     job = rows[0]
-    if (job.get("name") != "public" or job.get("status") != "completed" or job.get("conclusion") != "failure"
+    live_job = pending and job.get("status") in LIVE and job.get("conclusion") is None
+    if (job.get("name") != "public" or not live_job and (job.get("status") != "completed" or job.get("conclusion") != "failure")
             or job.get("run_id") != run_id or job.get("head_sha") != execution["sourceRevisions"]["techx-infra"]
             or job.get("runner_group_name") != "GitHub Actions" or job.get("labels") != ["ubuntu-24.04"]
             or type(job.get("id")) is not int or job["id"] < 1 or type(job.get("runner_id")) is not int or job["runner_id"] < 1):
@@ -71,6 +75,12 @@ def public_failure(s3, bucket, record, execution, execution_version, github, now
             or any(failure.get(name) != value for name, value in expected.items())
             or failure.get("classification") not in PUBLIC_FAILURES):
         raise ValueError("Public failure is unknown or belongs to another release; cleanup is required")
+    if pending:
+        lease = record.get("lease")
+        if lease and (lease.get("owner") != f"arn:aws:sts::058114477594:assumed-role/techx-automation-public-acceptance/techx-public-{run_id}"
+                      or lease.get("operation") != "acceptance"):
+            raise ValueError("Failed public workflow has another mutation holder")
+        raise RollbackPending("ROLLBACK_FAILED_PUBLIC_RUNNING")
     return reference
 
 
@@ -112,18 +122,19 @@ def successful_public_predecessor(s3, bucket, record, execution, execution_versi
     return predecessor
 
 
-def preview_rollback(clients, bucket, store, execution, execution_version, github, *, clock, created_at=None, source=None):
+def preview_rollback(clients, bucket, store, execution, execution_version, github, *, clock, created_at=None, source=None, allow_pending=False):
     s3 = clients["s3"]
     now = clock()
     created = utc(created_at) if created_at is not None else now
     expires = created + timedelta(minutes=30)
     record, etag = store.read()
+    public_pending = allow_pending and record.get("lifecycleDispatch", {}).get("operation") == operation("release", "active")
     validate(record); validate(execution)
     admitted, _ = read_json(s3, bucket, f"executions/{execution['sessionId']}.json", execution_version)
     if (admitted != execution or execution.get("action") != "deploy-window-rollback"
             or any(record.get(name) != execution.get(name) for name in CONTEXT)
             or record.get("executionVersion") != execution_version or record.get("status") != "FAILED_NEEDS_CLEANUP"
-            or record.get("lease") or record.get("pendingPlan") is not None or record.get("rollbackAttempt")
+            or record.get("lease") and not public_pending or record.get("pendingPlan") is not None or record.get("rollbackAttempt")
             or not utc(execution["createdAt"]) <= created <= now < expires or expires >= utc(record["cleanupStartAt"])):
         raise ValueError("Rollback requires an idle opted-in failed session, an unused attempt and the original window")
     historical = dict(record, status="TESTING")
@@ -132,11 +143,12 @@ def preview_rollback(clients, bucket, store, execution, execution_version, githu
         raise ValueError("Rollback failure source differs from the requested admission")
     if private:
         from active_private_failure import failed_private_terminal
-        failure = failed_private_terminal(clients, bucket, execution, historical, execution_version, now)
+        failure = failed_private_terminal(clients, bucket, execution, historical, execution_version, now, allow_pending=allow_pending)
         predecessor = successful_public_predecessor(s3, bucket, historical, execution, execution_version, github, now)
     else:
         predecessor = historical
-        failure = public_failure(s3, bucket, record, execution, execution_version, github, now)
+        failure = public_failure(s3, bucket, record, execution, execution_version, github, now, allow_pending=allow_pending)
+    if record.get("lease"): raise ValueError("Rollback cannot consume a failed execution with an unresolved holder")
     if completed_manager(clients, execution, predecessor) != operation("release", "active"):
         raise ValueError("Rollback requires the actual terminal rollout manager and remote task")
     baseline = accepted_baseline(s3, bucket, historical, execution_version)

@@ -37,7 +37,7 @@ def release_context(record):
 def validate_release_start(record, attempt):
     context = release_context(record)
     if (record["status"] != "TESTING" or attempt != 1 or record["releaseCandidate"]["state"] != "PROPOSED"
-            or record["releaseCandidate"].get("rollout")):
+            or record["releaseCandidate"].get("rollout") or record["releaseCandidate"].get("partialRollout")):
         raise ValueError("Only one unconsumed private rollout may run for this candidate")
     return context
 

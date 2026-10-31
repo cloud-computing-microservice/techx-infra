@@ -65,6 +65,7 @@ resource "aws_iam_role_policy" "accepted_history_read" {
     Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = [for prefix in [
       "accepted/staging/*/*.json", "releases/staging/*/active/*", "proposals/staging/*/active/*",
       "promotions/staging/*/receipt.json", "private/staging/*/active/*/rollout.json",
+      "private/staging/*/active/*/partial-rollout.json",
       "private/staging/*/active/*/application/intent.json", "private/staging/*/active/*/acceptance/*.json",
       "private/staging/*/acceptance/*.json", "private/staging/*/exposure/*.json", "acceptance/staging/*/public/*",
       "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",

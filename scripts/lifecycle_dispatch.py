@@ -230,6 +230,7 @@ class Dispatcher:
             raise ValueError("Previous dispatch is unknown; never replay StartBuild")
         else:
             if rollback:
+                failed_predecessor = False
                 from rollback_task_contract import original_record, proposal_record, validate_prepare_start, validate_rollout_start
                 if rollback_private:
                     from rollback_private_contract import restoration_record, validate_private_start
@@ -240,14 +241,20 @@ class Dispatcher:
                 elif op["stage"] == "prepare":
                     validate_prepare_start(current, op["attempt"])
                     predecessor, required = dict(original_record(current), status="TESTING"), operation("release", "active")
-                    if predecessor.get("lifecycleDispatch", {}).get("operation") == operation("verify", "active"):
+                    partial = bool(predecessor.get("releaseCandidate", {}).get("partialRollout"))
+                    if partial:
+                        from partial_rollout import failed_partial_terminal
+                        failed_partial_terminal(self.clients, self.bucket, self.execution, predecessor, self.version, self.clock())
+                        failed_predecessor = True
+                    elif predecessor.get("lifecycleDispatch", {}).get("operation") == operation("verify", "active"):
                         from active_private_failure import failed_private_terminal
                         failed_private_terminal(self.clients, self.bucket, self.execution, predecessor, self.version, self.clock())
                         required = operation("verify", "active")
+                        failed_predecessor = True
                 else:
                     validate_rollout_start(current, op["attempt"])
                     predecessor, required = proposal_record(current), operation("rollback", "prepare")
-                previous = required if op == operation("rollback", "prepare") and required == operation("verify", "active") else completed_manager(self.clients, self.execution, predecessor)
+                previous = required if failed_predecessor else completed_manager(self.clients, self.execution, predecessor)
                 if previous != required: raise ValueError("Rollback requires its exact terminal private predecessor")
             else: previous = completed_manager(self.clients, self.execution, current)
             if rollback:

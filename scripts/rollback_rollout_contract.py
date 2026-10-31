@@ -10,7 +10,11 @@ from rollback_task_contract import key, original_record, read_proposal_receipt, 
 
 
 def failed_rollout(client, bucket, record, version):
-    return read_rollout_receipt(client, bucket, dict(original_record(record), status="TESTING"), version)
+    projected = dict(original_record(record), status="TESTING")
+    if projected.get("releaseCandidate", {}).get("partialRollout"):
+        from partial_rollout import read_partial_rollout
+        return read_partial_rollout(client, bucket, projected, version)
+    return read_rollout_receipt(client, bucket, projected, version)
 
 
 def read_rollback_rollout(client, bucket, record, version):

@@ -415,7 +415,13 @@ failures or exhausted windows still request cleanup. A failed opening is
 never reclassified as an active release failure. Rollback review reads use
 the admitted source archive and a chart-only read token on the protected
 orchestrator environment, without merge scope.
-Partial-rollout failure admission and opening/continuation opt-in wiring
-remain unfinished; the rollback option is not exposed by the opening UI.
+The partial-rollout branch additionally handles an exactly observed selected
+Application that exhausts runtime readiness. Its separate versioned receipt
+records intended artifacts and bounded failed observations; it cannot stand
+in for completed rollout or acceptance evidence. The same failed manager/SSM,
+single-use reservation, protected restore and fresh acceptance are required.
+Unproven Application changes and runtime API errors continue to require cleanup.
+Opening/continuation opt-in wiring remains unfinished; the rollback option is
+not exposed by the opening UI.
 Offline tests do not establish cloud acceptance or authorize a deployment
 window. The existing cleanup schedule and deadline are unchanged.

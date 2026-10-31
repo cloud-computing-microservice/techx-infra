@@ -128,7 +128,8 @@ def preview_rollback(clients, bucket, store, execution, execution_version, githu
     created = utc(created_at) if created_at is not None else now
     expires = created + timedelta(minutes=30)
     record, etag = store.read()
-    public_pending = allow_pending and record.get("lifecycleDispatch", {}).get("operation") == operation("release", "active")
+    partial = bool(record.get("releaseCandidate", {}).get("partialRollout"))
+    public_pending = allow_pending and not partial and record.get("lifecycleDispatch", {}).get("operation") == operation("release", "active")
     validate(record); validate(execution)
     admitted, _ = read_json(s3, bucket, f"executions/{execution['sessionId']}.json", execution_version)
     if (admitted != execution or execution.get("action") != "deploy-window-rollback"
@@ -139,9 +140,13 @@ def preview_rollback(clients, bucket, store, execution, execution_version, githu
         raise ValueError("Rollback requires an idle opted-in failed session, an unused attempt and the original window")
     historical = dict(record, status="TESTING")
     private = record.get("lifecycleDispatch", {}).get("operation") == operation("verify", "active")
-    if source is not None and source != ("private" if private else "public"):
+    if source is not None and source != ("partial" if partial else "private" if private else "public"):
         raise ValueError("Rollback failure source differs from the requested admission")
-    if private:
+    if partial:
+        from partial_rollout import failed_partial_terminal
+        failure = failed_partial_terminal(clients, bucket, execution, historical, execution_version, now, allow_pending=allow_pending)
+        predecessor = None
+    elif private:
         from active_private_failure import failed_private_terminal
         failure = failed_private_terminal(clients, bucket, execution, historical, execution_version, now, allow_pending=allow_pending)
         predecessor = successful_public_predecessor(s3, bucket, historical, execution, execution_version, github, now)
@@ -149,16 +154,19 @@ def preview_rollback(clients, bucket, store, execution, execution_version, githu
         predecessor = historical
         failure = public_failure(s3, bucket, record, execution, execution_version, github, now, allow_pending=allow_pending)
     if record.get("lease"): raise ValueError("Rollback cannot consume a failed execution with an unresolved holder")
-    if completed_manager(clients, execution, predecessor) != operation("release", "active"):
+    if predecessor is not None and completed_manager(clients, execution, predecessor) != operation("release", "active"):
         raise ValueError("Rollback requires the actual terminal rollout manager and remote task")
     baseline = accepted_baseline(s3, bucket, historical, execution_version)
-    rollout = read_rollout_receipt(s3, bucket, historical, execution_version)
+    if partial:
+        from partial_rollout import read_partial_rollout
+        rollout = read_partial_rollout(s3, bucket, historical, execution_version)
+    else: rollout = read_rollout_receipt(s3, bucket, historical, execution_version)
     latest, latest_etag = store.read()
     if latest != record or latest_etag != etag or clock() >= expires:
         raise ValueError("Session/cleanup/window changed during rollback admission")
     value = dict(schemaVersion=1, kind="baseline-rollback-intent", sessionId=record["sessionId"], executionVersion=execution_version,
         failedReleaseId=record["releaseCandidate"]["id"], failedChartSha=rollout["chartSha"], failureReference=failure,
-        rolloutReference=deepcopy(record["releaseCandidate"]["rollout"]["receiptReference"]), acceptedBaseline=baseline,
+        rolloutReference=deepcopy(failure if partial else record["releaseCandidate"]["rollout"]["receiptReference"]), acceptedBaseline=baseline,
         attempt=1, createdAt=created.isoformat(), expiresAt=expires.isoformat(),
         action=execution["action"], cleanupStartAt=record["cleanupStartAt"], deadline=record["deadline"])
     value["rollbackId"] = checksum(value)

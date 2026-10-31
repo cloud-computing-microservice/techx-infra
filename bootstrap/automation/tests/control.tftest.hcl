@@ -453,12 +453,61 @@ run "lifecycle_is_scoped_and_pinned" {
   assert {
     condition = length([for statement in data.aws_iam_policy_document.control.statement : statement if
       statement.sid == "OnlyExecutorCanWriteActiveRollout" && statement.effect == "Deny" &&
-      toset(statement.resources) == toset(["arn:aws:s3:::techx-test-control/private/staging/*/active/*", "arn:aws:s3:::techx-test-control/accepted/staging/*"]) &&
+      toset(statement.resources) == toset(["arn:aws:s3:::techx-test-control/private/staging/*/active/*", "arn:aws:s3:::techx-test-control/accepted/staging/*", "arn:aws:s3:::techx-test-control/private/staging/*/rollback/*"]) &&
       anytrue([for condition in statement.condition : condition.variable == "aws:PrincipalArn" &&
         toset(condition.values) == toset(["arn:aws:iam::058114477594:role/techx-automation-lifecycle-executor"])
       ])
     ]) == 1
-    error_message = "Only the owned deployment executor may produce private active rollout/application evidence."
+    error_message = "Only the owned deployment executor may produce private rollout, rollback and accepted history evidence."
+  }
+  assert {
+    condition = jsondecode(aws_iam_role_policy.rollback_predecessor_read[0].policy) == {
+      Version = "2012-10-17", Statement = [
+        { Effect = "Allow", Action = ["codebuild:BatchGetBuilds"], Resource = "arn:aws:codebuild:us-east-1:058114477594:project/techx-automation-lifecycle" },
+        { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = "*" },
+        { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = "arn:aws:s3:::techx-test-control/handoffs/staging/*" }
+      ]
+    }
+    error_message = "Rollback predecessor reads must not grant StartBuild, SendCommand or unversioned handoff access."
+  }
+  assert {
+    condition = alltrue([for statement in jsondecode(aws_iam_role_policy.rollback_proposal_read[0].policy).Statement :
+      statement.Action == ["s3:GetObjectVersion"] && toset(statement.Resource) == toset([
+        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/intent.json",
+        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/proposal.json",
+        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/rollout.json",
+        "arn:aws:s3:::techx-test-control/private/staging/*/rollback/application/intent.json"
+      ])
+    ])
+    error_message = "Dispatcher may only version-read fixed private rollback proposal, rollout and Application evidence, without write or unversioned access."
+  }
+  assert {
+    condition = alltrue([for statement in jsondecode(aws_iam_role_policy.rollback_public_evidence[0].policy).Statement :
+      statement.Action == ["s3:GetObjectVersion"] && toset(statement.Resource) == toset([for prefix in [
+        "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",
+        "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json", "promotions/staging/*/intent.json"
+      ] : "arn:aws:s3:::techx-test-control/${prefix}"])
+    ])
+    error_message = "Hosted rollback public probes may only version-read restored binding, without private inputs, credentials or workload authority."
+  }
+  assert {
+    condition = length(aws_iam_role_policy.rollback_review_evidence) == 2 && alltrue([
+      for policy in aws_iam_role_policy.rollback_review_evidence :
+      jsondecode(policy.policy) == {
+        Version = "2012-10-17", Statement = [
+          { Effect = "Allow", Action = ["codebuild:BatchGetBuilds"], Resource = "arn:aws:codebuild:us-east-1:058114477594:project/techx-automation-lifecycle" },
+          { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = "*" },
+          { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = [
+            "arn:aws:s3:::techx-test-control/control/staging/tasks/*.json",
+            "arn:aws:s3:::techx-test-control/private/staging/*/rollback/intent.json",
+            "arn:aws:s3:::techx-test-control/private/staging/*/rollback/proposal.json"
+          ] },
+          { Effect = "Allow", Action = ["s3:ListBucket"], Resource = "arn:aws:s3:::techx-test-control",
+          Condition = { StringLike = { "s3:prefix" = ["acceptance/staging/*/active/*/public/*/failure.json"] } } }
+        ]
+      }
+    ])
+    error_message = "Rollback preview/approval may read exact immutable evidence and terminal outcomes, without dispatch, artifact write, private inputs or workload authority."
   }
   assert {
     condition = length([for statement in jsondecode(aws_iam_role_policy.public_acceptance[0].policy).Statement : statement if
@@ -518,11 +567,16 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Only the owned executor writes merge calls and reads the two fixed tagged App keys; grants stay separate."
   }
   assert {
-    condition = (length(aws_iam_role_policy.accepted_history_read) == 5 && alltrue([
+    condition = (length(aws_iam_role_policy.accepted_history_read) == 6 && alltrue([
       for policy in aws_iam_role_policy.accepted_history_read :
       jsondecode(policy.policy).Statement[0].Action == ["s3:GetObjectVersion"] &&
       contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/accepted/staging/*/*.json") &&
-      contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/private/staging/*/active/*/acceptance/*.json")
+      contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/private/staging/*/active/*/acceptance/*.json") &&
+      alltrue([for prefix in [
+        "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",
+        "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json",
+        "private/staging/*/rollback/acceptance/*.json", "promotions/staging/*/intent.json"
+      ] : contains(jsondecode(policy.policy).Statement[0].Resource, "arn:aws:s3:::techx-test-control/${prefix}")])
       ]) && jsondecode(aws_iam_role_policy.accepted_history_write[0].policy).Statement[0].Action == ["s3:PutObject"] &&
       jsondecode(aws_iam_role_policy.accepted_history_write[0].policy).Statement[0].Resource == "arn:aws:s3:::techx-test-control/accepted/staging/*/*.json" &&
       length([for statement in data.aws_iam_policy_document.control.statement : statement if

@@ -1249,3 +1249,152 @@ and dispatcher identities may version-read its exact proofs, not overwrite them;
 the public acceptance role gets no additional private access. Original execution
 source revisions and cold checkpoints are retained. AMI rebake, actual AWS/VPN
 acceptance, bounded rollback and expanded recovery/inventory remain pending.
+
+### Bounded rollback preparation and protected review (source only)
+
+The draft opt-in action `deploy-window-rollback` is not exposed by the opening
+workflow. Its source admits a terminal failed active public check only after
+reading the exact protected workflow, hosted job, failure diagnostic, rollout
+manager/SSM results and accepted baseline. A session CAS reserves one attempt
+with a 30-minute intent that cannot extend the original cleanup window.
+
+`RollbackPrepareController` dispatches one `rollback / prepare / 1` manager.
+The manager and AMI loader bind one task to the owned persistent EC2 executor;
+the worker holds a rollback lease and persists the session's fixed immutable
+`private/staging/<session>/rollback/intent.json` and `proposal.json` objects.
+It restores only the two release blobs from the accepted chart, rechecks live
+scope before Git writes, and opens an unmerged PR. A lost StartBuild response
+is not replayed. The controller requires terminal CodeBuild and SSM success,
+the durable task checkpoint and versioned proposal readback before review.
+
+`RollbackHandoffDriver` consumes the positively verified failed public handoff
+and dispatches a separate `review-rollback` intent to `staging-chart-promote.yml`.
+The child binds the exact prepared task, rollback reservation, failed candidate,
+baseline and source. The rollback review refuses a blank dispatch ID. It checks
+the full restored Git tree, original parent, latest exact-head PR CI, fresh human
+PR approval and opening App-only branch policy, with repeated checks for races.
+After the protected environment's actual human approval, the bridge can write
+a separate `rollback-promotion-approval` and run index. Its expiry is bounded by
+15 minutes, the cleanup margin, and the rollback intent's original expiry.
+Cold and READY approval readers reject this distinct kind.
+
+The executor can read the fixed manager's terminal build and SSM result; preview
+and approval roles gain only evidence reads and failure-key discovery. Dispatcher
+can version-read the fixed proposal, rollout and Application evidence, not write them. Other writers are
+denied by the bucket policy. CodeBuild's project-scoped BatchGetBuilds permission
+follows the [AWS service authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_codebuild.html).
+
+This is not an operational rollback pipeline. Main orchestration, public/private
+runtime acceptance, accepted rollback history and private/partial-rollout failure
+proofs still require integration. Private grant/merge/restore source is described
+below. No grant, open PR or Synced/Healthy observation alone
+may publish READY or replace the accepted baseline. Original cleanup scheduling
+remains armed; unknown outcomes require cleanup. Rebuild and verify the AMI for
+the changed loader before live acceptance; source tests do not prove AWS behavior.
+
+### Private rollback merge and Application restoration (source only)
+
+`consume_grant` reads the actual successful first-attempt protected review,
+environment approval, run index, immutable grant and original prepared evidence.
+It repeats current PR/tree/CI/review checks and uses one CAS to store APPROVED,
+consume the review and retain its preparation snapshot. A lost successful CAS
+can only recover that same grant. No attempt or original expiry is reset.
+
+The typed `rollback / rollout / 1` task pins the grant, proposal, reservation and
+preparation snapshot. The dispatcher, manager, SSM document, AMI loader and EC2
+CLI keep the same immutable execution and original window. Only the assigned
+RUNNING executor may claim the rollback lease. The worker verifies the protected
+review again before using pinned private App credentials to merge the exact PR
+head. Existing one-use merge intent/calling/readback rules apply. Main movement
+after the calling marker stops the merge; lost responses require positive exact
+commit/parents/tree/App/window observations, never another merge API call.
+
+After actual CI of the merge SHA passes, the worker restores the pinned Argo CD
+Application with atomic tests for its original UID, session, failed-release spec
+and failed intent stamp. The new revision is the rollback merge commit, with the
+accepted baseline's manifest and runtime digests. The old accepted chart SHA is
+not mistaken for this new merge SHA. Patch response loss is reconciled only by
+the same UID/spec/session/new intent stamp; readiness additionally checks the
+three deployed/running image digests and reads Application identity again.
+
+The executor publishes the versioned fixed `rollback/rollout.json` receipt and
+RESTORED checkpoint. The failed candidate, original sources, accepted baseline
+and FAILED_NEEDS_CLEANUP lifecycle state stay intact. The parent separately
+requires successful terminal CodeBuild/SSM, the durable task and receipt/merge/
+Application evidence before returning `ROLLBACK_PUBLIC_ACCEPTANCE`.
+`RollbackReleaseController` supplies this preparation/review/restore observation
+flow, but is not yet wired into main operational orchestration. Public binding is
+described below; the private acceptance/history handoff follows in the next
+section. CLI/loader paths and SDK faults are tested offline; no AWS or GitHub
+merge is performed by these tests. Rebuild/verify the changed AMI before any
+authorized live run, and leave the opening opt-in hidden until integration ends.
+
+### Hosted rollback public acceptance (source only)
+
+The existing acceptance workflow has a third, mutually exclusive restored scope:
+`rollback_id` plus the exact private `rollout_sha256`, without cold activation or
+active release inputs. The input validator runs before AWS credentials. The
+protected `accept-rollback-public` handoff binds the restored reservation, task,
+candidate and baseline to an actual first-attempt hosted main workflow/job.
+The public role gains version-read access only to the fixed restored artifacts
+and sanitized merge intent, without private inputs, credentials or task writes.
+
+`rollback_public_acceptance.py` holds its run-scoped rollback lease and uses the
+same verified public DNS/TLS/storefront/API/order/cache/admin-block probes. It
+writes a separate versioned receipt under
+`acceptance/staging/<session>/rollback/<rollbackId>/public/<dispatch>/result.json`.
+The original cold and failed active results cannot satisfy this checkpoint.
+FAILED_NEEDS_CLEANUP, the failed candidate and the accepted baseline stay intact.
+Probe failure records a sanitized failed checkpoint and requires cleanup; it
+does not reserve another rollback or extend the original intent/window.
+
+`RollbackReleaseController.observe_public()` waits for actual successful terminal
+workflow and public job observations, verifies the same receipt/runner/context,
+and atomically consumes the handoff while retaining the restoration snapshot.
+The next boundary is `ROLLBACK_PRIVATE_ACCEPTANCE`, not READY. A CALLING handoff
+can recover a positive original receipt even while the probe has progressed;
+recovery never reposts the workflow. Unknown outcomes request cleanup. An early
+public observer keeps the existing live restore handle rather than dispatching
+another operation. Private acceptance and atomic READY are described below;
+main orchestration and actual cloud acceptance remain pending.
+Cleanup recognizes cold, active and rollback leases of the same HTTP-only public
+role. It can fence that probe without GitHub cancellation only after every
+infrastructure manager/EC2 executor is positively terminal; unknown holder types
+or an unproven terminal result still block takeover.
+
+### Private rollback acceptance and accepted history (source only)
+
+`RollbackReleaseController.observe_private()` consumes the terminal restoration
+and public handoff exactly once, then dispatches `verify/rollback/1`. The manager,
+SSM document, AMI loaders and fixed CLI bind the immutable task to that context.
+The rollback lease is restricted to the bound manager/executor; a public worker
+or an old cold/active task cannot claim this private work. Expiry stays within
+the original rollback intent and deployment window. Unknown manager starts are
+not repeated, and failure requests cleanup.
+
+`rollback_private_acceptance.py` runs the VPN/TUN/DNS/TLS, authenticated Argo,
+exact runtime digest, ECR scan, DynamoDB/IRSA, self-heal and order restart suite
+against the restored revision and its fresh public order. The manifest comes
+from the versioned accepted-baseline merge intent, not the failed candidate.
+Argo must keep the restored UID, session annotation, intent stamp and exact spec;
+identity is rechecked after readiness waits. Positive VPN disconnect is required.
+The versioned receipt is isolated at
+`private/staging/<session>/rollback/acceptance/<taskId>.json`. The child only
+publishes PASSED; the failed candidate and previous baseline remain unchanged.
+
+After child exit zero, the private parent rereads the full receipt chain and
+writes immutable `accepted-rollback-release` history. A single session CAS then
+sets READY and the new accepted baseline, removes the failed candidate and old
+active snapshot, and releases the lease. The rollback ledger is retained as the
+session's one-attempt cap. Generic lifecycle transitions cannot publish this
+FAILED-to-READY edge. A nonzero child, changed session/lease, expired intent,
+cleanup race, or invalid history cannot publish READY.
+
+Accepted-baseline readers verify a bounded mixed active/rollback history down
+to the original cold acceptance. Only the executor writes history; the five
+baseline readers gain version-only access to the fixed rollback proof objects,
+not VPN credentials/private inputs. SSM and CodeBuild must also be observed
+terminal/successful before the controller reports READY. Source fixtures cover
+the CLI/loader/manager and runtime fault boundaries; they are not cloud evidence.
+Main orchestration, private/partial-rollout failure admission, remaining recovery
+work, AMI bake and cloud gates remain required before exposing the opening opt-in.

@@ -32,13 +32,15 @@ http_support = load("active_public_http_fixture", "test-public-probe.py")
 
 
 class ActivePublicTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self, action=None):
         self.r = rollout_support.RolloutTests()
         self.r.setUp(); self.addCleanup(self.r.doCleanups)
         r = self.r
         r.perform()
         self.f, self.d = r.f, r.d
         f = self.f
+        if action is not None:
+            f.record["action"] = self.d.execution["action"] = r.runtime.execution["action"] = action
         f.record = release(f.record, r.owner, r.epoch)
         finish_task(f.store, r.task, True, f.now)
         r.build.update(buildStatus="SUCCEEDED", buildComplete=True)

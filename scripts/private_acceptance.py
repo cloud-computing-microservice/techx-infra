@@ -44,6 +44,7 @@ class PrivateAcceptance:
     def receipt_fields(self, record): return {}
     def receipt_key(self, record): return f"private/staging/{record['sessionId']}/acceptance/{self.task_id}.json"
     def read_receipt(self, record): return read_private_receipt(self.runtime.clients["s3"], self.runtime.bucket, record, self.version)
+    def validate_application(self, app): pass
 
     def validate_record(self, record):
         if (any(record.get(key) != self.runtime.execution.get(key) for key in ("sessionId", "account", "region", "environment",
@@ -154,6 +155,7 @@ class PrivateAcceptance:
             raise PrivateFailure("argocd-authentication")
         status, app = http.request("GET", "/argocd/api/v1/applications/techx-staging", token=token)
         if status != 200: raise PrivateFailure("argocd-authorization")
+        self.validate_application(app)
         source, observed = app.get("spec", {}).get("source", {}), app.get("status", {})
         if (source.get("targetRevision") != self.selected["chartSha"] or source.get("repoURL") != "https://github.com/cloud-computing-microservice/techx-chart.git"
                 or observed.get("sync", {}).get("status") != "Synced" or observed.get("sync", {}).get("revision") != self.selected["chartSha"]
@@ -205,6 +207,8 @@ class PrivateAcceptance:
         self.checkpoint(resilience=dict(state="PASSED"))
 
     def perform(self, owner, epoch):
+        self.failure_tunnel = None
+        self.failure_checkpoint_owned = False
         self.owner, self.epoch = owner, epoch
         record = self.guard()
         self.context_hash = self.validate_start(record)
@@ -219,6 +223,7 @@ class PrivateAcceptance:
         validator.validate_manifest(release["manifest"])
         images = {COMPONENTS[row["component"]]: row["image"].split(":staging-", 1)[0] + "@" + row["digest"] for row in release["manifest"]["images"]}
         self.checkpoint(state="RUNNING", attempt=1, taskId=self.task_id, contextSha256=self.context_hash)
+        self.failure_checkpoint_owned = True
         self.kube = GitOpsBootstrap(self.runtime, self.store, self.version, self.task_id, clock=self.clock, sleep=self.sleep)
         self.kube.guard = self.binding_guard
         self.kube.selected, self.kube.images = self.selected, images
@@ -227,6 +232,7 @@ class PrivateAcceptance:
         self.artifacts(release)
         self.persistence(state)
         tunnel = self.tunnel_factory(self.runtime, self.binding_guard, self.binding, self.task_id, sleep=self.sleep)
+        self.failure_tunnel = tunnel
         with tunnel.opened():
             http = self.http_factory(tunnel, self.binding_guard)
             self.argocd(http)

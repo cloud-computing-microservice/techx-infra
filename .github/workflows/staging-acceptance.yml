@@ -30,6 +30,11 @@ on:
         required: false
         default: ''
         type: string
+      rollback_id:
+        description: Restored rollback only; leave blank for cold or active acceptance
+        required: false
+        default: ''
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -52,6 +57,7 @@ jobs:
       ACTIVATION_SHA256: ${{ inputs.activation_sha256 }}
       RELEASE_ID: ${{ inputs.release_id }}
       ROLLOUT_SHA256: ${{ inputs.rollout_sha256 }}
+      ROLLBACK_ID: ${{ inputs.rollback_id }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -64,10 +70,11 @@ jobs:
           assert re.fullmatch(r'staging-[A-Za-z0-9-]{1,64}', os.environ['SESSION_ID'])
           assert re.fullmatch(r'[A-Za-z0-9_./+=-]{1,1024}', os.environ['EXECUTION_VERSION'])
           assert re.fullmatch(r'[a-f0-9]{64}', os.environ['TECHX_DISPATCH_ID'])
-          activation, release, rollout = (os.environ[key] for key in ('ACTIVATION_SHA256', 'RELEASE_ID', 'ROLLOUT_SHA256'))
-          cold = bool(re.fullmatch(r'[a-f0-9]{64}', activation)) and not release and not rollout
-          active = not activation and bool(re.fullmatch(r'[a-f0-9]{64}', release)) and bool(re.fullmatch(r'[a-f0-9]{64}', rollout))
-          assert cold != active
+          activation, release, rollout, rollback = (os.environ[key] for key in ('ACTIVATION_SHA256', 'RELEASE_ID', 'ROLLOUT_SHA256', 'ROLLBACK_ID'))
+          cold = bool(re.fullmatch(r'[a-f0-9]{64}', activation)) and not release and not rollout and not rollback
+          active = not activation and not rollback and bool(re.fullmatch(r'[a-f0-9]{64}', release)) and bool(re.fullmatch(r'[a-f0-9]{64}', rollout))
+          restored = not activation and not release and bool(re.fullmatch(r'[a-f0-9]{64}', rollback)) and bool(re.fullmatch(r'[a-f0-9]{64}', rollout))
+          assert sum(map(bool, (cold, active, restored))) == 1
           PY
       - run: python -m pip install -r scripts/requirements-automation.txt
       - uses: aws-actions/configure-aws-credentials@ce2ec50a23cfb8aacf5544bea7a651d803d626f6
@@ -85,6 +92,9 @@ jobs:
           if [ -n "$ACTIVATION_SHA256" ]; then
             python scripts/public_acceptance.py --bucket "$CONTROL_BUCKET" --session-id "$SESSION_ID" \
               --execution-version "$EXECUTION_VERSION" --activation-sha256 "$ACTIVATION_SHA256"
+          elif [ -n "$ROLLBACK_ID" ]; then
+            python scripts/rollback_public_acceptance.py --bucket "$CONTROL_BUCKET" --session-id "$SESSION_ID" \
+              --execution-version "$EXECUTION_VERSION" --rollback-id "$ROLLBACK_ID" --rollout-sha256 "$ROLLOUT_SHA256"
           else
             python scripts/active_public_acceptance.py --bucket "$CONTROL_BUCKET" --session-id "$SESSION_ID" \
               --execution-version "$EXECUTION_VERSION" --release-id "$RELEASE_ID" --rollout-sha256 "$ROLLOUT_SHA256"

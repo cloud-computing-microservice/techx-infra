@@ -4,7 +4,7 @@ An ambiguous SendCommand is never retried. Only a completed SSM invocation plus
 the durable remote result permits the next task on the same persistent VM.
 """
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
 import re
@@ -19,6 +19,10 @@ MANAGER_ROLE = f"arn:aws:iam::{ACCOUNT}:role/techx-automation-lifecycle-manager"
 PROFILE = f"arn:aws:iam::{ACCOUNT}:instance-profile/techx-automation-lifecycle-executor"
 ACTIVE = {"Pending", "InProgress", "Delayed", "Cancelling"}
 TERMINAL = {"Success", "Cancelled", "TimedOut", "Failed"}
+
+
+class RollbackCandidateFailed(ValueError):
+    """Exit this manager as failed while the controller verifies rollback."""
 
 
 def observe_command(ssm, config, pointer):
@@ -99,7 +103,16 @@ class DeploymentManager:
             if record.get(key) != self.execution.get(key):
                 raise ValueError("Current session differs from admitted execution")
         active = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") in (dict(mode="release", stage="active", attempt=1), dict(mode="verify", stage="active", attempt=1))
-        if (record.get("executionVersion") != self.version or not (active or record["status"] in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING")))
+        rollback = record["status"] == "FAILED_NEEDS_CLEANUP" and record.get("lifecycleDispatch", {}).get("operation") in (dict(mode="rollback", stage="prepare", attempt=1), dict(mode="rollback", stage="rollout", attempt=1), dict(mode="verify", stage="rollback", attempt=1))
+        if rollback:
+            from cleanup_completion import CONTEXT as immutable_context
+            from rollback_task_contract import slot
+            value = slot(record)
+            if (self.execution.get("action") != "deploy-window-rollback"
+                    or any(record.get(name) != self.execution.get(name) for name in immutable_context)
+                    or self.clock() >= utc(value["intent"]["expiresAt"])):
+                raise ValueError("Rollback preparation immutable opt-in context changed or expired")
+        if (record.get("executionVersion") != self.version or not (active or rollback or record["status"] in (("PLANNING", "PROVISIONING", "READY") if allow_ready else ("PLANNING", "PROVISIONING")))
                 or self.clock() >= utc(record["cleanupStartAt"])):
             raise ValueError("Session is closed for deployment")
         if active:
@@ -108,6 +121,8 @@ class DeploymentManager:
             ref = record["lifecycleDispatch"]
             if ref.get("phase") == "OBSERVED" and ref.get("buildId") != self.owner.split(":build/", 1)[1]:
                 raise ValueError("Active task belongs to another actual manager build")
+        if rollback and record["lifecycleDispatch"].get("phase") == "OBSERVED" and record["lifecycleDispatch"].get("buildId") != self.owner.split(":build/", 1)[1]:
+            raise ValueError("Rollback task belongs to another actual manager build")
         verify_existing(self.clients["scheduler"], record, self.version, self.clock())
         if record["status"] == "READY":
             from deployment_tasks import validate_result
@@ -133,6 +148,42 @@ class DeploymentManager:
         self.clients["lambda"].invoke(FunctionName=f"arn:aws:lambda:us-east-1:{ACCOUNT}:function:techx-automation-cleanup-launcher",
             InvocationType="Event", Payload=json.dumps(dict(sessionId=self.execution["sessionId"], executionVersion=self.version,
                                                                        requestedEarly=True)).encode())
+
+    def rollback_candidate(self, pointer):
+        """Read-only disposition of this manager's positively failed private task.
+
+        This grants no reservation or rollback mutation. The parent must still
+        observe this CodeBuild as terminal and independently admit the failure.
+        The existing scheduler/deadline remain in force if no parent resumes.
+        """
+        from active_private_failure import failed_private_terminal
+        from automation_budget import validate_estimate
+        from cleanup_completion import CONTEXT
+        from plan_review_store import read_json
+        current, etag = self.store.read()
+        if (current.get("status") != "FAILED_NEEDS_CLEANUP" or self.execution.get("action") != "deploy-window-rollback"
+                or current.get("lifecycleDispatch", {}).get("operation") != dict(mode="verify", stage="active", attempt=1)):
+            return None
+        identity = self.clients["sts"].get_caller_identity()
+        now = self.clock()
+        validate(current); validate(self.execution)
+        admitted, _ = read_json(self.clients["s3"], self.bucket, f"executions/{self.execution['sessionId']}.json", self.version)
+        task = current.get("deploymentTask", {})
+        if (admitted != self.execution or any(current.get(k) != self.execution.get(k) for k in CONTEXT)
+                or current.get("executionVersion") != self.version or current.get("lease") or current.get("pendingPlan") is not None
+                or current.get("rollbackAttempt") or now + timedelta(minutes=30) >= utc(current["cleanupStartAt"])
+                or identity.get("Account") != ACCOUNT or not re.fullmatch(
+                    rf"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-lifecycle-manager/[^/]+", identity.get("Arn", ""))
+                or task.get("managerArn") != self.owner or any(pointer.get(k) != task.get(k) for k in
+                    ("taskId", "commandId", "reference", "managerArn", "mode", "stage", "attempt", "instanceId"))):
+            raise ValueError("Failed private manager has no original idle opted-in task/window")
+        validate_estimate(current, self.execution["costEstimate"])
+        verify_existing(self.clients["scheduler"], current, self.version, now)
+        ref = failed_private_terminal(self.clients, self.bucket, self.execution, current, self.version, now, require_manager=False)
+        latest, latest_etag = self.store.read()
+        if latest != current or latest_etag != etag or self.clock() + timedelta(minutes=30) >= utc(current["cleanupStartAt"]):
+            raise ValueError("Private failure changed during manager disposition")
+        return ref
 
     def fail_dispatch(self, task_id):
         record, etag = self.store.read()
@@ -167,8 +218,11 @@ class DeploymentManager:
 
     def dispatch(self, private, mode, stage, attempt):
         record, etag = self.current()
+        rollback_private = (mode, stage) == ("verify", "rollback")
+        if record["status"] == "FAILED_NEEDS_CLEANUP" and (mode, stage) not in (("rollback", "prepare"), ("rollback", "rollout"), ("verify", "rollback")):
+            raise ValueError("Failed sessions can dispatch only the exact reserved rollback task")
         if record["status"] == "TESTING" and (mode, stage) not in (("release", "active"), ("verify", "active")): raise ValueError("An active session cannot dispatch cold work")
-        if mode == "release" or (mode, stage) == ("verify", "active"):
+        if mode in ("release", "rollback") or rollback_private or (mode, stage) == ("verify", "active"):
             # StartBuild may begin before its positive handle is checkpointed.
             # Observe that same call; never create a task from a guessed build.
             for observation in range(24):
@@ -178,7 +232,19 @@ class DeploymentManager:
                 if ref.get("phase") != "CALLING": raise ValueError("Active manager has no protected call to observe")
                 self.sleep(1)
             else: raise TimeoutError("Active manager is still awaiting its protected dispatch receipt")
-        self.previous_terminal(record)
+        if rollback_private:
+            from rollback_private_contract import restoration_record
+            self.previous_terminal(restoration_record(record))
+        elif mode == "rollback":
+            from rollback_task_contract import original_record, proposal_record
+            predecessor = proposal_record(record) if stage == "rollout" else dict(original_record(record), status="TESTING")
+            if stage == "prepare" and predecessor.get("lifecycleDispatch", {}).get("operation") == dict(mode="verify", stage="active", attempt=1):
+                # Dispatcher and the owned worker also require actual terminal
+                # CodeBuild. This manager has no permission to inspect builds.
+                from active_private_failure import failed_private_terminal
+                failed_private_terminal(self.clients, self.bucket, self.execution, predecessor, self.version, self.clock(), require_manager=False)
+            else: self.previous_terminal(predecessor)
+        else: self.previous_terminal(record)
         instance = inspect_instance(self.clients["ec2"], self.execution, private)
         self.verify_document()
         from lifecycle_stage import validate_planning
@@ -208,10 +274,18 @@ class DeploymentManager:
             from active_public_contract import read_active_public_receipt
             validate_active_private_start(record, attempt)
             read_active_public_receipt(self.clients["s3"], self.bucket, record, self.version)
+        elif rollback_private:
+            from rollback_private_contract import validate_private_start
+            from rollback_public_contract import read_public_receipt
+            validate_private_start(record, attempt)
+            read_public_receipt(self.clients["s3"], self.bucket, record, self.version)
+        elif mode == "rollback" and stage in ("prepare", "rollout"):
+            from rollback_task_contract import validate_prepare_start, validate_rollout_start
+            (validate_rollout_start if stage == "rollout" else validate_prepare_start)(record, attempt)
         elif (mode != "apply" or record.get("stages", {}).get(stage, {}).get("state") != "AWAITING_APPROVAL"
                 or record["stages"][stage].get("attempt") != attempt or record.get("pendingPlan", {}).get("stage") != stage):
             raise ValueError("Task requires a supported plan or pending apply stage")
-        owned = claim(record, self.owner, "release" if mode == "release" else "acceptance" if (mode, stage) == ("verify", "active") else "deploy", now=self.clock())
+        owned = claim(record, self.owner, "rollback" if mode == "rollback" or rollback_private else "release" if mode == "release" else "acceptance" if (mode, stage) == ("verify", "active") else "deploy", now=self.clock())
         self.store.write(owned, etag)
         epoch, task_id = owned["lease"]["epoch"], uuid.uuid4().hex
         persisted = False
@@ -257,6 +331,7 @@ class DeploymentManager:
             raise ValueError("Bounded task observation is required")
         try:
             for _ in range(max_observations):
+                if self.rollback_candidate(pointer): raise RollbackCandidateFailed("Private candidate failed; await terminal manager admission")
                 record, _ = self.current(allow_ready=pointer.get("mode") == "verify")
                 active = record.get("deploymentTask", {})
                 if active.get("taskId") != pointer["taskId"] or active.get("commandId") != pointer.get("commandId"):
@@ -265,6 +340,7 @@ class DeploymentManager:
                 if result is not None and result["Status"] in TERMINAL:
                     # The remote process can finish between the session read
                     # and this SSM observation. Fetch its terminal checkpoint.
+                    if self.rollback_candidate(pointer): raise RollbackCandidateFailed("Private candidate failed; await terminal manager admission")
                     record, _ = self.current(allow_ready=pointer.get("mode") == "verify")
                     active = record.get("deploymentTask", {})
                     if active.get("taskId") != pointer["taskId"] or active.get("commandId") != pointer.get("commandId"):
@@ -278,6 +354,8 @@ class DeploymentManager:
                     return active
                 self.sleep(5)
             raise TimeoutError("Remote task observation timed out; the same command may still be running")
+        except RollbackCandidateFailed:
+            raise
         except BaseException:
             self.request_cleanup()
             raise

@@ -74,8 +74,29 @@ class PrivateActiveRollout(PrivateChartPromotion):
         if self.chart.get("git/ref/heads/main").get("object", {}).get("sha") != chosen:
             raise ValueError("Chart main moved from this exact promoted release")
 
+    def execution_end(self, record): return utc(record["cleanupStartAt"]) - timedelta(seconds=60)
+
+    def application_context(self, record): return release_context(record)
+
+    def application_key(self, record):
+        return f"private/staging/{record['sessionId']}/active/{self.context['releaseId']}/application/intent.json"
+
+    def application_previous_revision(self, record): return self.context["acceptedBaseline"]["chartSha"]
+
+    def application_intent(self, record, receipt, merge_ref, uid, previous_spec):
+        return dict(schemaVersion=1, kind="active-application-intent", sessionId=record["sessionId"], executionVersion=self.version,
+            taskId=self.task_id, releaseContext=self.context, mergeReceiptReference=merge_ref, chartSha=receipt["chartSha"],
+            uid=uid, previousSpec=previous_spec)
+
+    def application_predecessor(self, app, record, previous_spec): pass
+
+    def application_patch_tests(self, record): return []
+
+    def application_manifest(self, record):
+        return read_manifest(self.runtime.clients["s3"], self.runtime.bucket, record, self.version)["manifest"]
+
     def main_ci(self, chosen):
-        end = min(self.clock() + timedelta(minutes=10), utc(self.guard()["cleanupStartAt"]) - timedelta(seconds=60))
+        end = min(self.clock() + timedelta(minutes=10), self.execution_end(self.guard()))
         for _ in range(120):
             if self.clock() >= end: break
             self.current_chart(chosen)
@@ -110,15 +131,16 @@ class PrivateActiveRollout(PrivateChartPromotion):
 
     def application(self, receipt, merge_ref, ci_run):
         record = self.guard()
-        self.context = release_context(record)
-        key = f"private/staging/{record['sessionId']}/active/{self.context['releaseId']}/application/intent.json"
+        self.context = self.application_context(record)
+        key = self.application_key(record)
         self.kube = GitOpsBootstrap(self.runtime, self.store, self.version, self.task_id, clock=self.clock, sleep=self.sleep)
         self.kube.guard = self.guard
         self.kube.cluster()
         template = self.kube.kubectl("create", "--dry-run=client", "--validate=false", "-f", str(self.runtime.source / "techx-chart/gitops/clusters/staging/application.yaml"), "-o", "json")
         previous_spec = deepcopy(template.get("spec", {}))
-        previous_spec.setdefault("source", {})["targetRevision"] = self.context["acceptedBaseline"]["chartSha"]
-        if (previous_spec.get("source") != dict(repoURL=f"https://github.com/{CHART_REPO}.git", targetRevision=self.context["acceptedBaseline"]["chartSha"], path=".", helm=dict(valueFiles=["values-staging.yaml", "values-domain-vpn.yaml"]))
+        previous_revision = self.application_previous_revision(record)
+        previous_spec.setdefault("source", {})["targetRevision"] = previous_revision
+        if (previous_spec.get("source") != dict(repoURL=f"https://github.com/{CHART_REPO}.git", targetRevision=previous_revision, path=".", helm=dict(valueFiles=["values-staging.yaml", "values-domain-vpn.yaml"]))
                 or previous_spec.get("destination") != dict(server="https://kubernetes.default.svc", namespace="techx-staging")):
             raise ValueError("Bundled Application is outside the admitted chart/namespace")
         expected_spec = deepcopy(previous_spec)
@@ -129,9 +151,7 @@ class PrivateActiveRollout(PrivateChartPromotion):
                 or metadata.get("name") != APPLICATION or metadata.get("namespace") != "argocd"
                 or metadata.get("annotations", {}).get(SESSION_ANNOTATION) != record["sessionId"]):
             raise ValueError("Existing Application does not belong to this session")
-        expected = dict(schemaVersion=1, kind="active-application-intent", sessionId=record["sessionId"], executionVersion=self.version,
-            taskId=self.task_id, releaseContext=self.context, mergeReceiptReference=merge_ref, chartSha=receipt["chartSha"],
-            uid=metadata["uid"], previousSpec=previous_spec)
+        expected = self.application_intent(record, receipt, merge_ref, metadata["uid"], previous_spec)
         existing = listed_json(self.runtime.clients["s3"], self.runtime.bucket, key)
         if existing:
             intent, intent_ref = existing
@@ -139,6 +159,7 @@ class PrivateActiveRollout(PrivateChartPromotion):
                 raise ValueError("Application intent was superseded or belongs to another task")
         else:
             if app.get("spec") != previous_spec: raise ValueError("Application no longer selects the accepted baseline")
+            self.application_predecessor(app, record, previous_spec)
             intent = dict(expected, createdAt=self.clock().isoformat())
             intent_ref = self.put(key, intent)
         stamp = checksum(intent)
@@ -159,7 +180,9 @@ class PrivateActiveRollout(PrivateChartPromotion):
                 self.guard()
                 self.current_chart(receipt["chartSha"])
                 operations = [dict(op="test", path="/metadata/uid", value=intent["uid"]), dict(op="test", path="/spec", value=previous_spec),
-                    dict(op="test", path="/metadata/annotations/techx.io~1session-id", value=record["sessionId"]),
+                    dict(op="test", path="/metadata/annotations/techx.io~1session-id", value=record["sessionId"])]
+                operations += self.application_patch_tests(record)
+                operations += [
                     dict(op="add", path="/metadata/annotations/techx.io~1release-intent", value=stamp),
                     dict(op="replace", path="/spec/source/targetRevision", value=receipt["chartSha"])]
                 try:
@@ -167,15 +190,16 @@ class PrivateActiveRollout(PrivateChartPromotion):
                 except Exception:
                     self.app_observation(self.kube.get("application", APPLICATION, "argocd"), expected_spec, intent["uid"], stamp)
         self.app_observation(self.kube.get("application", APPLICATION, "argocd"), expected_spec, intent["uid"], stamp)
-        manifest = read_manifest(self.runtime.clients["s3"], self.runtime.bucket, self.guard(), self.version)["manifest"]
+        manifest = self.application_manifest(self.guard())
         self.kube.selected = dict(chartSha=receipt["chartSha"])
         self.kube.images = {COMPONENTS[row["component"]]: row["image"].split(":staging-", 1)[0] + "@" + row["digest"] for row in manifest["images"]}
-        end = min(self.clock() + timedelta(minutes=10), utc(record["cleanupStartAt"]) - timedelta(seconds=60))
+        end = min(self.clock() + timedelta(minutes=10), self.execution_end(record))
         for _ in range(120):
             if self.clock() >= end: break
             self.guard()
             if self.kube.observe_ready(allow_readiness_restart=False):
                 self.current_chart(receipt["chartSha"])
+                self.app_observation(self.kube.get("application", APPLICATION, "argocd"), expected_spec, intent["uid"], stamp)
                 return dict(uid=intent["uid"], intentReference=intent_ref, specSha256=checksum(expected_spec), stamp=stamp), deepcopy(self.kube.images)
             self.sleep(5)
         raise TimeoutError("Argo/runtime did not reach this exact promoted revision in the original window")

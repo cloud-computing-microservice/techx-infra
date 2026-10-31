@@ -9,7 +9,7 @@ on:
         required: false
         type: string
       session_id:
-        description: Existing cold or READY session with an immutable changed-chart proposal
+        description: Existing cold, READY or prepared rollback session with an immutable chart proposal
         required: true
         type: string
       execution_version:

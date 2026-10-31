@@ -53,6 +53,7 @@ resource "aws_iam_role_policy" "active_rollout_observe" {
 resource "aws_iam_role_policy" "accepted_history_read" {
   for_each = var.enable_lifecycle_control ? {
     dispatcher = aws_iam_role.lifecycle_dispatcher[0].name
+    manager    = aws_iam_role.lifecycle_manager[0].name
     executor   = aws_iam_role.deployment_executor[0].name
     publisher  = aws_iam_role.publisher.name
     preview    = aws_iam_role.chart_reader[0].name
@@ -65,7 +66,10 @@ resource "aws_iam_role_policy" "accepted_history_read" {
       "accepted/staging/*/*.json", "releases/staging/*/active/*", "proposals/staging/*/active/*",
       "promotions/staging/*/receipt.json", "private/staging/*/active/*/rollout.json",
       "private/staging/*/active/*/application/intent.json", "private/staging/*/active/*/acceptance/*.json",
-      "private/staging/*/acceptance/*.json", "private/staging/*/exposure/*.json", "acceptance/staging/*/public/*"
+      "private/staging/*/acceptance/*.json", "private/staging/*/exposure/*.json", "acceptance/staging/*/public/*",
+      "private/staging/*/rollback/intent.json", "private/staging/*/rollback/proposal.json",
+      "private/staging/*/rollback/rollout.json", "private/staging/*/rollback/application/intent.json",
+      "private/staging/*/rollback/acceptance/*.json", "promotions/staging/*/intent.json"
     ] : "${aws_s3_bucket.control.arn}/${prefix}"]
   }] })
 }

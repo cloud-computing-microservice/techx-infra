@@ -67,7 +67,8 @@ def prepare_takeover(clients, record, owner, bucket):
             # public HTTP probe does not depend on GitHub cancellation. Every
             # request and evidence CAS rechecks this lease; in-flight HTTP is
             # bounded and cannot recreate any AWS/DNS resource during teardown.
-            if lease.get("operation") != "deploy": raise ValueError("Unexpected public probe lease operation")
+            if lease.get("operation") not in ("deploy", "acceptance", "rollback"):
+                raise ValueError("Unexpected public probe lease operation")
         elif previous not in stopped_managers:
             stop_executor(clients["codebuild"], previous, owner)
             stopped_managers.add(previous)

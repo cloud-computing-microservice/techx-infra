@@ -25,6 +25,8 @@ WORKFLOWS = {
     "review-promotion": (INFRA_REPO, "staging-chart-promote.yml"),
     "accept-public": (INFRA_REPO, "staging-acceptance.yml"),
     "accept-active-public": (INFRA_REPO, "staging-acceptance.yml"),
+    "review-rollback": (INFRA_REPO, "staging-chart-promote.yml"),
+    "accept-rollback-public": (INFRA_REPO, "staging-acceptance.yml"),
 }
 LIVE = {"queued", "requested", "waiting", "pending", "in_progress"}
 
@@ -67,6 +69,13 @@ def target_for(operation, record, execution, *, chart_sha=None, pr_number=None):
             from active_public_contract import active_public_context
             context = active_public_context(record)
             inputs.update(release_id=context["releaseContext"]["releaseId"], rollout_sha256=context["rollout"]["receiptReference"]["sha256"])
+        if operation == "review-rollback":
+            from rollback_task_contract import validate_prepare_checkpoint
+            validate_prepare_checkpoint(record)
+        if operation == "accept-rollback-public":
+            from rollback_public_contract import public_context
+            context = public_context(record)
+            inputs.update(rollback_id=context["rollbackContext"]["rollbackId"], rollout_sha256=context["rollout"]["receiptReference"]["sha256"])
     source = execution["sourceRevisions"][repository.rsplit("/", 1)[1]]
     return dict(operation=operation, repository=repository, workflow=workflow, sourceSha=sha(source), inputs=inputs)
 
@@ -89,7 +98,17 @@ def intent_for(record, execution_version, target):
             acceptedRelease=deepcopy(record["acceptedRelease"]))
     if record["status"] == "TESTING":
         if target["operation"] != "accept-active-public": raise ValueError("TESTING may hand off only its active public acceptance")
-        body["predecessor"].update(status="TESTING", releaseCandidate=deepcopy(record["releaseCandidate"]), acceptedRelease=deepcopy(record["acceptedRelease"]))
+        body["predecessor"].update(status="TESTING", releaseCandidate=deepcopy(record["releaseCandidate"]),
+            acceptedRelease=deepcopy(record["acceptedRelease"]), deploymentTask=deepcopy(record["deploymentTask"]))
+    if record["status"] == "FAILED_NEEDS_CLEANUP":
+        from rollback_task_contract import validate_prepare_checkpoint
+        validate_prepare_checkpoint(record)
+        if target["operation"] not in ("review-rollback", "accept-rollback-public"): raise ValueError("Failed sessions may hand off only their bounded rollback phases")
+        if target["operation"] == "accept-rollback-public":
+            from rollback_public_contract import public_context
+            public_context(record)
+        body["predecessor"].update({name: deepcopy(record[name]) for name in
+            ("status", "rollbackAttempt", "deploymentTask", "releaseCandidate", "acceptedRelease")})
     dispatch_id = checksum(body)
     return dict(body, dispatchId=dispatch_id)
 
@@ -344,7 +363,7 @@ def guard_child(s3, bucket, *, dispatch_id, repository, workflow, source_sha, ru
     for _ in range(observations):
         record, _ = read_json(s3, bucket, "automation/staging/session.json")
         validate(record)
-        if (record["status"] not in ("PLANNING", "PROVISIONING", "READY", "TESTING")
+        if (record["status"] not in ("PLANNING", "PROVISIONING", "READY", "TESTING", "FAILED_NEEDS_CLEANUP")
                 or clock() >= utc(record["cleanupStartAt"])):
             raise ValueError("Automatic child belongs to a closed staging session")
         # Use the protected intent itself, not mutable session pointer fields.
@@ -354,6 +373,18 @@ def guard_child(s3, bucket, *, dispatch_id, repository, workflow, source_sha, ru
         checked = dict(record, workflowHandoff=dict(id=dispatch_id))
         intent = load_intent(s3, bucket, checked, dict(key=key, versionId=object_version, sha256=checksum(value)))
         target = intent["target"]
+        if record["status"] == "FAILED_NEEDS_CLEANUP":
+            from rollback_task_contract import validate_prepare_checkpoint
+            value = validate_prepare_checkpoint(record)
+            observed = {name: deepcopy(record.get(name)) for name in
+                ("status", "rollbackAttempt", "deploymentTask", "lifecycleDispatch", "releaseCandidate", "acceptedRelease")}
+            if target["operation"] == "accept-rollback-public":
+                from rollback_public_contract import public_context
+                public_context(record)
+                observed["rollbackAttempt"].pop("publicAcceptance", None)
+            if (target["operation"] not in ("review-rollback", "accept-rollback-public") or clock() >= utc(value["intent"]["expiresAt"])
+                    or any(intent["predecessor"].get(name) != item for name, item in observed.items())):
+                raise ValueError("Rollback review child differs from its original prepared predecessor")
         if record["status"] == "TESTING":
             if not isinstance(record.get("releaseCandidate"), dict): raise ValueError("TESTING public child lacks its active candidate")
             candidate = deepcopy(record["releaseCandidate"])

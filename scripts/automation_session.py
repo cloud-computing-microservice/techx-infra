@@ -45,7 +45,7 @@ def validate(record: dict):
 def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, previous_owner_stopped=False):
     validate(record)
     now = now or datetime.now(timezone.utc)
-    if operation not in ("deploy", "release", "bootstrap-publish", "acceptance", "cleanup"):
+    if operation not in ("deploy", "release", "bootstrap-publish", "acceptance", "cleanup", "rollback"):
         raise ValueError("Unknown lease operation")
     if not re.fullmatch(r"[a-zA-Z0-9:/_.-]{1,160}", owner):
         raise ValueError("Invalid lease owner")
@@ -59,6 +59,32 @@ def claim(record: dict, owner: str, operation: str, now=None, ttl_seconds=300, p
         raise ValueError("Verify the previous executor is stopped before taking over an expired lease")
     if operation != "cleanup" and now >= utc(record["cleanupStartAt"]):
         raise ValueError("Cleanup window has started")
+    if operation == "rollback":
+        from rollback_task_contract import slot
+        value = slot(record)
+        if now >= utc(value["intent"]["expiresAt"]): raise ValueError("Rollback intent expired")
+        task, dispatch = record.get("deploymentTask", {}), record.get("lifecycleDispatch", {})
+        manager = re.fullmatch(r"arn:aws:codebuild:us-east-1:058114477594:build/(techx-automation-lifecycle:[a-f0-9-]+)", owner)
+        instance = re.fullmatch(r"arn:aws:ec2:us-east-1:058114477594:instance/(i-[a-f0-9]{8,17})", owner)
+        op = dispatch.get("operation", {})
+        valid_phase = (op == dict(mode="rollback", stage="prepare", attempt=1) and value["phase"] in ("REQUESTED", "PREPARING", "PROPOSED")
+            or op == dict(mode="rollback", stage="rollout", attempt=1) and value["phase"] in ("APPROVED", "RESTORED")
+            or op == dict(mode="verify", stage="rollback", attempt=1) and value["phase"] == "RESTORED")
+        if valid_phase and op == dict(mode="verify", stage="rollback", attempt=1):
+            from rollback_private_contract import private_context
+            private_context(record)
+        public_run = re.fullmatch(r"arn:aws:sts::058114477594:assumed-role/techx-automation-public-acceptance/techx-public-([1-9][0-9]*)", owner)
+        handoff = record.get("workflowHandoff", {})
+        public = (public_run and value["phase"] == "RESTORED" and handoff.get("operation") == "accept-rollback-public"
+            and handoff.get("phase") in ("CALLING", "OBSERVED"))
+        if public:
+            from rollback_public_contract import public_context
+            public_context(record)
+        if not (public or valid_phase
+                and (manager and dispatch.get("phase") == "OBSERVED" and dispatch.get("buildId") == manager[1]
+                    or instance and (task.get("mode"), task.get("stage"), task.get("state")) == (op.get("mode"), op.get("stage"), "RUNNING")
+                    and task.get("instanceId") == instance[1])):
+            raise ValueError("Rollback lease is limited to the exact private manager/executor task")
     if operation == "release" and record["status"] == "TESTING":
         from active_release_contract import release_context
         release_context(record)

@@ -134,6 +134,7 @@ def validate_task(task, record, now):
     if isinstance(task, dict) and task.get("mode") == "activate": fields |= {"expectedExposureSha256"}
     if isinstance(task, dict) and task.get("mode") == "verify": fields |= {"expectedAcceptanceSha256"}
     if isinstance(task, dict) and task.get("mode") == "release": fields |= {"expectedReleaseContext"}
+    if isinstance(task, dict) and task.get("mode") == "rollback": fields |= {"expectedRollbackContext"}
     if not isinstance(task, dict) or set(task) != fields or task["schemaVersion"] != 1:
         raise ValueError("Unsupported deployment task schema")
     if not re.fullmatch(r"[a-f0-9]{32}", task["taskId"]) or not re.fullmatch(MANAGER, task["managerArn"]):
@@ -142,11 +143,11 @@ def validate_task(task, record, now):
         raise ValueError("Invalid task executor identity")
     version(task["executionVersion"])
     if (record["sessionId"] != task["sessionId"] or record.get("executionVersion") != task["executionVersion"]
-            or record["status"] not in (("TESTING",) if task.get("mode") == "release" else ("TESTING", "READY") if (task.get("mode"), task.get("stage")) == ("verify", "active") else ("PROVISIONING", "READY") if task.get("mode") == "verify" else ("PLANNING", "PROVISIONING"))):
+            or record["status"] not in (("FAILED_NEEDS_CLEANUP",) if task.get("mode") == "rollback" else ("FAILED_NEEDS_CLEANUP", "READY", "TESTING") if (task.get("mode"), task.get("stage")) == ("verify", "rollback") else ("TESTING",) if task.get("mode") == "release" else ("TESTING", "READY") if (task.get("mode"), task.get("stage")) == ("verify", "active") else ("PROVISIONING", "READY") if task.get("mode") == "verify" else ("PLANNING", "PROVISIONING"))):
         raise ValueError("Task does not belong to the active admitted session")
     if not utc(task["createdAt"]) <= now < utc(task["expiresAt"]) <= utc(record["cleanupStartAt"]):
         raise ValueError("Task expired or enters the cleanup window")
-    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("release", "active")}
+    if ((task["mode"], task["stage"]) not in {("plan", "foundation"), ("apply", "foundation"), ("plan", "edge"), ("apply", "edge"), ("bootstrap", "gitops"), ("promote", "chart"), ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("verify", "rollback"), ("release", "active"), ("rollback", "prepare"), ("rollback", "rollout")}
             or type(task["attempt"]) is not int or task["attempt"] < 1):
         raise ValueError("Unsupported deployment task action")
     if task["mode"] == "bootstrap" and task["expectedBootstrapChart"] != bootstrap_reference(record):
@@ -157,7 +158,17 @@ def validate_task(task, record, now):
         raise ValueError("Exposure task predecessor changed after dispatch")
     if task["mode"] == "verify":
         from private_acceptance_contract import private_context, validate_private_checkpoint
-        if task["stage"] == "active":
+        if task["stage"] == "rollback":
+            from rollback_private_contract import private_context as rollback_private_context
+            from rollback_task_contract import slot
+            if record["status"] in ("READY", "TESTING"):
+                from accepted_rollback_history import accepted_projection
+                projected_record = accepted_projection(record, task)
+            else: projected_record = record
+            context = rollback_private_context(projected_record)
+            if utc(task["expiresAt"]) > utc(slot(projected_record)["intent"]["expiresAt"]):
+                raise ValueError("Rollback private task outlives its fixed intent")
+        elif task["stage"] == "active":
             from active_private_contract import active_private_context
             if record["status"] == "READY":
                 from accepted_release_history import accepted_projection
@@ -171,6 +182,13 @@ def validate_task(task, record, now):
         from active_release_contract import release_context
         if task["attempt"] != 1 or task["expectedReleaseContext"] != release_context(record):
             raise ValueError("Active task candidate/baseline/grant changed after dispatch")
+    if task["mode"] == "rollback":
+        from rollback_task_contract import context, rollout_context, slot
+        value = slot(record)
+        expected = (rollout_context if task["stage"] == "rollout" else context)(record)
+        if (task["attempt"] != 1 or task["expectedRollbackContext"] != expected
+                or utc(task["expiresAt"]) > utc(value["intent"]["expiresAt"])):
+            raise ValueError("Rollback task reservation changed or outlives its fixed intent")
     if task["mode"] == "apply":
         pending = task["expectedPendingPlan"]
         if (not isinstance(pending, dict) or record.get("pendingPlan") != pending
@@ -194,10 +212,19 @@ def create_task(client, bucket, record, execution_version, instance_id, owner, m
     if mode == "verify":
         from private_acceptance_contract import validate_private_start
         from active_private_contract import validate_active_private_start
-        task["expectedAcceptanceSha256"] = (validate_active_private_start if stage == "active" else validate_private_start)(record, attempt)
+        if stage == "rollback":
+            from rollback_private_contract import validate_private_start as validate_rollback_private_start
+            from rollback_task_contract import slot
+            task["expectedAcceptanceSha256"] = validate_rollback_private_start(record, attempt)
+            task["expiresAt"] = min(utc(task["expiresAt"]), utc(slot(record)["intent"]["expiresAt"])).isoformat()
+        else: task["expectedAcceptanceSha256"] = (validate_active_private_start if stage == "active" else validate_private_start)(record, attempt)
     if mode == "release":
         from active_release_contract import validate_release_start
         task["expectedReleaseContext"] = validate_release_start(record, attempt)
+    if mode == "rollback":
+        from rollback_task_contract import validate_prepare_start, validate_rollout_start, slot
+        task["expectedRollbackContext"] = (validate_rollout_start if stage == "rollout" else validate_prepare_start)(record, attempt)
+        task["expiresAt"] = min(utc(task["expiresAt"]), utc(slot(record)["intent"]["expiresAt"])).isoformat()
     validate_task(task, record, now)
     ref = immutable_json(client, bucket, f"control/staging/tasks/{task_id}.json", task)
     pointer = dict(taskId=task_id, instanceId=instance_id, managerArn=owner, mode=mode, stage=stage, attempt=attempt,
@@ -207,6 +234,7 @@ def create_task(client, bucket, record, execution_version, instance_id, owner, m
     if mode == "activate": pointer["expectedExposureSha256"] = task["expectedExposureSha256"]
     if mode == "verify": pointer["expectedAcceptanceSha256"] = task["expectedAcceptanceSha256"]
     if mode == "release": pointer["expectedReleaseContext"] = deepcopy(task["expectedReleaseContext"])
+    if mode == "rollback": pointer["expectedRollbackContext"] = deepcopy(task["expectedRollbackContext"])
     return task, pointer
 
 
@@ -233,13 +261,15 @@ def read_task(client, bucket, record, task_id, now):
         raise ValueError("Private pointer differs from immutable predecessor intent")
     if task["mode"] == "release" and pointer.get("expectedReleaseContext") != task["expectedReleaseContext"]:
         raise ValueError("Active task pointer differs from its immutable candidate/grant")
+    if task["mode"] == "rollback" and pointer.get("expectedRollbackContext") != task["expectedRollbackContext"]:
+        raise ValueError("Rollback pointer differs from its immutable reservation")
     return task
 
 
 def claim_task(store, client, bucket, task_id, instance_id, now):
     record, etag = store.read()
     task = read_task(client, bucket, record, task_id, now)
-    if (task["instanceId"] != instance_id or record["status"] not in (("TESTING",) if task["mode"] == "release" or (task["mode"], task["stage"]) == ("verify", "active") else ("PLANNING", "PROVISIONING"))
+    if (task["instanceId"] != instance_id or record["status"] not in (("FAILED_NEEDS_CLEANUP",) if task["mode"] == "rollback" or (task["mode"], task["stage"]) == ("verify", "rollback") else ("TESTING",) if task["mode"] == "release" or (task["mode"], task["stage"]) == ("verify", "active") else ("PLANNING", "PROVISIONING"))
             or record["deploymentTask"]["state"] != "DISPATCHING" or record.get("lease")):
         raise ValueError("Task already consumed, busy or assigned to another executor")
     updated = deepcopy(record)
@@ -252,9 +282,20 @@ def validate_result(record, task):
     """Stage checkpoint plus released deploy lease, never SSM exit code alone."""
     if record.get("lease"):
         raise ValueError("Remote task has not released its deployment lease")
+    if task["mode"] == "rollback":
+        from rollback_task_contract import validate_prepare_checkpoint, validate_rollout_checkpoint
+        (validate_rollout_checkpoint if task["stage"] == "rollout" else validate_prepare_checkpoint)(record, task)
+        return
     if task["mode"] == "release":
         from active_release_contract import validate_rollout_checkpoint
         validate_rollout_checkpoint(record, task)
+        return
+    if (task["mode"], task["stage"]) == ("verify", "rollback"):
+        from accepted_rollback_history import accepted_projection
+        accepted_projection(record, task)
+        predecessor = record["status"] == "TESTING" and record.get("lifecycleDispatch", {}).get("operation") == dict(mode="release", stage="active", attempt=1)
+        if record["status"] != "READY" and not predecessor:
+            raise ValueError("Rollback private task requires its atomic accepted READY history")
         return
     if (task["mode"], task["stage"]) == ("verify", "active"):
         from accepted_release_history import accepted_projection
@@ -307,7 +348,7 @@ def finish_task(store, task, succeeded, now):
     if succeeded:
         # validate_task's pending-plan equality applies before consumption. A
         # successful apply has deliberately cleared it; verify scope/time here.
-        allowed = ("TESTING",) if task["mode"] == "release" else ("READY",) if task["mode"] == "verify" else ("PLANNING", "PROVISIONING")
+        allowed = ("FAILED_NEEDS_CLEANUP",) if task["mode"] == "rollback" else ("TESTING",) if task["mode"] == "release" else ("READY",) if task["mode"] == "verify" else ("PLANNING", "PROVISIONING")
         if record["status"] not in allowed or now >= utc(record["cleanupStartAt"]):
             raise ValueError("Task completed after the deployment window closed")
         validate_result(record, task)

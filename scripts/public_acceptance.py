@@ -67,6 +67,8 @@ class PublicAcceptance:
     def handoff_inputs(self):
         return dict(session_id=self.execution["sessionId"], execution_version=self.version, activation_sha256=self.activation_sha)
 
+    def failed_record(self, record): return transition(record, self.owner, "FAILED_NEEDS_CLEANUP", now=self.clock())
+
     def network_target(self, record):
         activation = read_activation_receipt(self.clients["s3"], self.bucket, record, self.version)
         read_release(self.clients["s3"], self.bucket, record, self.execution, self.version)
@@ -164,7 +166,7 @@ class PublicAcceptance:
                     classification=error.check if isinstance(error, ProbeFailure) else type(error).__name__)
                 immutable_json(self.clients["s3"], self.bucket, self.result_key(record).replace("result.json", "failure.json"), failure)
                 current, etag = self.current()
-                failed = transition(current, self.owner, "FAILED_NEEDS_CLEANUP", now=self.clock())
+                failed = self.failed_record(current)
                 self.set_stage(failed, dict(self.stage(failed), state="FAILED"))
                 self.store.write(failed, etag)
             except Exception:

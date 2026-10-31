@@ -60,9 +60,23 @@ jobs:
           owner: cloud-computing-microservice
           repositories: techx-platform
           permission-actions: write
+      - name: Create chart-only read token without merge authority when configured
+        id: chart
+        if: vars.PROMOTION_APP_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.PROMOTION_APP_ID }}
+          private-key: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+          owner: cloud-computing-microservice
+          repositories: techx-chart
+          permission-contents: read
+          permission-pull-requests: read
+          permission-actions: read
+          permission-administration: read
       - name: Bind callback, observe same work and dispatch only typed successors
         env:
           CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
           GITHUB_TOKEN: ${{ github.token }}
           LIFECYCLE_APP_TOKEN: ${{ steps.app.outputs.token }}
+          CHART_READ_TOKEN: ${{ steps.chart.outputs.token }}
         run: python scripts/orchestrate_lifecycle.py

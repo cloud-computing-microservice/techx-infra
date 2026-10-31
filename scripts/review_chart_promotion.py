@@ -23,7 +23,7 @@ ENVIRONMENT = "staging-chart-promote"
 
 def read_promotion_approval(s3, bucket, execution, execution_version, reference, now, *, kind="cold-promotion"):
     """Read immutable grant bytes, never an actor-provided approval boolean."""
-    if kind not in ("cold-promotion", "ready-promotion"): raise ValueError("Unsupported promotion context")
+    if kind not in ("cold-promotion", "ready-promotion", "rollback-promotion"): raise ValueError("Unsupported promotion context")
     prefix = f"promotion-approvals/staging/{execution['sessionId']}/"
     if (not isinstance(reference, dict) or set(reference) != {"key", "versionId", "sha256"}
             or not isinstance(reference.get("key"), str) or not reference["key"].startswith(prefix)
@@ -49,6 +49,19 @@ def read_promotion_approval(s3, bucket, execution, execution_version, reference,
         approvedBudgetUsd=execution["approvedBudgetUsd"], deadline=execution["deadline"], cleanupStartAt=execution["cleanupStartAt"])
     if any(request.get(key) != item for key, item in expected.items()):
         raise ValueError("Promotion approval differs from the admitted execution context")
+    if kind == "rollback-promotion":
+        from active_release_contract import reference as artifact_reference
+        from rollback_proposal import validate_intent
+        intent = validate_intent(request.get("intent"))
+        prefix = f"private/staging/{execution['sessionId']}/rollback/"
+        artifact_reference(request.get("intentReference"), prefix + "intent.json")
+        artifact_reference(request.get("proposalReference"), prefix + "proposal.json")
+        if (intent["sessionId"] != execution["sessionId"] or intent["executionVersion"] != execution_version
+                or execution.get("action") != intent["action"] or expiry > utc(intent["expiresAt"])
+                or any(intent[name] != execution[name] for name in ("cleanupStartAt", "deadline"))
+                or request["intentReference"]["sha256"] != checksum(intent)
+                or request.get("rollbackId") != intent["rollbackId"]):
+            raise ValueError("Rollback approval cannot change its original intent or extend its expiry")
     return value
 
 
@@ -132,6 +145,7 @@ class PromotionReview(ColdPromotionChecks):
             raise ValueError("Human promotion reviewer is incomplete")
         now = self.clock()
         expiry = min(now + timedelta(minutes=15), utc(request["cleanupStartAt"]) - timedelta(minutes=3))
+        if self.kind == "rollback-promotion": expiry = min(expiry, utc(request["intent"]["expiresAt"]))
         if expiry <= now: raise ValueError("Promotion review has insufficient time before the cleanup margin")
         value = dict(schemaVersion=1, kind=self.kind + "-approval", request=request, requestSha256=request_sha256,
                      reviewer=reviewer, approvedAt=now.isoformat(), expiresAt=expiry.isoformat())
@@ -155,10 +169,19 @@ class PromotionReview(ColdPromotionChecks):
 
 
 from ready_chart_promotion import ReadyPromotionChecks
+from rollback_chart_promotion import RollbackPromotionChecks
 
 
 class ReadyPromotionReview(PromotionReview, ReadyPromotionChecks):
     """Reuse the protected human-review flow with a separate active context."""
+
+
+class RollbackPromotionReview(PromotionReview, RollbackPromotionChecks):
+    """Fresh human approval for the original single-use rollback intent."""
+
+    def guard(self, *, owner=None, epoch=None):
+        if not self.dispatch_id: raise ValueError("Rollback review requires an exact protected automatic handoff")
+        return super().guard(owner=owner, epoch=epoch)
 
 
 def main():
@@ -182,13 +205,17 @@ def main():
     store = S3SessionStore(bucket)
     current, _ = store.read()
     active = current.get("status") == "READY"
-    review_type = ReadyPromotionReview if active else PromotionReview
+    rollback = current.get("status") == "FAILED_NEEDS_CLEANUP"
+    chart, infra = GitHub(CHART_REPO, os.environ["CHART_READ_TOKEN"]), GitHub(INFRA_REPO, os.environ["GITHUB_TOKEN"])
+    review_type = RollbackPromotionReview if rollback else ReadyPromotionReview if active else PromotionReview
     extra = dict(platform=GitHub(PLATFORM_REPO, os.environ["GITHUB_TOKEN"])) if active else {}
+    if rollback:
+        clients.update({name: boto3.client(name, region_name="us-east-1", config=config) for name in ("codebuild", "ssm")})
+        extra = dict(infra=infra)
     review = review_type(clients, store, bucket, execution, object_version,
                              run_id=os.environ["GITHUB_RUN_ID"], read_only=args.mode == "preview",
                              dispatch_id=os.environ.get("TECHX_DISPATCH_ID", ""), **extra)
     review.guard()
-    chart, infra = GitHub(CHART_REPO, os.environ["CHART_READ_TOKEN"]), GitHub(INFRA_REPO, os.environ["GITHUB_TOKEN"])
     with tempfile.TemporaryDirectory(prefix="techx-promotion-review-") as directory:
         root = Path(directory) / "execution"
         archive_loader(clients["s3"], bucket, session, object_version, root)

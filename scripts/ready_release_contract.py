@@ -49,7 +49,7 @@ def read_reference(client, bucket, ref, key):
 
 
 def accepted_baseline(client, bucket, record, execution_version):
-    if record.get("acceptedActive"):
+    if record.get("acceptedActive") or record.get("acceptedRollback"):
         from accepted_release_history import read_accepted_history
         return read_accepted_history(client, bucket, record, execution_version)
     from private_acceptance_contract import ready_release

@@ -108,6 +108,34 @@ python (Join-Path $PSScriptRoot 'test-active-public-acceptance.py')
 if ($LASTEXITCODE -ne 0) { throw 'Active hosted public acceptance, rollout binding, separate evidence, parent consumption and CLI lease tests failed.' }
 python (Join-Path $PSScriptRoot 'test-active-private-acceptance.py')
 if ($LASTEXITCODE -ne 0) { throw 'Active private VPN/runtime, immutable accepted history, terminal READY handoff and fixed loader/CLI tests failed.' }
+python (Join-Path $PSScriptRoot 'test-active-private-failure.py')
+if ($LASTEXITCODE -ne 0) { throw 'Private failure diagnostics, positive terminal rollback admission and restoration integration tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-orchestration.py')
+if ($LASTEXITCODE -ne 0) { throw 'Bounded rollback failure disposition, manager/entry-point cleanup and integrated continuation tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-proposal.py')
+if ($LASTEXITCODE -ne 0) { throw 'Exact accepted baseline Git restoration proposal, no rebase/merge and bounded intent tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-admission.py')
+if ($LASTEXITCODE -ne 0) { throw 'Read-only rollback admission from exact terminal hosted/public/rollout evidence and original immutable window failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-reservation.py')
+if ($LASTEXITCODE -ne 0) { throw 'Single-use rollback reservation, scoped controller, positive CAS recovery and unchanged original expiry tests failed.' }
+python (Join-Path $PSScriptRoot 'test-private-rollback-prepare.py')
+if ($LASTEXITCODE -ne 0) { throw 'Private rollback manager/task/lease, immutable intent, guarded baseline proposal and readback tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-prepare-controller.py')
+if ($LASTEXITCODE -ne 0) { throw 'Single manager rollback dispatch, lost response, private terminal proof and proposal handoff tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-chart-promotion.py')
+if ($LASTEXITCODE -ne 0) { throw 'Read-only rollback baseline tree, terminal preparation, fresh candidate CI and exact PR review tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-review.py')
+if ($LASTEXITCODE -ne 0) { throw 'Protected rollback workflow handoff, human approval, immutable grant and original expiry tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-grant.py')
+if ($LASTEXITCODE -ne 0) { throw 'Actual protected rollback grant/index consumption, positive CAS recovery and original window tests failed.' }
+python (Join-Path $PSScriptRoot 'test-private-rollback-rollout.py')
+if ($LASTEXITCODE -ne 0) { throw 'Private rollback exact-head merge, bounded CI, pinned Application, runtime digest, CLI and AMI task tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-release-controller.py')
+if ($LASTEXITCODE -ne 0) { throw 'Automatic protected rollback review consumption, one private restore dispatch and terminal proof handoff tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-public-acceptance.py')
+if ($LASTEXITCODE -ne 0) { throw 'Protected hosted rollback public probe, exact restored evidence, terminal consumption and old-baseline retention tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-private-acceptance.py')
+if ($LASTEXITCODE -ne 0) { throw 'Rollback VPN/runtime acceptance, restored Application identity, terminal private handoff and immutable accepted-history tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-review.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private candidate promotion preview, exact human review and short-lived approval tests failed.' }
 python (Join-Path $PSScriptRoot 'test-promotion-handoff.py')

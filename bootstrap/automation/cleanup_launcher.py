@@ -40,6 +40,7 @@ def launch(event, s3, codebuild, now=None):
                              ExpectedBucketOwner="058114477594")
     record = json.loads(response["Body"].read())
     cleanup = validate_execution(record, session_id, version)
+    overdue = now >= datetime.fromisoformat(record["deadline"].replace("Z", "+00:00"))
     if now < cleanup and event.get("requestedEarly") is not True:
         return {"status": "not-due", "sessionId": session_id}
     # This completion marker lives outside publisher-writable session state.
@@ -82,16 +83,24 @@ def launch(event, s3, codebuild, now=None):
         token = page.get("nextToken")
         if not token: break
     if token or len(running) > 1: raise ValueError("Cleanup build inventory is truncated or ambiguous")
-    if running: return {"status": "running", "buildId": running[0], "sessionId": session_id}
+    if running: return {"status": "running", "buildId": running[0], "sessionId": session_id, "overdue": overdue}
     result = codebuild.start_build(
         projectName=project,
         idempotencyToken=hashlib.sha256(f"{session_id}:{version}:{int(now.timestamp()) // 300}".encode()).hexdigest(),
         environmentVariablesOverride=[dict(name="TECHX_SESSION_ID", value=session_id, type="PLAINTEXT"),
                                       dict(name="TECHX_EXECUTION_VERSION", value=version, type="PLAINTEXT")],
     )
-    return {"status": "started", "buildId": result["build"]["id"], "sessionId": session_id}
+    return {"status": "started", "buildId": result["build"]["id"], "sessionId": session_id, "overdue": overdue}
 
 
 def handler(event, context):
     import boto3
-    return launch(event, boto3.client("s3"), boto3.client("codebuild"))
+    result = launch(event, boto3.client("s3"), boto3.client("codebuild"))
+    if result.get("overdue") is True:
+        # An in-flight worker is not proof of completed cleanup. Never alter
+        # the deadline or restart it merely to publish an operational alert.
+        boto3.client("cloudwatch").put_metric_data(Namespace="TechX/Automation", MetricData=[{
+            "MetricName": "CleanupOverdue", "Dimensions": [{"Name": "Environment", "Value": "staging"}],
+            "Value": 1, "Unit": "Count",
+        }])
+    return result

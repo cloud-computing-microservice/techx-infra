@@ -21,6 +21,7 @@ class LauncherTests(unittest.TestCase):
                            cleanupStartAt=(self.now - timedelta(minutes=1)).isoformat(), deadline=(self.now + timedelta(hours=1)).isoformat(),
                            cleanupBundle=dict(key="bundles/" + "a" * 64 + ".tar.gz", sha256="a" * 64, versionId="bundle-v1"))
         self.started, self.builds, self.completion = [], [], None
+        self.metrics, self.metric_error = [], False
         class NoSuchKey(Exception): pass
         def get_object(**kwargs):
             self.assertEqual(kwargs["ExpectedBucketOwner"], "058114477594")
@@ -105,6 +106,64 @@ class LauncherTests(unittest.TestCase):
         self.completion = dict(executionVersion=self.event["executionVersion"], inventoryEmpty=True, artifactSha256="a" * 64)
         self.assertEqual(module.launch(self.event, self.s3, self.codebuild, self.now)["status"], "already-destroyed")
         self.assertFalse(self.started)
+
+    def handle(self):
+        import botocore.session
+        from botocore.validate import validate_parameters
+        case = self
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None): return case.now
+        shape = botocore.session.get_session().get_service_model("cloudwatch").operation_model("PutMetricData").input_shape
+        def publish(**kwargs):
+            validate_parameters(kwargs, shape)
+            if self.metric_error: raise RuntimeError("Metrics unavailable")
+            self.metrics.append(kwargs)
+        clients = dict(s3=self.s3, codebuild=self.codebuild, cloudwatch=SimpleNamespace(put_metric_data=publish))
+        with patch("boto3.client", side_effect=lambda name: clients[name]), patch.object(module, "datetime", Clock):
+            return module.handler(self.event, None)
+
+    def overdue(self):
+        self.record["cleanupStartAt"] = (self.now - timedelta(hours=1)).isoformat()
+        self.record["deadline"] = (self.now - timedelta(minutes=1)).isoformat()
+
+    def test_overdue_cleanup_publishes_scoped_metric_after_one_start(self):
+        self.overdue()
+        result = self.handle()
+        self.assertEqual((result["status"], result["overdue"]), ("started", True))
+        self.assertEqual(len(self.started), 1)
+        self.assertEqual(self.metrics, [dict(Namespace="TechX/Automation", MetricData=[dict(
+            MetricName="CleanupOverdue", Dimensions=[dict(Name="Environment", Value="staging")], Value=1, Unit="Count")])])
+
+    def test_overdue_live_worker_alerts_without_restart_or_deadline_extension(self):
+        self.overdue()
+        original = dict(self.record)
+        self.builds = [dict(id="cleanup:123", buildStatus="IN_PROGRESS", environment=dict(environmentVariables=[
+            dict(name="TECHX_SESSION_ID", value=self.event["sessionId"]),
+            dict(name="TECHX_EXECUTION_VERSION", value=self.event["executionVersion"])]))]
+        result = self.handle()
+        self.assertEqual((result["status"], result["overdue"]), ("running", True))
+        self.assertFalse(self.started)
+        self.assertEqual(len(self.metrics), 1)
+        self.assertEqual(self.record, original)
+
+    def test_normal_or_verified_completed_cleanup_emits_no_overdue_metric(self):
+        self.assertFalse(self.handle()["overdue"])
+        self.assertFalse(self.metrics)
+        self.started.clear()
+        self.overdue()
+        self.completion = dict(executionVersion=self.event["executionVersion"], inventoryEmpty=True, artifactSha256="a" * 64)
+        self.assertEqual(self.handle()["status"], "already-destroyed")
+        self.assertFalse(self.metrics)
+        self.assertFalse(self.started)
+
+    def test_metric_failure_propagates_for_launcher_alarm_without_replaying_compute(self):
+        self.overdue()
+        original = dict(self.record)
+        self.metric_error = True
+        with self.assertRaisesRegex(RuntimeError, "Metrics unavailable"): self.handle()
+        self.assertEqual(len(self.started), 1)
+        self.assertEqual(self.record, original)
 
 
 if __name__ == "__main__": unittest.main()

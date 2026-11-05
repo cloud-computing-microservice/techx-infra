@@ -26,6 +26,9 @@ mock_provider "aws" {
   mock_resource "aws_lambda_function" {
     defaults = { arn = "arn:aws:lambda:us-east-1:058114477594:function:techx-automation-cleanup-launcher" }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = { arn = "arn:aws:sns:us-east-1:058114477594:techx-automation-cleanup-alerts" }
+  }
   mock_resource "aws_cloudwatch_event_rule" {
     defaults = { arn = "arn:aws:events:us-east-1:058114477594:rule/techx-automation-cleanup-watchdog" }
   }
@@ -55,6 +58,7 @@ mock_provider "aws" {
 variables {
   bucket_name           = "techx-test-control"
   cloudflare_secret_arn = "arn:aws:secretsmanager:us-east-1:058114477594:secret:techx/automation/cloudflare-TestOnly"
+  cleanup_alert_email   = "operator@example.invalid"
 }
 
 run "control_off_by_default" {
@@ -66,6 +70,10 @@ run "control_off_by_default" {
   assert {
     condition     = length(aws_lambda_function.cleanup_launcher) == 0 && length(aws_scheduler_schedule_group.staging) == 0
     error_message = "Cleanup execution must remain disabled until its executor has been configured."
+  }
+  assert {
+    condition     = length(aws_sns_topic.cleanup_alerts) == 0 && length(aws_sns_topic_subscription.cleanup_alerts) == 0 && length(aws_cloudwatch_metric_alarm.cleanup) == 0
+    error_message = "Notification resources must not activate while cleanup control is disabled."
   }
   assert {
     condition     = length(aws_iam_role.plan_review) == 0
@@ -82,6 +90,34 @@ run "cleanup_control_is_project_scoped" {
   variables {
     enable_cleanup_control = true
     enable_plan_approval   = true
+  }
+  assert {
+    condition = (length(aws_cloudwatch_metric_alarm.cleanup) == 5 &&
+      aws_sns_topic.cleanup_alerts[0].kms_master_key_id == aws_kms_key.control.arn &&
+      aws_sns_topic_subscription.cleanup_alerts[0].protocol == "email" &&
+      alltrue([for alarm in aws_cloudwatch_metric_alarm.cleanup :
+        alarm.actions_enabled && toset(alarm.alarm_actions) == toset([aws_sns_topic.cleanup_alerts[0].arn]) &&
+        alarm.threshold == 1 && alarm.evaluation_periods == 1 && alarm.treat_missing_data == "notBreaching"
+      ]) &&
+      aws_cloudwatch_metric_alarm.cleanup["worker-failures"].dimensions.ProjectName == "techx-automation-cleanup" &&
+      aws_cloudwatch_metric_alarm.cleanup["deadline-overdue"].namespace == "TechX/Automation" &&
+      aws_cloudwatch_metric_alarm.cleanup["deadline-overdue"].metric_name == "CleanupOverdue" &&
+    aws_cloudwatch_metric_alarm.cleanup["deadline-overdue"].dimensions.Environment == "staging")
+    error_message = "Cleanup alerts must route worker/launcher/DLQ/overdue failures to the encrypted operator topic with the actual handler metric contract."
+  }
+  assert {
+    condition = (anytrue([for statement in data.aws_iam_policy_document.cleanup_alerts[0].statement :
+      statement.sid == "OnlyCleanupAlarmsPublish" && toset(statement.actions) == toset(["sns:Publish"]) &&
+      anytrue([for principal in statement.principals : principal.type == "Service" && toset(principal.identifiers) == toset(["cloudwatch.amazonaws.com"])]) &&
+      anytrue([for condition in statement.condition : condition.variable == "aws:SourceAccount" && toset(condition.values) == toset(["058114477594"])]) &&
+      anytrue([for condition in statement.condition : condition.variable == "aws:SourceArn" && toset(condition.values) == toset(local.cleanup_alert_alarm_arns)])
+      ]) && anytrue([for statement in data.aws_iam_policy_document.control_key.statement :
+      statement.sid == "CleanupAlarmNotifications" &&
+      anytrue([for condition in statement.condition : condition.variable == "aws:SourceArn" && toset(condition.values) == toset(local.cleanup_alert_alarm_arns)])
+      ]) && anytrue([for statement in jsondecode(aws_iam_role_policy.cleanup_launcher[0].policy).Statement :
+      contains(statement.Action, "cloudwatch:PutMetricData") && try(statement.Condition.StringEquals["cloudwatch:namespace"], "") == "TechX/Automation"
+    ]))
+    error_message = "Alarm publishing/encryption must be scoped to exact same-account alarms; launcher metric writes cannot use another namespace."
   }
   assert {
     condition = (length(aws_iam_role.destroy_dispatcher) == 1 &&
@@ -590,6 +626,15 @@ run "lifecycle_is_scoped_and_pinned" {
     ]) == 1)
     error_message = "Accepted release chains are version-read by baseline consumers and written only by the private executor; publisher/public/dispatcher cannot replace history."
   }
+}
+
+run "cleanup_requires_alert_recipient" {
+  command = plan
+  variables {
+    enable_cleanup_control = true
+    cleanup_alert_email    = null
+  }
+  expect_failures = [var.enable_cleanup_control]
 }
 
 run "lifecycle_requires_dependencies" {

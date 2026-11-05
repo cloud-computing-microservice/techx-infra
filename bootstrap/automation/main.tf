@@ -83,6 +83,28 @@ resource "aws_kms_key" "control" {
 }
 
 data "aws_iam_policy_document" "control_key" {
+  dynamic "statement" {
+    for_each = var.enable_cleanup_control ? [1] : []
+    content {
+      sid       = "CleanupAlarmNotifications"
+      actions   = ["kms:GenerateDataKey*", "kms:Decrypt"]
+      resources = ["*"]
+      principals {
+        type        = "Service"
+        identifiers = ["cloudwatch.amazonaws.com"]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = ["058114477594"]
+      }
+      condition {
+        test     = "ArnEquals"
+        variable = "aws:SourceArn"
+        values   = local.cleanup_alert_alarm_arns
+      }
+    }
+  }
   statement {
     sid       = "AccountDelegation"
     actions   = ["kms:*"]

@@ -1,19 +1,8 @@
 name: Verify executor image recipe
 on:
   push:
-    paths:
-      - bootstrap/automation/**
-      - scripts/install_automation_tools.py
-      - scripts/toolchain-linux-amd64.json
-      - scripts/package_executor_image.py
-      - .github/workflows/executor-image-verify.yml
+    branches: [main]
   pull_request:
-    paths:
-      - bootstrap/automation/**
-      - scripts/install_automation_tools.py
-      - scripts/toolchain-linux-amd64.json
-      - scripts/package_executor_image.py
-      - .github/workflows/executor-image-verify.yml
   workflow_dispatch:
 permissions:
   contents: read

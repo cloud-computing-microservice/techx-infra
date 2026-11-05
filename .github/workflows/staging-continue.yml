@@ -28,7 +28,7 @@ jobs:
     environment: staging-lifecycle
     permissions:
       contents: read
-      actions: read
+      actions: write
       id-token: write
     env:
       SESSION_ID: ${{ inputs.session_id }}
@@ -57,10 +57,24 @@ jobs:
           allowed-account-ids: '058114477594'
           role-session-name: techx-lifecycle-${{ github.run_id }}
           role-duration-seconds: 3600
+      - name: Create chart-only read token for admitted rollback evidence when configured
+        id: chart
+        if: vars.PROMOTION_APP_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.PROMOTION_APP_ID }}
+          private-key: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+          owner: cloud-computing-microservice
+          repositories: techx-chart
+          permission-contents: read
+          permission-pull-requests: read
+          permission-actions: read
+          permission-administration: read
       - name: Continue verified checkpoint and observe same build
         env:
           CONTROL_BUCKET: ${{ vars.TECHX_STATE_BUCKET }}
           GITHUB_TOKEN: ${{ github.token }}
+          CHART_READ_TOKEN: ${{ steps.chart.outputs.token }}
         run: |
           args=(--bucket "$CONTROL_BUCKET" --session-id "$SESSION_ID" --execution-version "$EXECUTION_VERSION")
           if [ "$RESUME_APPROVED" = 'true' ]; then args+=(--resume-approved); fi

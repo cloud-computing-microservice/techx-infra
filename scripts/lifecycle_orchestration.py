@@ -5,7 +5,7 @@ import time
 from automation_session import utc
 from chart_selection import (CHART_REPO, INFRA_REPO, PLATFORM_REPO, read_proposal, read_release, read_selection, reuse_proposal, sha)
 from chart_promotion import candidate_ci, PromotionPending, pull_identity
-from continue_lifecycle import drive
+from continue_lifecycle import drive, observation_end
 from deployment_tasks import validate_promotion
 from lifecycle_dispatch import dispatch_identity, observed_build, operation
 from plan_approval import version
@@ -209,10 +209,10 @@ class Orchestrator:
             return target_for("select-chart", record, d.execution, chart_sha=chosen, pr_number=proposal["prNumber"])
         return result
 
-    def run(self, *, observations=240, sleep=time.sleep, monotonic=time.monotonic):
+    def run(self, *, observations=240, sleep=time.sleep, monotonic=time.monotonic, observation_deadline=None):
         if type(observations) is not int or not 1 <= observations <= 240:
             raise ValueError("Orchestration observation must be bounded to 40 minutes")
-        end = monotonic() + 2400
+        end = observation_end(monotonic(), observation_deadline)
         last = {}
         for _ in range(observations):
             if monotonic() >= end: break
@@ -261,7 +261,7 @@ class Orchestrator:
                     continue
                 observed = drive(self.dispatcher, self.coordinator, observations=1,
                     sleep=lambda delay: sleep(max(0, min(delay, end - monotonic()))), monotonic=monotonic,
-                    failure_disposition=self.failed_candidate)
+                    failure_disposition=self.failed_candidate, observation_deadline=end)
                 if observed.get("waiting") != "READY":
                     last = observed
                     continue
@@ -291,7 +291,7 @@ class Orchestrator:
             # start another 40-minute timer for every lifecycle stage.
             result = drive(self.dispatcher, self.coordinator, observations=1,
                            sleep=lambda delay: sleep(max(0, min(delay, end - monotonic()))), monotonic=monotonic,
-                           failure_disposition=self.failed_candidate)
+                           failure_disposition=self.failed_candidate, observation_deadline=end)
             last = result
             if result.get("waiting") == "READY": return result
             if result.get("waiting") == "OBSERVATION_LIMIT": continue

@@ -3,11 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: Acceptance/cleanup policy for this new session
+        description: Acceptance/cleanup policy; rollback is explicit and limited to one attempt
         required: true
         default: deploy-test-destroy
         type: choice
-        options: [deploy-test-destroy, deploy-window]
+        options: [deploy-test-destroy, deploy-window, deploy-window-rollback]
       platform_sha:
         description: Exact current platform main commit with passing CI
         required: true

@@ -5,9 +5,12 @@ as plan approval. A bounded observation timeout retains the same build handle.
 """
 import argparse
 import json
+import math
 import os
 import re
 import time
+import tempfile
+from pathlib import Path
 
 from automation_session import S3SessionStore
 from chart_selection import GitHub, INFRA_REPO
@@ -33,10 +36,22 @@ def verified_caller(github, run_id, execution):
         raise ValueError("Opening workflow may continue only the execution it admitted")
 
 
-def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, sleep=time.sleep, monotonic=time.monotonic, failure_disposition=None):
+def observation_end(now, deadline=None):
+    """Nested continuation may shorten, never renew, its caller's time budget."""
+    if deadline is None: return now + 2400
+    if type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline > now + 2400:
+        raise ValueError("Observation deadline must be finite and cannot extend forty minutes")
+    return deadline
+
+
+def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, sleep=time.sleep, monotonic=time.monotonic,
+          failure_disposition=None, observation_deadline=None):
     if type(observations) is not int or not 1 <= observations <= 240:
         raise ValueError("Continuation observation must be bounded to 40 minutes")
-    end = monotonic() + 2400
+    started = monotonic()
+    end = observation_end(started, observation_deadline)
+    if end <= started:
+        return dict(waiting="OBSERVATION_LIMIT", sessionId=dispatcher.execution["sessionId"], executionVersion=dispatcher.version)
     for _ in range(observations):
         if monotonic() >= end: break
         if failure_disposition is not None and dispatcher.store.read()[0].get("status") == "FAILED_NEEDS_CLEANUP":
@@ -70,12 +85,44 @@ def drive(dispatcher, coordinator, *, resume_approved=False, observations=240, s
             return result
     # Read the exact current pointer again. Never restart because observation
     # expired; an operator or future caller can continue this same AWS build.
+    if observation_deadline is not None and monotonic() >= end:
+        return dict(waiting="OBSERVATION_LIMIT", sessionId=dispatcher.execution["sessionId"], executionVersion=dispatcher.version)
     if failure_disposition is not None and dispatcher.store.read()[0].get("status") == "FAILED_NEEDS_CLEANUP":
         return failure_disposition()
     record, _ = dispatcher.current(idle=False, allow_ready=True)
     build = observed_build(dispatcher.clients["codebuild"], record)
     return dict(sessionId=record["sessionId"], executionVersion=dispatcher.version, waiting="OBSERVATION_LIMIT",
                 buildId=build["id"], buildStatus=build.get("buildStatus"))
+
+
+def continue_execution(dispatcher, coordinator, infra, chart, run_id, rollback_source, *, resume_approved=False,
+                       observations=240, sleep=time.sleep, monotonic=time.monotonic):
+    """Resume the admitted policy; a plan-resume flag is never rollback consent."""
+    if type(observations) is not int or not 1 <= observations <= 240:
+        raise ValueError("Continuation observation must be bounded to forty minutes")
+    from automation_session import utc, validate
+    from cleanup_completion import CONTEXT
+    record, _ = dispatcher.store.read()
+    validate(record)
+    if (record.get("executionVersion") != dispatcher.version
+            or any(record.get(k) != dispatcher.execution.get(k) for k in CONTEXT)
+            or record.get("status") in ("OFF", "DESTROYING", "DESTROYED")
+            or dispatcher.clock() >= utc(record["cleanupStartAt"])):
+        raise ValueError("Continuation belongs to another or closed immutable session")
+    if dispatcher.execution.get("action") != "deploy-window-rollback":
+        dispatcher.current(idle=False, allow_ready=True)
+        return drive(dispatcher, coordinator, resume_approved=resume_approved, observations=observations, sleep=sleep, monotonic=monotonic)
+    if record["status"] == "FAILED_NEEDS_CLEANUP" and resume_approved:
+        raise ValueError("A plan-resume flag cannot approve rollback of a failed execution")
+    from lifecycle_orchestration import Orchestrator
+    end = observation_end(monotonic())
+    engine = Orchestrator(dispatcher, coordinator, {INFRA_REPO: infra}, chart, run_id=run_id, rollback_source=rollback_source)
+    def rollback():
+        return engine.run(observations=observations, sleep=sleep, monotonic=monotonic, observation_deadline=end)
+    if record["status"] == "FAILED_NEEDS_CLEANUP": return rollback()
+    dispatcher.current(idle=False, allow_ready=True)
+    return drive(dispatcher, coordinator, resume_approved=resume_approved, observations=observations, sleep=sleep,
+        monotonic=monotonic, failure_disposition=rollback, observation_deadline=end)
 
 
 def main():
@@ -88,7 +135,9 @@ def main():
     if not re.fullmatch(r"staging-[A-Za-z0-9-]{1,64}", args.session_id): raise ValueError("Invalid lifecycle session")
     version(args.execution_version)
     import boto3
-    clients = {name: boto3.client(name, region_name="us-east-1") for name in ("s3", "sts", "scheduler", "ssm", "codebuild", "lambda")}
+    from botocore.config import Config
+    config = Config(connect_timeout=10, read_timeout=30, retries={"total_max_attempts": 1})
+    clients = {name: boto3.client(name, region_name="us-east-1", config=config) for name in ("s3", "sts", "scheduler", "ssm", "codebuild", "lambda")}
     run_id = os.environ["GITHUB_RUN_ID"]
     identity = clients["sts"].get_caller_identity()
     if (identity.get("Account") != ACCOUNT or identity.get("Arn") !=
@@ -96,12 +145,23 @@ def main():
         raise ValueError("Only this protected lifecycle run's dispatcher role may continue")
     execution, _ = read_json(clients["s3"], args.bucket, f"executions/{args.session_id}.json", args.execution_version)
     if execution.get("sessionId") != args.session_id: raise ValueError("Immutable execution belongs to another session")
-    verified_caller(GitHub(INFRA_REPO, os.environ["GITHUB_TOKEN"]), run_id, execution)
+    from chart_selection import CHART_REPO
+    from workflow_handoff import WorkflowAPI
+    infra = WorkflowAPI(INFRA_REPO, os.environ["GITHUB_TOKEN"])
+    chart = GitHub(CHART_REPO, os.environ.get("CHART_READ_TOKEN") or os.environ["GITHUB_TOKEN"])
+    verified_caller(infra, run_id, execution)
     store = S3SessionStore(args.bucket)
     dispatcher = Dispatcher(clients, store, args.bucket, execution, args.execution_version)
-    # Stale identity/session/deadline fails before entering any cleanup handler.
-    dispatcher.current(idle=False, allow_ready=True)
-    result = drive(dispatcher, Coordinator(clients, store, args.bucket), resume_approved=args.resume_approved)
+    with tempfile.TemporaryDirectory(prefix="techx-rollback-continuation-") as directory:
+        root = Path(directory) / "execution"
+        def rollback_source():
+            from bootstrap_publish import archive_loader
+            archive_loader(clients["s3"], args.bucket, args.session_id, args.execution_version, root)
+            if json.loads((root / "execution.json").read_bytes()) != execution:
+                raise ValueError("Continuation archive differs from immutable execution")
+            return root / "source"
+        result = continue_execution(dispatcher, Coordinator(clients, store, args.bucket), infra, chart, run_id,
+            rollback_source, resume_approved=args.resume_approved)
     if result.get("waiting") == "READY" and execution["action"] == "deploy-test-destroy":
         from orchestrate_lifecycle import request_cleanup
         result = dict(waiting="CLEANUP_REQUESTED", requestAcknowledged=request_cleanup(clients, store, execution, args.execution_version))

@@ -23,6 +23,7 @@ from workload_state import ensure_empty_state
 ACCOUNT = "058114477594"
 PROJECT = "techx-automation-lifecycle"
 LAUNCHER = f"arn:aws:lambda:us-east-1:{ACCOUNT}:function:techx-automation-cleanup-launcher"
+OPENING_ACTIONS = ("deploy-test-destroy", "deploy-window", "deploy-window-rollback")
 
 
 def encoded(record): return json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
@@ -46,7 +47,7 @@ def initial_record(session_id, sources, hours, email, action, now=None, *, appro
     if set(sources) != {"techx-infra", "techx-chart", "techx-platform"} or any(not re.fullmatch(r"[a-f0-9]{40}", sha) for sha in sources.values()):
         raise ValueError("Exactly three full source revisions are required")
     if type(hours) is not int or not 3 <= hours <= 24: raise ValueError("Session window must be between 3 and 24 hours")
-    if action not in ("deploy-test-destroy", "deploy-window"): raise ValueError("Unsupported lifecycle action")
+    if action not in OPENING_ACTIONS: raise ValueError("Unsupported lifecycle action")
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email): raise ValueError("Budget alert email is invalid")
     budget = approved_budget(approved_budget_usd)
     deadline = now + timedelta(hours=hours)

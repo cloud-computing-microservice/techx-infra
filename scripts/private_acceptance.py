@@ -24,6 +24,8 @@ from workload_state import read_state
 class PrivateAcceptance:
     session_status = "PROVISIONING"
     task_stage = "private"
+    receipt_schema_version = 1
+    checks = CHECKS
 
     def __init__(self, runtime, store, version, task_id, *, clock, sleep=time.sleep, tunnel_factory=VpnTunnel, http_factory=PrivateHTTP):
         self.runtime, self.store, self.version, self.task_id = runtime, store, version, task_id
@@ -162,18 +164,20 @@ class PrivateAcceptance:
                 or observed.get("health", {}).get("status") != "Healthy"):
             raise PrivateFailure("argocd-revision-health")
 
-    def resilience(self, http, public):
+    def lookup_order(self, http, public):
         summary = public["result"].get("orderSummary", {})
         if (not re.fullmatch(r"ord_[a-f0-9-]{8,64}", summary.get("id", ""))
                 or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", summary.get("productId", ""))
                 or any(type(summary.get(key)) is not int for key in ("subtotalCents", "shippingCents", "totalCents"))):
             raise PrivateFailure("public-order-proof")
-        def lookup():
-            status, value = http.request("GET", "/api/orders/" + summary["id"])
-            order = value.get("order", {})
-            if status != 200 or any(order.get(key) != summary[key] for key in ("id", "subtotalCents", "shippingCents", "totalCents")):
-                raise PrivateFailure("order-persistence")
-        lookup()
+        status, value = http.request("GET", "/api/orders/" + summary["id"])
+        order = value.get("order", {})
+        if status != 200 or any(order.get(key) != summary[key] for key in ("id", "subtotalCents", "shippingCents", "totalCents")):
+            raise PrivateFailure("order-persistence")
+        return summary
+
+    def resilience(self, http, public):
+        summary = self.lookup_order(http, public)
         self.checkpoint(resilience=dict(state="CALLING", test="frontend-replica-drift"))
         try:
             changed = self.kube.kubectl("scale", "deployment/frontend", "--replicas=2", "-n", "techx-staging", "-o", "json")
@@ -199,7 +203,7 @@ class PrivateAcceptance:
         pods = self.kube.kubectl("get", "pods", "-n", "techx-staging", "-l", "app.kubernetes.io/component=order-api", "-o", "json")["items"]
         current = {row["metadata"]["uid"] for row in pods if not row["metadata"].get("deletionTimestamp")}
         if after <= before or len(current) != 1 or current & previous: raise PrivateFailure("order-restart-unproven")
-        lookup()
+        self.lookup_order(http, public)
         status, value = http.request("POST", "/api/orders", payload=checkout_payload(summary["productId"]),
             idempotency_key="acceptance-" + public["dispatchId"])
         if status != 200 or value.get("idempotentReplay") is not True or value.get("order", {}).get("id") != summary["id"]:
@@ -241,9 +245,9 @@ class PrivateAcceptance:
             self.wait_ready()
         if not tunnel.disconnected: raise PrivateFailure("vpn-disconnect-unproven")
         self.binding_guard()
-        value = dict(schemaVersion=1, sessionId=record["sessionId"], executionVersion=self.version, taskId=self.task_id,
+        value = dict(schemaVersion=self.receipt_schema_version, sessionId=record["sessionId"], executionVersion=self.version, taskId=self.task_id,
             contextSha256=self.context_hash, stateSha256=self.state_hash, publicReference=self.public_reference(record),
-            checks=sorted(CHECKS), vpn=tunnel.evidence(), privateObservations=http.observations,
+            checks=sorted(self.checks), vpn=tunnel.evidence(), privateObservations=http.observations,
             completedAt=self.clock().isoformat(),
             release=dict(platformSha=release["manifest"]["commit"], chartSha=self.selected["chartSha"], images=images), **self.receipt_fields(record))
         self.binding_guard()

@@ -7,6 +7,8 @@ from active_release_contract import reference, read_rollout_receipt
 from plan_review_store import checksum, read_json
 from private_acceptance_contract import CHECKS, evidence_record, validate_private_result
 
+SMOKE_CHECKS = CHECKS - {"replica-self-heal", "order-restart-persistence"} | {"order-lookup-replay"}
+
 
 def active_private_context(record):
     validate_active_public_checkpoint(record)
@@ -39,10 +41,14 @@ def read_active_private_receipt(client, bucket, record, execution_version):
     stage = validate_active_private_checkpoint(record)
     ref = stage["receiptReference"]
     value, _ = read_json(client, bucket, ref["key"], ref["versionId"])
+    if not isinstance(value, dict) or type(value.get("schemaVersion")) is not int or value["schemaVersion"] not in (1, 2):
+        raise ValueError("Unsupported active private acceptance receipt version")
+    schema = value["schemaVersion"]
     pointer = record["releaseCandidate"]
-    expected = dict(schemaVersion=1, kind="active-private-acceptance", sessionId=record["sessionId"], executionVersion=execution_version,
+    expected = dict(schemaVersion=schema, kind="active-private-acceptance", sessionId=record["sessionId"], executionVersion=execution_version,
         taskId=stage["taskId"], contextSha256=stage["contextSha256"], releaseId=pointer["id"],
-        publicReference=pointer["publicAcceptance"]["receiptReference"], rolloutReference=pointer["rollout"]["receiptReference"], checks=sorted(CHECKS))
+        publicReference=pointer["publicAcceptance"]["receiptReference"], rolloutReference=pointer["rollout"]["receiptReference"], checks=sorted(CHECKS if schema == 1 else SMOKE_CHECKS))
+    if schema == 2: expected["suite"] = "release-smoke"
     if (not isinstance(value, dict) or set(value) != set(expected) | {"stateSha256", "vpn", "privateObservations", "completedAt", "release"}
             or checksum(value) != ref["sha256"] or any(value.get(key) != item for key, item in expected.items())
             or value.get("release") != stage.get("release")):

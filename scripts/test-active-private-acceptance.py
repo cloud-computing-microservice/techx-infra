@@ -73,6 +73,11 @@ class ActivePrivateTests(unittest.TestCase):
                 if path == "/argocd/api/v1/session": return (200, dict(token="header.payload.signature")) if case.auth else (401, {})
                 if path == "/argocd/api/v1/session/userinfo": return 200, dict(loggedIn=True, username="admin")
                 if path.startswith("/argocd/"): return (200, deepcopy(case.r.app)) if token else (401, dict(error="unauthorized"))
+                if method == "GET" and path.startswith("/api/orders/"):
+                    if case.cleanup:
+                        f.record["status"] = "DESTROYING"
+                        self.guard()
+                    if not case.persist: return 404, dict(error="not found")
                 if not p.service.orders and method == "GET": return 404, dict(error="not found")
                 response = p.service.request(method, path, body=json.dumps(payload).encode() if payload else None,
                     headers={"Idempotency-Key": idempotency_key} if idempotency_key else {})
@@ -82,7 +87,7 @@ class ActivePrivateTests(unittest.TestCase):
 
     def perform(self): return self.worker.perform(self.owner, self.epoch)
 
-    def test_full_active_private_suite_matches_new_release_and_retains_old_baseline(self):
+    def test_active_smoke_matches_new_release_and_retains_old_baseline(self):
         self.perform()
         proof = read_active_private_receipt(self.f.clients["s3"], self.d.bucket, self.f.record, self.d.version)
         self.assertEqual(proof["kind"], "active-private-acceptance")
@@ -96,6 +101,57 @@ class ActivePrivateTests(unittest.TestCase):
         self.f.record = release(self.f.record, self.owner, self.epoch)
         with self.assertRaises(ValueError): finish_task(self.f.store, self.task, True, self.f.now)
         self.assertEqual(self.f.record["deploymentTask"]["state"], "RUNNING")
+
+    def test_smoke_keeps_vpn_runtime_and_order_checks_without_pod_mutations(self):
+        from active_private_contract import SMOKE_CHECKS
+        original = self.runtime.run
+        def read_only(command, **kwargs):
+            self.assertFalse("scale" in command or "restart" in command, command)
+            return original(command, **kwargs)
+        self.runtime.run = read_only
+        self.perform()
+        proof = read_active_private_receipt(self.f.clients["s3"], self.d.bucket, self.f.record, self.d.version)
+        self.assertEqual((proof["schemaVersion"], proof["suite"]), (2, "release-smoke"))
+        self.assertEqual(proof["checks"], sorted(SMOKE_CHECKS))
+        self.assertNotIn("replica-self-heal", proof["checks"])
+        self.assertNotIn("order-restart-persistence", proof["checks"])
+        self.assertEqual(self.f.record["stages"]["private"], self.cold)
+
+    def test_smoke_requires_same_idempotent_order_on_private_route(self):
+        def changed(response, method, path):
+            if method == "POST" and path == "/api/orders":
+                value = json.loads(response["body"])
+                value["order"]["id"] = "ord_another-12345678"
+                response["body"] = json.dumps(value).encode()
+        self.p.service.mutate = changed
+        with self.assertRaisesRegex(PrivateFailure, "idempotency-persistence"): self.perform()
+        self.assertEqual(self.f.record["acceptedRelease"], self.baseline)
+
+    def test_resigned_smoke_cannot_claim_full_resilience_or_an_unknown_suite(self):
+        self.perform()
+        ref = self.f.record["releaseCandidate"]["privateAcceptance"]["receiptReference"]
+        body, version = self.r.artifacts[ref["key"]]
+        original = json.loads(body)
+        for patch_value in (dict(schemaVersion=1), dict(schemaVersion=True), dict(schemaVersion=3),
+                            dict(suite="full-resilience"), dict(checks=original["checks"] + ["replica-self-heal"])):
+            value = dict(original, **patch_value)
+            self.r.artifacts[ref["key"]] = encoded(value), version
+            ref["sha256"] = checksum(value)
+            with self.subTest(patch=patch_value), self.assertRaises(ValueError):
+                read_active_private_receipt(self.f.clients["s3"], self.d.bucket, self.f.record, self.d.version)
+
+    def test_legacy_full_receipt_remains_readable_through_real_history(self):
+        from types import MethodType
+        from private_acceptance import PrivateAcceptance
+        from private_acceptance_contract import CHECKS
+        self.worker.receipt_schema_version = 1
+        self.worker.checks = CHECKS
+        self.worker.resilience = MethodType(PrivateAcceptance.resilience, self.worker)
+        self.worker.receipt_fields = lambda record: dict(kind="active-private-acceptance", releaseId=record["releaseCandidate"]["id"],
+            rolloutReference=record["releaseCandidate"]["rollout"]["receiptReference"])
+        self.complete_parent()
+        accepted = read_accepted_history(self.f.clients["s3"], self.d.bucket, self.f.record, self.d.version)
+        self.assertEqual(accepted, self.f.record["acceptedRelease"])
 
     def test_duplicate_or_changed_public_context_cannot_reuse_the_task(self):
         with self.assertRaises(ValueError): claim_task(self.f.store, self.f.clients["s3"], self.d.bucket, self.task_id, self.f.instance_id, self.f.now)
@@ -117,12 +173,12 @@ class ActivePrivateTests(unittest.TestCase):
         with self.assertRaisesRegex(PrivateFailure, "argocd-authentication"): self.perform()
         self.assertEqual(self.f.record["acceptedRelease"], self.baseline)
 
-    def test_new_public_order_must_survive_another_restart(self):
+    def test_fresh_public_order_must_be_readable_over_private_route(self):
         self.persist = False
         with self.assertRaisesRegex(PrivateFailure, "order-persistence"): self.perform()
         self.assertEqual(self.f.record["acceptedRelease"], self.baseline)
 
-    def test_cleanup_takeover_during_restart_fences_receipt_and_baseline(self):
+    def test_cleanup_takeover_during_order_lookup_fences_receipt_and_baseline(self):
         self.cleanup = True
         with self.assertRaises(ValueError): self.perform()
         self.assertEqual(self.f.record["status"], "DESTROYING")

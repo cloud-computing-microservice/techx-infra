@@ -103,7 +103,7 @@ locals {
     }
     read = {
       Version = "2012-10-17", Statement = [
-        { Effect = "Allow", Action = ["ec2:Describe*", "eks:ListClusters", "iam:ListRoles", "iam:ListPolicies", "tag:GetResources", "cloudfront:ListDistributions", "cloudfront:ListVpcOrigins", "route53:ListHostedZones", "route53:ListHostedZonesByName", "acm:ListCertificates", "logs:DescribeLogGroups"], Resource = "*" },
+        { Effect = "Allow", Action = ["ec2:Describe*", "eks:ListClusters", "iam:ListRoles", "iam:ListPolicies", "tag:GetResources", "cloudfront:ListDistributions", "cloudfront:ListVpcOrigins", "cloudfront:ListFunctions", "route53:ListHostedZones", "route53:ListHostedZonesByName", "acm:ListCertificates", "logs:DescribeLogGroups"], Resource = "*" },
         { Effect = "Allow", Action = ["iam:GetRole", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:GetRolePolicy"], Resource = concat(local.workload_role_arns, [local.deployment_role_arn]) },
         { Effect = "Allow", Action = ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions"], Resource = [local.workload_policy_arn, local.workload_boundary_arn, "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy", "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy", "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy", "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"] }
       ]
@@ -242,7 +242,7 @@ resource "aws_iam_role_policy" "lifecycle_admission_inventory" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     { Effect = "Allow", Action = ["ec2:DescribeInstances", "ec2:DescribeVolumes", "ec2:DescribeVpcs", "ec2:DescribeAddresses", "ec2:DescribeVpcEndpoints", "ec2:DescribeClientVpnEndpoints", "ec2:DescribeClientVpnTargetNetworks", "ec2:DescribeClientVpnConnections", "eks:ListClusters", "iam:ListRoles", "iam:ListPolicies", "secretsmanager:ListSecrets", "tag:GetResources", "cloudfront:ListDistributions", "cloudfront:ListVpcOrigins", "cloudfront:ListFunctions", "route53:ListHostedZonesByName", "logs:DescribeLogGroups"], Resource = "*" },
     { Effect = "Allow", Action = ["eks:ListNodegroups", "eks:DescribeNodegroup"], Resource = ["arn:aws:eks:us-east-1:058114477594:cluster/techx-staging", "arn:aws:eks:us-east-1:058114477594:nodegroup/techx-staging/*/*"] },
-    { Effect = "Allow", Action = ["cloudfront:ListTagsForResource"], Resource = "arn:aws:cloudfront::058114477594:distribution/*" },
+    { Effect = "Allow", Action = ["cloudfront:ListTagsForResource"], Resource = ["arn:aws:cloudfront::058114477594:distribution/*", "arn:aws:cloudfront::058114477594:vpcorigin/*"] },
     { Effect = "Allow", Action = ["route53:ListTagsForResource"], Resource = "arn:aws:route53:::hostedzone/*" },
     { Effect = "Allow", Action = ["acm:DescribeCertificate"], Resource = "arn:aws:acm:us-east-1:058114477594:certificate/*" }
   ] })

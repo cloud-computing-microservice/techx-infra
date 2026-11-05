@@ -35,7 +35,7 @@ locals {
       Version = "2012-10-17", Statement = [{
         Effect = "Allow", Resource = "*", Action = [
           "ec2:Describe*", "eks:ListClusters", "iam:ListRoles", "iam:ListPolicies", "tag:GetResources",
-          "cloudfront:ListDistributions", "cloudfront:ListVpcOrigins", "route53:ListHostedZones", "route53:ListHostedZonesByName",
+          "cloudfront:ListDistributions", "cloudfront:ListVpcOrigins", "cloudfront:ListFunctions", "route53:ListHostedZones", "route53:ListHostedZonesByName",
           "acm:ListCertificates", "logs:DescribeLogGroups", "secretsmanager:ListSecrets"
         ]
       }]

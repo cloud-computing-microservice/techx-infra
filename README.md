@@ -177,7 +177,15 @@ acceptance window, disconnect AWS VPN Client, remove the public Cloudflare
 
 The teardown removes edge resources first, then workload/Ingress resources,
 waits for the internal ALB to disappear, destroys the foundation, and fails if
-the final TechX inventory (including ECR repositories) is not empty. Each phase
+the final TechX inventory (including ECR repositories) is not empty. Inventory
+also requires empty CloudFront VPC origin, CloudFront Function and workload log
+group arrays. It detects tagged distributions after their storefront alias has
+been removed, follows bounded CloudFront pagination, and fails on incomplete
+pages or API errors. Function names and EKS/Client VPN log paths are scoped to
+the selected environment; automation control logs and other environments are
+retained. Older inventory snapshots missing these fields require a fresh read.
+These are read-only checks; they do not delete discovered orphan resources.
+Each phase
 applies a saved plan reviewed to permit only deletion/no-op; edge deletion is
 restricted to the edge modules. It preserves the live EKS API CIDRs and uses an
 isolated kubeconfig with an explicit account/cluster context. Private keys, VPN profiles, private

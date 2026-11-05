@@ -12,6 +12,38 @@ function Invoke-AwsJson([string[]]$Arguments) {
   return $raw | ConvertFrom-Json
 }
 
+function Get-CloudFrontItems([string]$Operation, [string]$Field) {
+  $marker = $null
+  $seen = @{}
+  for ($page = 0; $page -lt 20; $page++) {
+    $arguments = @('cloudfront', $Operation, '--no-paginate')
+    if ($marker) { $arguments += @('--marker', $marker) }
+    $list = (Invoke-AwsJson $arguments).$Field
+    $items = @($list.Items | Where-Object { $null -ne $_ })
+    if ($null -eq $list -or $list.Quantity -isnot [long] -and $list.Quantity -isnot [int] -or
+        $list.Quantity -ne $items.Count -or
+        ($Operation -ne 'list-functions' -and $list.IsTruncated -isnot [bool])) {
+      throw "Incomplete CloudFront inventory: $Operation"
+    }
+    $items
+    $marker = $list.NextMarker
+    if ($Operation -ne 'list-functions' -and $list.IsTruncated -ne [bool]$marker) {
+      throw "Inconsistent CloudFront pagination: $Operation"
+    }
+    if (-not $marker) { return }
+    if ($seen.ContainsKey($marker)) { throw "Repeated CloudFront inventory marker: $Operation" }
+    $seen[$marker] = $true
+  }
+  throw "CloudFront inventory page limit exceeded: $Operation"
+}
+
+function Test-WorkloadCloudFrontTags([string]$Arn) {
+  $tags = (Invoke-AwsJson @('cloudfront', 'list-tags-for-resource', '--resource', $Arn)).Tags
+  if ($null -eq $tags) { throw 'CloudFront tags are unavailable.' }
+  return (@($tags.Items | Where-Object { $_.Key -eq 'Project' -and $_.Value -eq 'techx' }).Count -eq 1 -and
+    @($tags.Items | Where-Object { $_.Key -eq 'Environment' -and $_.Value -eq $Environment }).Count -eq 1)
+}
+
 $identity = Invoke-AwsJson @('sts', 'get-caller-identity')
 $resourcePrefix = "techx-$Environment"
 $tagFilters = @('Name=tag:Project,Values=techx', "Name=tag:Environment,Values=$Environment")
@@ -80,16 +112,48 @@ foreach ($endpoint in $vpnEndpoints) {
   }
 }
 
-$distributionList = Invoke-AwsJson @('cloudfront', 'list-distributions')
 $distributions = @()
-foreach ($distribution in @($distributionList.DistributionList.Items | Where-Object { $_.Aliases.Items -contains $DomainName })) {
+foreach ($distribution in @(Get-CloudFrontItems 'list-distributions' 'DistributionList')) {
+  if (-not $distribution.Id) { throw 'Invalid CloudFront distribution identity.' }
   $arn = "arn:aws:cloudfront::$($identity.Account):distribution/$($distribution.Id)"
-  $tags = (Invoke-AwsJson @('cloudfront', 'list-tags-for-resource', '--resource', $arn)).Tags.Items
-  $projectTag = @($tags | Where-Object { $_.Key -eq 'Project' -and $_.Value -eq 'techx' }).Count -eq 1
-  $environmentTag = @($tags | Where-Object { $_.Key -eq 'Environment' -and $_.Value -eq $Environment }).Count -eq 1
-  if ($projectTag -and $environmentTag) {
+  if (Test-WorkloadCloudFrontTags $arn) {
     $distributions += @{ id = $distribution.Id; domainName = $distribution.DomainName; status = $distribution.Status; enabled = $distribution.Enabled }
   }
+}
+$origins = @()
+foreach ($origin in @(Get-CloudFrontItems 'list-vpc-origins' 'VpcOriginList')) {
+  if (-not $origin.Id -or $origin.Arn -notlike "arn:aws:cloudfront::$($identity.Account):vpcorigin/*") {
+    throw 'Invalid CloudFront VPC origin identity.'
+  }
+  if (Test-WorkloadCloudFrontTags $origin.Arn) {
+    $origins += @{ id = $origin.Id; arn = $origin.Arn; name = $origin.Name; status = $origin.Status }
+  }
+}
+# Functions are not tagged by this module; their environment-specific names
+# are the same ownership scope used by the Terraform/IAM contract.
+$functions = @()
+foreach ($function in @(Get-CloudFrontItems 'list-functions' 'FunctionList')) {
+    if (-not $function.Name -or $function.FunctionMetadata.FunctionARN -cne "arn:aws:cloudfront::$($identity.Account):function/$($function.Name)") {
+      throw 'Invalid workload CloudFront Function identity.'
+    }
+    if ($function.Name -clike "$resourcePrefix-*") {
+      $functions += @{ name = $function.Name; arn = $function.FunctionMetadata.FunctionARN; stage = $function.FunctionMetadata.Stage }
+    }
+}
+$logGroups = @()
+foreach ($prefix in @("/aws/eks/$resourcePrefix/", "/aws/client-vpn/$resourcePrefix")) {
+  $response = Invoke-AwsJson @('logs', 'describe-log-groups', '--region', $Region, '--log-group-name-prefix', $prefix)
+  if ($null -eq $response.logGroups -or $response.logGroups -isnot [array] -or $response.nextToken) {
+    throw 'CloudWatch Logs inventory is incomplete.'
+  }
+  if (@($response.logGroups | Where-Object { -not $_.logGroupName -or -not $_.arn }).Count) {
+    throw 'CloudWatch Logs inventory has an invalid group identity.'
+  }
+  $logGroups += @($response.logGroups | Where-Object {
+      $_.logGroupName -clike "/aws/eks/$resourcePrefix/*" -or
+      $_.logGroupName -ceq "/aws/client-vpn/$resourcePrefix" -or
+      $_.logGroupName -clike "/aws/client-vpn/$resourcePrefix-*"
+    } | ForEach-Object { @{ name = $_.logGroupName; arn = $_.arn; storedBytes = $_.storedBytes } })
 }
 $zones = @()
 foreach ($zone in @((Invoke-AwsJson @('route53', 'list-hosted-zones-by-name', '--dns-name', $DomainName)).HostedZones |
@@ -153,6 +217,9 @@ foreach ($mapping in @($certificateTags.ResourceTagMappingList)) {
   loadBalancerArns = $loadBalancers
   clientVpn = $vpn
   cloudFront = $distributions
+  cloudFrontVpcOrigins = $origins
+  cloudFrontFunctions = $functions
+  cloudWatchLogGroups = $logGroups
   privateHostedZones = @($zones | ForEach-Object { @{ id = $_.Id; name = $_.Name } })
   ecrRepositories = $repositories
   dynamodbTables = $tables

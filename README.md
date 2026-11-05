@@ -383,10 +383,18 @@ acceptance. The protected hosted public handoff now runs the complete public
 suite against the exact versioned rollout and candidate. It keeps separate active
 receipts, checks the actual hosted job and original infra SHA, and the parent
 consumes only that dispatched run's evidence, then dispatches `verify/active/1`
-while TESTING with the previous baseline. The private executor checks VPN,
-authenticated Argo, exact runtime digests, DynamoDB/IRSA, self-heal and the new
-public order/idempotency after another Order Pod replacement. It must disconnect
-the VPN before persisting its private versioned receipt.
+while TESTING with the previous baseline. Routine private release checks use the
+`release-smoke` suite: VPN/private DNS/HTTPS, authenticated Argo, exact runtime
+digests, DynamoDB/IRSA and lookup/idempotent replay of the fresh public order.
+They do not deliberately scale or restart Pods. Cold lifecycle acceptance and
+rollback still run the full self-heal/restart-persistence suite. The VPN must
+disconnect before any private acceptance receipt is persisted.
+
+Active private receipt version 2 explicitly records `suite: release-smoke` and
+its exact check set. The history reader also accepts historical version 1 only
+with the original full check set; a smoke receipt cannot claim full resilience.
+Both versions keep the exact candidate/public/rollout/runtime bindings and the
+accepted chain must still reach the original full cold acceptance.
 
 After that child exits successfully, its parent rereads the rollout/public/private
 proofs and writes immutable accepted history. READY, the new accepted baseline,

@@ -16,7 +16,7 @@ from ready_release_contract import read_reference
 # Authentication, configuration, ECR scan, TLS/network and unknown exceptions
 # require cleanup. A diagnostic is evidence, never authority by itself.
 APPLICATION_FAILURES = {"runtime-readiness", "argocd-revision-health", "order-persistence",
-                        "idempotency-restart-persistence", "self-heal-timeout"}
+                        "idempotency-persistence", "idempotency-restart-persistence", "self-heal-timeout"}
 
 
 def failure_key(record, task_id):

@@ -1,11 +1,13 @@
 """Private VPN/runtime suite for an active release without replacing cold proof."""
 from automation_session import claim, utc
-from active_private_contract import (active_private_context, private_result_key, read_active_private_receipt, validate_active_private_start)
+from active_private_contract import (SMOKE_CHECKS, active_private_context, private_result_key, read_active_private_receipt, validate_active_private_start)
 from active_public_contract import read_active_public_receipt
 from active_release_contract import read_rollout_receipt
 from edge_activation import read_activation_receipt
 from private_acceptance import PrivateAcceptance
 from private_acceptance_contract import evidence_record
+from private_http import PrivateFailure
+from public_probe import checkout_payload
 from ready_release_contract import accepted_baseline, read_manifest
 
 
@@ -26,6 +28,8 @@ class ActiveAcceptanceController:
 class ActivePrivateAcceptance(PrivateAcceptance):
     session_status = "TESTING"
     task_stage = "active"
+    receipt_schema_version = 2
+    checks = SMOKE_CHECKS
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -38,9 +42,19 @@ class ActivePrivateAcceptance(PrivateAcceptance):
     def set_stage(self, record, value): record["releaseCandidate"]["privateAcceptance"] = value
     def public_reference(self, record): return record["releaseCandidate"]["publicAcceptance"]["receiptReference"]
     def receipt_fields(self, record):
-        return dict(kind="active-private-acceptance", releaseId=record["releaseCandidate"]["id"], rolloutReference=record["releaseCandidate"]["rollout"]["receiptReference"])
+        return dict(kind="active-private-acceptance", suite="release-smoke", releaseId=record["releaseCandidate"]["id"], rolloutReference=record["releaseCandidate"]["rollout"]["receiptReference"])
     def receipt_key(self, record): return private_result_key(record, self.task_id)
     def read_receipt(self, record): return read_active_private_receipt(self.runtime.clients["s3"], self.runtime.bucket, record, self.version)
+
+    def resilience(self, http, public):
+        # Cold acceptance already proves self-heal and restart persistence.
+        # A routine release verifies its fresh public order over the VPN,
+        # without deliberately scaling or restarting an otherwise ready Pod.
+        summary = self.lookup_order(http, public)
+        status, value = http.request("POST", "/api/orders", payload=checkout_payload(summary["productId"]),
+            idempotency_key="acceptance-" + public["dispatchId"])
+        if status != 200 or value.get("idempotentReplay") is not True or value.get("order", {}).get("id") != summary["id"]:
+            raise PrivateFailure("idempotency-persistence")
 
     def perform(self, owner, epoch):
         try:

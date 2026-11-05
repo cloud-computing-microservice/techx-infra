@@ -2,6 +2,10 @@ variable "enable_cleanup_control" {
   description = "Enable only once the cleanup CodeBuild project and its immutable-bundle entry point have been reviewed and configured."
   type        = bool
   default     = false
+  validation {
+    condition     = !var.enable_cleanup_control || var.cleanup_alert_email != null
+    error_message = "Cleanup control requires an operator alert email; confirm its SNS subscription before paid deployment."
+  }
 }
 
 locals {
@@ -55,6 +59,8 @@ resource "aws_iam_role_policy" "cleanup_launcher" {
     { Effect = "Allow", Action = ["codebuild:StartBuild", "codebuild:ListBuildsForProject"], Resource = local.cleanup_project_arn },
     { Effect = "Allow", Action = ["codebuild:BatchGetBuilds"], Resource = local.cleanup_project_arn },
     { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = "${aws_cloudwatch_log_group.cleanup_launcher[0].arn}:*" },
+    { Effect = "Allow", Action = ["cloudwatch:PutMetricData"], Resource = "*",
+    Condition = { StringEquals = { "cloudwatch:namespace" = "TechX/Automation" } } },
     { Effect = "Allow", Action = ["sqs:SendMessage"], Resource = aws_sqs_queue.cleanup_dlq[0].arn }
   ] })
 }

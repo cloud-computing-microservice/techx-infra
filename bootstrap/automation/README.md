@@ -8,6 +8,28 @@ false. The lifecycle coordinator startup API is implemented, but its deployment
 executor, plan approval bridge and GitHub workflow are still being integrated;
 do not enable cleanup control or release automation before the complete path is ready.
 
+Cleanup control requires a private `cleanup_alert_email` input. It creates an
+encrypted SNS operator topic and five CloudWatch alarms for launcher errors,
+launcher throttling, failed cleanup builds, nonempty delivery DLQ and cleanup
+still uncompleted after the immutable deadline. The launcher emits a scoped
+`TechX/Automation/CleanupOverdue` metric for a started or existing running worker
+past that deadline; it does not restart a live worker or extend the window.
+Metric publication failure propagates to the launcher error alarm. Unknown AWS
+outcomes remain failures and cannot manufacture a completion marker.
+
+CloudWatch publishing and KMS use are limited to these same-account alarm ARNs;
+the launcher can write only the `TechX/Automation` namespace. The topic reuses the
+existing rotating control key. Before a paid session, confirm the SNS email
+subscription and exercise actual delivery in G1/G5. Terraform/mocked checks do
+not prove email delivery. See [CloudWatch SNS notifications](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Notify_Users_Alarm_Changes.html)
+and [SNS encryption permissions](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html).
+
+These retained control resources (five alarms, one custom metric, SNS topic and
+subscription, and their KMS/message requests) must be included separately in the
+approved estimate and closeout inventory. Workload teardown does not remove
+them. Alerts report a problem; they do not stop spending. No notification
+resources are created while cleanup control is disabled.
+
 New lifecycle sessions require an explicit `approved_budget_usd` keyword when
 calling `initial_record`. `automation_budget.py` validates the finite 1–80 USD
 policy and uses `min(60, approvedBudgetUsd)` as the admission gate. The estimate,

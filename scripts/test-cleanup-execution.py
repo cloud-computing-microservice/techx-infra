@@ -24,6 +24,17 @@ class ExecutionTests(unittest.TestCase):
         inventory.pop("ebsVolumes")
         with self.assertRaises(ValueError): assert_inventory(inventory)
 
+    def test_new_edge_and_logs_fields_must_be_present_and_empty(self):
+        inventory = dict(accountId=ACCOUNT, region="us-east-1", environment="staging")
+        fields = json.loads(Path(__file__).parents[1].joinpath("contracts/inventory-fields.json").read_text())
+        inventory.update({name: [] for name in fields})
+        for name in ("cloudFrontVpcOrigins", "cloudFrontFunctions", "cloudWatchLogGroups"):
+            for bad in (None, {}, ["leftover"]):
+                with self.subTest(field=name, bad=bad):
+                    with self.assertRaises(ValueError): assert_inventory(dict(inventory, **{name: bad}))
+            old = dict(inventory); old.pop(name)
+            with self.subTest(missing=name), self.assertRaises(ValueError): assert_inventory(old)
+
     def test_fencing_requires_infrastructure_worker_stop_proof(self):
         with self.assertRaises(ValueError): fence_session(self.record("deploy"), "cleanup:new")
         stopped = fence_session(self.record("deploy"), "cleanup:new", executor_stopped=True)

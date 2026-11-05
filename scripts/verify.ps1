@@ -114,6 +114,8 @@ python (Join-Path $PSScriptRoot 'test-active-private-failure.py')
 if ($LASTEXITCODE -ne 0) { throw 'Private failure diagnostics, positive terminal rollback admission and restoration integration tests failed.' }
 python (Join-Path $PSScriptRoot 'test-rollback-orchestration.py')
 if ($LASTEXITCODE -ne 0) { throw 'Bounded rollback failure disposition, manager/entry-point cleanup and integrated continuation tests failed.' }
+python (Join-Path $PSScriptRoot 'test-rollback-opening-continuation.py')
+if ($LASTEXITCODE -ne 0) { throw 'Explicit reviewed rollback opt-in, immutable continuation and shared observation deadline tests failed.' }
 python (Join-Path $PSScriptRoot 'test-rollback-proposal.py')
 if ($LASTEXITCODE -ne 0) { throw 'Exact accepted baseline Git restoration proposal, no rebase/merge and bounded intent tests failed.' }
 python (Join-Path $PSScriptRoot 'test-rollback-admission.py')

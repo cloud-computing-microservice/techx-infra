@@ -421,7 +421,13 @@ records intended artifacts and bounded failed observations; it cannot stand
 in for completed rollout or acceptance evidence. The same failed manager/SSM,
 single-use reservation, protected restore and fresh acceptance are required.
 Unproven Application changes and runtime API errors continue to require cleanup.
-Opening/continuation opt-in wiring remains unfinished; the rollback option is
-not exposed by the opening UI.
+The opening workflow exposes `deploy-window-rollback` as an explicit reviewed
+policy; its default remains `deploy-test-destroy`. The selected action is pinned
+in the opening request and immutable execution. Existing sessions cannot turn
+rollback on through a continuation or `--resume-approved`: that flag still
+requires the separate saved-plan approval and cannot authorize rollback.
+An opted-in failed session resumes the full rollback controller from the same
+execution/archive, using the remainder of the caller's forty-minute observation
+budget. Original cleanup/deadline and single-attempt guards still apply.
 Offline tests do not establish cloud acceptance or authorize a deployment
 window. The existing cleanup schedule and deadline are unchanged.

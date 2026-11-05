@@ -14,7 +14,7 @@ from automation_budget import approved_budget, validate_estimate
 from automation_bundle import extract, pack
 from automation_session import utc
 from cleanup_execution import assert_inventory
-from lifecycle_coordinator import ACCOUNT, Coordinator, initial_record
+from lifecycle_coordinator import ACCOUNT, OPENING_ACTIONS, Coordinator, initial_record
 from plan_review_store import checksum
 from promotion_authority import authority, identity as app_identity
 from run_bootstrap_publish import verified_checkout
@@ -27,7 +27,7 @@ INPUTS = {"action", "platform_sha", "chart_sha", "duration_hours", "approved_bud
 
 def typed_inputs(value):
     if not isinstance(value, dict) or set(value) != INPUTS: raise ValueError("Complete typed lifecycle inputs are required")
-    if value["action"] not in ("deploy-test-destroy", "deploy-window"): raise ValueError("Unsupported opening action")
+    if value["action"] not in OPENING_ACTIONS: raise ValueError("Unsupported opening action")
     for key in ("platform_sha", "chart_sha"):
         if not isinstance(value[key], str) or not re.fullmatch(r"[a-f0-9]{40}", value[key]): raise ValueError("Full peer SHAs are required")
     if not re.fullmatch(r"[0-9]{1,2}", str(value["duration_hours"])) or not 3 <= int(value["duration_hours"]) <= 24:

@@ -37,7 +37,8 @@ class ExecutorTests(unittest.TestCase):
         self.vpc = dict(VpcId="vpc-12345678", CidrBlock="172.30.0.0/24", IsDefault=False, State="available", Tags=deepcopy(tags))
         self.group = dict(GroupId=self.config["securityGroupId"], OwnerId="058114477594", VpcId="vpc-12345678", IpPermissions=[], Tags=deepcopy(tags),
             IpPermissionsEgress=[dict(IpProtocol=p, FromPort=port, ToPort=port, IpRanges=[dict(CidrIp=cidr)]) for p, port, cidr in
-                                 (("tcp", 443, "0.0.0.0/0"), ("tcp", 53, "172.30.0.2/32"), ("udp", 53, "172.30.0.2/32"))])
+                                 (("tcp", 443, "0.0.0.0/0"), ("udp", 443, "0.0.0.0/0"),
+                                  ("tcp", 53, "172.30.0.2/32"), ("udp", 53, "172.30.0.2/32"))])
         self.route = dict(VpcId="vpc-12345678", Routes=[dict(DestinationCidrBlock="0.0.0.0/0", GatewayId="igw-12345678", State="active")])
         self.ec2 = self.f.clients["ec2"]
         self.ec2.describe_images = lambda **kw: dict(Images=[deepcopy(self.image)])

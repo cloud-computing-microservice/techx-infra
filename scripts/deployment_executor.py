@@ -54,14 +54,15 @@ def validate_launch(ec2, config):
             or len(groups) != 1 or groups[0].get("VpcId") != vpc_id or groups[0].get("OwnerId") != ACCOUNT
             or groups[0].get("IpPermissions") != []):
         raise ValueError("Executor needs its owned control VPC with no inbound security group rules")
-    expected_egress = {("tcp", 443, 443, "0.0.0.0/0"), ("tcp", 53, 53, "172.30.0.2/32"), ("udp", 53, 53, "172.30.0.2/32")}
+    expected_egress = {("tcp", 443, 443, "0.0.0.0/0"), ("udp", 443, 443, "0.0.0.0/0"),
+                       ("tcp", 53, 53, "172.30.0.2/32"), ("udp", 53, 53, "172.30.0.2/32")}
     actual_egress = set()
     for rule in groups[0].get("IpPermissionsEgress", []):
         if rule.get("Ipv6Ranges") or rule.get("UserIdGroupPairs") or rule.get("PrefixListIds") or len(rule.get("IpRanges", [])) != 1:
             raise ValueError("Executor security group contains unreviewed egress")
         actual_egress.add((rule.get("IpProtocol"), rule.get("FromPort"), rule.get("ToPort"), rule["IpRanges"][0].get("CidrIp")))
     if actual_egress != expected_egress:
-        raise ValueError("Executor egress must be HTTPS plus VPC DNS only")
+        raise ValueError("Executor egress must be HTTPS, Client VPN UDP 443 and VPC DNS only")
     routes = ec2.describe_route_tables(Filters=[dict(Name="association.subnet-id", Values=[config["subnetId"]])])
     tables = routes.get("RouteTables", [])
     if (routes.get("NextToken") or len(tables) != 1 or tables[0].get("VpcId") != vpc_id

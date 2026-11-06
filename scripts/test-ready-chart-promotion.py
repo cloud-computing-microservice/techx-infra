@@ -22,9 +22,10 @@ support = load("ready_promotion_candidate_fixture", "test-ready-release-publish.
 
 
 class ActivePromotionTests(unittest.TestCase):
-    def setUp(self):
-        self.p = support.ReadyReleaseTests()
-        self.p.setUp(); self.addCleanup(self.p.doCleanups)
+    def setUp(self, *, publisher=None, ci_run=955):
+        self.p = publisher or support.ReadyReleaseTests()
+        if publisher is None: self.p.setUp()
+        self.addCleanup(self.p.doCleanups)
         p = self.p
         p.publish()
         self.chart = p.chart()
@@ -45,16 +46,16 @@ class ActivePromotionTests(unittest.TestCase):
         self.pull.update(merged=False, changed_files=2, mergeable=True, mergeable_state="clean", user=dict(login="publisher"))
         self.review = [dict(state="APPROVED", submitted_at=f.now.isoformat(), commit_id=self.chart.branch,
             user=dict(type="User", id=31, login="reviewer"))]
-        self.ci = dict(id=955, head_sha=self.chart.branch, head_branch=self.chart.proposal.branch, event="pull_request", run_attempt=1,
+        self.ci = dict(id=ci_run, head_sha=self.chart.branch, head_branch=self.chart.proposal.branch, event="pull_request", run_attempt=1,
             path=".github/workflows/verify.yml", repository=dict(full_name=CHART_REPO), head_repository=dict(full_name=CHART_REPO),
             status="completed", conclusion="success", created_at=f.now.isoformat())
         read = self.chart.github.get
         def get(endpoint):
             if endpoint == "branches/main/protection": return deepcopy(self.policy)
-            if endpoint == "pulls/7": return deepcopy(self.pull)
-            if endpoint == "pulls/7/files?per_page=100": return [dict(filename=name, status="modified") for name in ("values-staging.yaml", "releases/staging.json")]
-            if endpoint == "pulls/7/reviews?per_page=100": return deepcopy(self.review)
-            if endpoint == "actions/runs/955": return deepcopy(self.ci)
+            if endpoint == f"pulls/{self.pull['number']}": return deepcopy(self.pull)
+            if endpoint == f"pulls/{self.pull['number']}/files?per_page=100": return [dict(filename=name, status="modified") for name in ("values-staging.yaml", "releases/staging.json")]
+            if endpoint == f"pulls/{self.pull['number']}/reviews?per_page=100": return deepcopy(self.review)
+            if endpoint == f"actions/runs/{ci_run}": return deepcopy(self.ci)
             if endpoint == f"actions/workflows/verify.yml/runs?head_sha={self.chart.branch}&per_page=100": return dict(total_count=1, workflow_runs=[deepcopy(self.ci)])
             return read(endpoint)
         self.chart.github.get = get
@@ -63,19 +64,19 @@ class ActivePromotionTests(unittest.TestCase):
     def evaluate(self, **kw):
         return self.checks.evaluate(self.p.source, self.chart.github, app_id=12345, app_slug="techx-promotion", **kw)
 
-    def reviews(self):
+    def reviews(self, run_id=100):
         from review_chart_promotion import ReadyPromotionReview, ENVIRONMENT, WORKFLOW
-        self.infra_run = dict(id=100, status="in_progress", event="workflow_dispatch", run_attempt=1, head_branch="main",
+        self.infra_run = dict(id=run_id, status="in_progress", event="workflow_dispatch", run_attempt=1, head_branch="main",
             head_sha=self.checks.execution["sourceRevisions"]["techx-infra"], path=WORKFLOW, repository=dict(full_name="cloud-computing-microservice/techx-infra"),
             head_repository=dict(full_name="cloud-computing-microservice/techx-infra"), created_at=self.f.now.isoformat(), updated_at=self.f.now.isoformat())
         self.approvals = [dict(state="approved", environments=[dict(id=10, name=ENVIRONMENT)], user=dict(type="User", id=31, login="reviewer"))]
         def get(endpoint):
-            if endpoint == "actions/runs/100": return deepcopy(self.infra_run)
-            if endpoint == "actions/runs/100/approvals": return deepcopy(self.approvals)
+            if endpoint == f"actions/runs/{run_id}": return deepcopy(self.infra_run)
+            if endpoint == f"actions/runs/{run_id}/approvals": return deepcopy(self.approvals)
             raise AssertionError(endpoint)
         infra = SimpleNamespace(get=get)
         args = (self.f.clients, self.f.store, "control-bucket", self.checks.execution, "execution-v1")
-        extra = dict(run_id=100, platform=self.p.github, clock=lambda: self.f.now)
+        extra = dict(run_id=run_id, platform=self.p.github, clock=lambda: self.f.now)
         return ReadyPromotionReview(*args, **extra), ReadyPromotionReview(*args, read_only=False, **extra), infra
 
     def grant(self):

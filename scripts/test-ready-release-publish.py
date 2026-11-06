@@ -27,30 +27,39 @@ proposal_support = load("active_chart_fixture", "test-bootstrap-proposal.py")
 
 
 class ReadyReleaseTests(unittest.TestCase):
-    def setUp(self):
-        self.private = private_support.PrivateAcceptanceTests()
-        self.private.setUp(); self.addCleanup(self.private.doCleanups)
-        self.private.complete_parent()
+    def setUp(self, *, private=None, source_sha=None, run_id=701, opening_action="deploy-window", chart=None):
+        self.private = private or private_support.PrivateAcceptanceTests()
+        if private is None:
+            # Select the opening policy before the first execution/receipt is
+            # created. Mixed-history tests must never rewrite immutable input
+            # to opt into rollback after a candidate has failed.
+            base = private_support.public_support.edge_support.support.ManagerTests
+            setup = base.setUp
+            with patch.object(base, "setUp", lambda fixture: setup(fixture, action=opening_action)):
+                self.private.setUp()
+            self.private.complete_parent()
+        self.addCleanup(self.private.doCleanups)
+        self.existing_chart = chart
         f = self.f = self.private.f
         # The cold public child is consumed before the private task in the
         # actual orchestrator. This worker-level fixture completes it directly.
-        if f.record.get("workflowHandoff"): f.record["workflowHandoff"]["phase"] = "CONSUMED"
-        self.source_sha, self.owner = "c" * 40, "cloud-computing-microservice/techx-platform:701:1"
+        if private is None and f.record.get("workflowHandoff"): f.record["workflowHandoff"]["phase"] = "CONSUMED"
+        self.source_sha, self.owner = source_sha or "c" * 40, f"cloud-computing-microservice/techx-platform:{run_id}:1"
         self.baseline = deepcopy(f.record["acceptedRelease"])
         self.main, self.descendant = self.source_sha, True
-        self.run = dict(id=701, run_attempt=1, status="in_progress", event="push", head_branch="main", head_sha=self.source_sha,
+        self.run = dict(id=run_id, run_attempt=1, status="in_progress", event="push", head_branch="main", head_sha=self.source_sha,
             path=".github/workflows/verify.yml", repository=dict(full_name="cloud-computing-microservice/techx-platform"),
             head_repository=dict(full_name="cloud-computing-microservice/techx-platform"))
-        self.jobs = [dict(id=801, name="acceptance / acceptance", run_id=701, head_sha=self.source_sha, status="completed", conclusion="success"),
-            dict(id=802, name="release / publish", run_id=701, head_sha=self.source_sha, status="in_progress")]
+        self.jobs = [dict(id=run_id + 100, name="acceptance / acceptance", run_id=run_id, head_sha=self.source_sha, status="completed", conclusion="success"),
+            dict(id=run_id + 101, name="release / publish", run_id=run_id, head_sha=self.source_sha, status="in_progress")]
         def get(endpoint):
-            if endpoint == "actions/runs/701": return deepcopy(self.run)
-            if endpoint == "actions/runs/701/jobs?filter=latest&per_page=100": return dict(total_count=len(self.jobs), jobs=deepcopy(self.jobs))
+            if endpoint == f"actions/runs/{run_id}": return deepcopy(self.run)
+            if endpoint == f"actions/runs/{run_id}/jobs?filter=latest&per_page=100": return dict(total_count=len(self.jobs), jobs=deepcopy(self.jobs))
             if endpoint == "git/ref/heads/main": return dict(object=dict(sha=self.main))
             if endpoint.startswith("compare/"): return dict(status="ahead" if self.descendant else "diverged", merge_base_commit=dict(sha=self.baseline["platformSha"]))
             raise AssertionError(endpoint)
         self.github = SimpleNamespace(get=get)
-        f.identity.update(Arn="arn:aws:sts::058114477594:assumed-role/techx-automation-publisher/techx-publish-701")
+        f.identity.update(Arn=f"arn:aws:sts::058114477594:assumed-role/techx-automation-publisher/techx-publish-{run_id}")
         self.source = self.private.g.runtime.source
         self.platform = self.source / "techx-platform"
         self.commands, self.on_build = [], None
@@ -72,6 +81,11 @@ class ReadyReleaseTests(unittest.TestCase):
         return self.publisher.publish(self.platform, self.source.parent)
 
     def chart(self):
+        if self.existing_chart is not None:
+            chart = self.existing_chart
+            chart.next_proposal(self.baseline["chartSha"])
+            chart.proposal = ReadyProposal(self.publisher, chart.github)
+            return chart
         chart = proposal_support.ProposalTests()
         chart.setUp(); self.addCleanup(chart.doCleanups)
         old = chart.base

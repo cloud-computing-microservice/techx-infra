@@ -28,9 +28,10 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class ActivePrivateTests(unittest.TestCase):
-    def setUp(self, action=None):
-        self.p = support.ActivePublicTests()
-        self.p.setUp(action=action); self.addCleanup(self.p.doCleanups)
+    def setUp(self, action=None, *, public=None):
+        self.p = public or support.ActivePublicTests()
+        if public is None: self.p.setUp(action=action)
+        self.addCleanup(self.p.doCleanups)
         p = self.p
         p.perform()
         self.f, self.d, self.r = p.f, p.d, p.r

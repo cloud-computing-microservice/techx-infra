@@ -18,9 +18,10 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class ProtectedReviewTests(unittest.TestCase):
-    def setUp(self):
-        self.p = support.ReviewTests()
-        self.p.setUp(); self.addCleanup(self.p.doCleanups)
+    def setUp(self, *, review=None):
+        self.p = review or support.ReviewTests()
+        if review is None: self.p.setUp()
+        self.addCleanup(self.p.doCleanups)
         self.f, self.d = self.p.f, self.p.d
         self.infra = self.p.checks.infra
         self.run = dict(id=1100, status="in_progress", event="workflow_dispatch", run_attempt=1, head_branch="main",

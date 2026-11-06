@@ -16,22 +16,24 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class ReservationTests(unittest.TestCase):
-    def setUp(self):
-        self.a = support.AdmissionTests()
-        self.a.setUp(); self.addCleanup(self.a.doCleanups)
+    def setUp(self, *, admission=None, run_id=300):
+        self.a = admission or support.AdmissionTests()
+        if admission is None: self.a.setUp()
+        self.addCleanup(self.a.doCleanups)
         self.f, self.d = self.a.f, self.a.d
         self.now = self.f.now
-        self.f.identity["Arn"] = "arn:aws:sts::058114477594:assumed-role/techx-automation-lifecycle-dispatcher/techx-lifecycle-300"
-        self.own = dict(id=300, status="in_progress", head_branch="main", head_sha=self.a.execution["sourceRevisions"]["techx-infra"],
+        self.run_id = run_id
+        self.f.identity["Arn"] = f"arn:aws:sts::058114477594:assumed-role/techx-automation-lifecycle-dispatcher/techx-lifecycle-{run_id}"
+        self.own = dict(id=run_id, status="in_progress", head_branch="main", head_sha=self.a.execution["sourceRevisions"]["techx-infra"],
             path=".github/workflows/staging-orchestrate.yml", event="workflow_dispatch", run_attempt=1,
             created_at=self.now.isoformat(),
             repository=dict(full_name=INFRA_REPO), head_repository=dict(full_name=INFRA_REPO))
         get = self.a.p.r.h.infra.get
-        self.a.p.r.h.infra.get = lambda endpoint: deepcopy(self.own) if endpoint == "actions/runs/300" else get(endpoint)
+        self.a.p.r.h.infra.get = lambda endpoint: deepcopy(self.own) if endpoint == f"actions/runs/{run_id}" else get(endpoint)
 
     def arm(self):
         return arm_rollback(self.f.clients, self.d.bucket, self.f.store, self.a.execution, self.d.version,
-            self.a.p.r.h.infra, "300", clock=lambda: self.now)
+            self.a.p.r.h.infra, str(self.run_id), clock=lambda: self.now)
 
     def test_one_cas_reservation_retains_failed_state_and_accepted_baseline(self):
         original = deepcopy(self.f.record)

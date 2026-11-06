@@ -22,13 +22,16 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class ControllerTests(unittest.TestCase):
-    def setUp(self):
-        self.p = support.PrivatePrepareTests()
-        self.p.setUp(); self.addCleanup(self.p.doCleanups)
+    def setUp(self, *, preparation=None):
+        self.p = preparation or support.PrivatePrepareTests()
+        if preparation is None: self.p.setUp()
+        self.addCleanup(self.p.doCleanups)
         self.f = f = self.p.f
-        f.record = deepcopy(self.p.dispatched)
-        value = slot(f.record)
-        f.record.update(deepcopy(value["origin"]))
+        if preparation is None:
+            f.record = deepcopy(self.p.dispatched)
+            value = slot(f.record)
+            f.record.update(deepcopy(value["origin"]))
+        else: self.assertEqual(f.record, self.p.dispatched)
         f.identity["Arn"] = "arn:aws:sts::058114477594:assumed-role/techx-automation-lifecycle-dispatcher/techx-lifecycle-300"
         self.d = Dispatcher(f.clients, f.store, self.p.d.bucket, self.p.execution, self.p.d.version, clock=lambda: f.now)
         self.controller = RollbackPrepareController(self.d, self.p.r.a.p.r.h.infra, "300")

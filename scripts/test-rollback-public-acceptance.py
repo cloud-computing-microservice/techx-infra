@@ -35,9 +35,10 @@ http_support = load("rollback_public_http_fixture", "test-public-probe.py")
 
 
 class RollbackPublicTests(unittest.TestCase):
-    def setUp(self):
-        self.r = support.RollbackRolloutTests()
-        self.r.setUp(); self.addCleanup(self.r.doCleanups)
+    def setUp(self, *, restore=None):
+        self.r = restore or support.RollbackRolloutTests()
+        if restore is None: self.r.setUp()
+        self.addCleanup(self.r.doCleanups)
         r = self.r
         r.perform()
         self.f, self.d = r.f, r.d

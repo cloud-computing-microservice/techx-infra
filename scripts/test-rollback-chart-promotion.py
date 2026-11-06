@@ -15,9 +15,10 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class ReviewTests(unittest.TestCase):
-    def setUp(self):
-        self.c = support.ControllerTests()
-        self.c.setUp(); self.addCleanup(self.c.doCleanups)
+    def setUp(self, *, controller=None):
+        self.c = controller or support.ControllerTests()
+        if controller is None: self.c.setUp()
+        self.addCleanup(self.c.doCleanups)
         self.c.controller.observe(); self.c.complete()
         self.p, self.f, self.d = self.c.p, self.c.f, self.c.d
         p, f = self.p, self.f
@@ -34,9 +35,9 @@ class ReviewTests(unittest.TestCase):
         get = self.chart.github.get
         def chart_get(endpoint):
             if self.mutate: self.mutate(endpoint)
-            if endpoint == "pulls/7": return deepcopy(self.chart.pr)
-            if endpoint == "pulls/7/files?per_page=100": return [dict(filename=name, status="modified") for name in ("values-staging.yaml", "releases/staging.json")]
-            if endpoint == "pulls/7/reviews?per_page=100": return deepcopy(self.reviews)
+            if endpoint == f"pulls/{self.chart.pr['number']}": return deepcopy(self.chart.pr)
+            if endpoint == f"pulls/{self.chart.pr['number']}/files?per_page=100": return [dict(filename=name, status="modified") for name in ("values-staging.yaml", "releases/staging.json")]
+            if endpoint == f"pulls/{self.chart.pr['number']}/reviews?per_page=100": return deepcopy(self.reviews)
             if endpoint.startswith("actions/workflows/verify.yml/runs?"): return dict(total_count=len(self.history), workflow_runs=deepcopy(self.history))
             if endpoint.startswith("actions/runs/"):
                 return deepcopy(next(row for row in self.history if row["id"] == int(endpoint.rsplit("/", 1)[1])))

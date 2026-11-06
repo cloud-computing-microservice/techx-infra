@@ -18,9 +18,10 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class AdmissionTests(unittest.TestCase):
-    def setUp(self):
-        self.p = support.ActivePublicTests()
-        self.p.setUp(); self.addCleanup(self.p.doCleanups)
+    def setUp(self, *, public=None):
+        self.p = public or support.ActivePublicTests()
+        if public is None: self.p.setUp()
+        self.addCleanup(self.p.doCleanups)
         p, f = self.p, self.p.f
         self.f, self.d = f, p.d
         p.service.mutate = lambda response, method, path: response.update(status=503) if path == "/" else None
@@ -33,6 +34,14 @@ class AdmissionTests(unittest.TestCase):
         old_receipt, _ = read_json(s3, bucket, old["receiptReference"]["key"], old["receiptReference"]["versionId"])
         key = active_result_key(record["sessionId"], p.release_id, old["id"]).replace("result.json", "failure.json")
         failure, _ = read_json(s3, bucket, key)
+        if record["action"] == "deploy-window-rollback":
+            # Shared scenarios opt in at cold admission. Consume the actual
+            # failure/handoff instead of rebuilding or re-signing its context.
+            self.execution = deepcopy(p.d.execution)
+            self.failure_key = key
+            self.execution_key = f"executions/{record['sessionId']}.json"
+            self.now = f.now
+            return
         # Model a newly admitted opt-in execution and its protected public
         # intent. The normal opening UI intentionally does not expose it yet.
         self.execution = deepcopy(p.d.execution); self.execution["action"] = record["action"] = "deploy-window-rollback"

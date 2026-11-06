@@ -35,9 +35,10 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class RollbackPrivateTests(unittest.TestCase):
-    def setUp(self):
-        self.p = support.RollbackPublicTests()
-        self.p.setUp(); self.addCleanup(self.p.doCleanups)
+    def setUp(self, *, public=None, build_uuid="abcdef96-1234"):
+        self.p = public or support.RollbackPublicTests()
+        if public is None: self.p.setUp()
+        self.addCleanup(self.p.doCleanups)
         p = self.p
         p.perform(); p.terminal(); p.controller.observe_public()
         self.f, self.d, self.r = p.f, p.d, p.r
@@ -47,8 +48,8 @@ class RollbackPrivateTests(unittest.TestCase):
         self.runtime = self.r.runtime
         self.private = self.r.original.h.p.p.private
         self.build = deepcopy(self.r.build)
-        self.build.update(id="techx-automation-lifecycle:abcdef96-1234",
-            arn="arn:aws:codebuild:us-east-1:058114477594:build/techx-automation-lifecycle:abcdef96-1234",
+        self.build.update(id="techx-automation-lifecycle:" + build_uuid,
+            arn="arn:aws:codebuild:us-east-1:058114477594:build/techx-automation-lifecycle:" + build_uuid,
             buildStatus="IN_PROGRESS", buildComplete=False)
         old_batch = f.clients["codebuild"].batch_get_builds
         self.starts = []

@@ -1445,3 +1445,23 @@ terminal/successful before the controller reports READY. Source fixtures cover
 the CLI/loader/manager and runtime fault boundaries; they are not cloud evidence.
 Main orchestration, private/partial-rollout failure admission, remaining recovery
 work, AMI bake and cloud gates remain required before exposing the opening opt-in.
+
+### Sequential release history (offline integration)
+
+`python scripts/test-mixed-release-history.py` starts with the existing cold
+acceptance fixture, then runs the production publisher/proposal/review,
+controller, rollout, public/private acceptance and terminal READY finalizers
+through two active releases or active → failed candidate → rollback → active.
+The opening opts into rollback before cold receipts exist. The active cycles
+share one session, immutable execution object, Git object/PR history, retained
+SSM observations, ECR registry and storefront/order data; service boundaries
+(including AWS, GitHub, Kubernetes and VPN/HTTP) are offline fixtures.
+
+The suite checks original cold evidence/context, exact restored images and next
+baseline, distinct command/build/proposal identities, traversal of older active
+and rollback history, and rejection of a second rollback after a later real
+candidate failure. It does not copy/re-sign acceptance receipts or fabricate
+READY/history; those are produced by the actual workers and terminal parents.
+The existing default fixture paths remain covered by the full verifier. These
+tests are G0 evidence; real cloud delivery, IAM, networking and G2/G3/G5
+acceptance are still required before enabling unattended deployment.

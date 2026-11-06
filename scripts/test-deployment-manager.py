@@ -18,10 +18,10 @@ from cleanup_schedule import definition
 
 
 class ManagerTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self, *, action="deploy-window"):
         self.now = datetime.now(timezone.utc)
         self.record = initial_record("staging-manager123", {key: "a" * 40 for key in ("techx-infra", "techx-chart", "techx-platform")},
-            4, "owner@example.invalid", "deploy-window", self.now, approved_budget_usd=60)
+            4, "owner@example.invalid", action, self.now, approved_budget_usd=60)
         self.record["executionVersion"] = "execution-v1"
         self.config = dict(schemaVersion=1, imageId="ami-1234567890abcdef0", launchTemplateId="lt-1234567890abcdef0",
             launchTemplateVersion="1", subnetId="subnet-1234567890abcdef0", securityGroupId="sg-1234567890abcdef0",

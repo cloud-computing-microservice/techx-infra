@@ -26,9 +26,10 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class RolloutTests(unittest.TestCase):
-    def setUp(self):
-        self.h = support.ActiveHandoffTests()
-        self.h.setUp(); self.addCleanup(self.h.doCleanups)
+    def setUp(self, *, handoff=None, selected_sha=None, ci_run=966):
+        self.h = handoff or support.ActiveHandoffTests()
+        if handoff is None: self.h.setUp()
+        self.addCleanup(self.h.doCleanups)
         h = self.h
         h.complete_review(); h.observe(3)
         self.f, self.d = h.f, h.d
@@ -57,18 +58,18 @@ class RolloutTests(unittest.TestCase):
         self.merge_calls, self.patch_calls = [], []
         self.lost_merge = self.lost_patch = self.bad_uid = self.cleanup_in_merge = False
         self.lost_merge_marker = self.lost_app_marker = self.wrong_runtime = False
-        self.selected = "9" * 40
-        self.ci = dict(id=966, head_sha=self.selected, head_branch="main", event="push", run_attempt=1,
+        self.selected = selected_sha or "9" * 40
+        self.ci = dict(id=ci_run, head_sha=self.selected, head_branch="main", event="push", run_attempt=1,
             path=".github/workflows/verify.yml", repository=dict(full_name="cloud-computing-microservice/techx-chart"), head_repository=dict(full_name="cloud-computing-microservice/techx-chart"),
             status="completed", conclusion="success", created_at=f.now.isoformat())
         chart = h.p.chart
         get = chart.github.get
         def chart_get(path):
             if path == f"actions/workflows/verify.yml/runs?head_sha={self.selected}&per_page=100": return dict(total_count=1, workflow_runs=[deepcopy(self.ci)])
-            if path == "actions/runs/966": return deepcopy(self.ci)
+            if path == f"actions/runs/{ci_run}": return deepcopy(self.ci)
             return get(path)
         def merge(number, head, title, message):
-            self.assertEqual((number, head), (7, chart.branch))
+            self.assertEqual((number, head), (chart.pr["number"], chart.branch))
             self.merge_calls.append((number, head))
             chart.pr.update(merged=True, state="closed", merge_commit_sha=self.selected, merged_by=dict(type="Bot", login="techx-promotion[bot]"), merged_at=f.now.isoformat())
             chart.commits[self.selected] = dict(sha=self.selected, tree=dict(sha=chart.commits[chart.branch]["tree"]["sha"]),
@@ -109,7 +110,8 @@ class RolloutTests(unittest.TestCase):
         # foundation fixture's resource producer callbacks.
         s3 = f.clients["s3"]
         old_get, old_put, old_list = s3.get_object, s3.put_object, s3.list_objects_v2
-        self.artifacts = {}
+        self.artifacts = getattr(f, "active_artifacts", {})
+        f.active_artifacts = self.artifacts
         def private_key(key): return key.startswith("promotions/") or "/active/" in key and key.startswith("private/")
         def get_object(**kw):
             if not private_key(kw["Key"]): return old_get(**kw)

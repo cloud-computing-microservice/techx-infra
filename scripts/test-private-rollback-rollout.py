@@ -28,12 +28,13 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class RollbackRolloutTests(unittest.TestCase):
-    def setUp(self):
-        self.setup_rollout()
+    def setUp(self, *, grant=None):
+        self.setup_rollout(grant=grant)
 
-    def setup_rollout(self, *, controller_dispatch=False):
-        self.g = support.GrantTests()
-        self.g.setUp(); self.addCleanup(self.g.doCleanups)
+    def setup_rollout(self, *, controller_dispatch=False, grant=None):
+        self.g = grant or support.GrantTests()
+        if grant is None: self.g.setUp()
+        self.addCleanup(self.g.doCleanups)
         self.f, self.d = self.g.f, self.g.d
         self.review = self.g.p
         self.preparation = self.review.p.c
@@ -93,7 +94,7 @@ class RollbackRolloutTests(unittest.TestCase):
             if endpoint == "actions/runs/1989": return deepcopy(self.ci)
             return get(endpoint)
         def merge(number, head, title, message):
-            self.assertEqual((number, head), (7, self.chart.branch))
+            self.assertEqual((number, head), (self.chart.pr["number"], self.chart.branch))
             self.merge_calls.append((number, head))
             self.chart.pr.update(merged=True, state="closed", merge_commit_sha=self.chosen,
                 merged_by=dict(type="Bot", login="techx-promotion[bot]"), merged_at=self.f.now.isoformat())

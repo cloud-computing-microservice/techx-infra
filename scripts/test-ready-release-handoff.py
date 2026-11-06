@@ -23,20 +23,27 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class ActiveHandoffTests(unittest.TestCase):
-    def setUp(self):
-        self.p = support.ActivePromotionTests()
-        self.p.setUp(); self.addCleanup(self.p.doCleanups)
+    def setUp(self, *, promotion=None, review_run=100, build_uuid="abcdef98-1234"):
+        self.p = promotion or support.ActivePromotionTests()
+        if promotion is None: self.p.setUp()
+        self.addCleanup(self.p.doCleanups)
+        self.review_run = review_run
         p, f = self.p, self.p.f
         self.f = f
         self.baseline = deepcopy(f.record["acceptedRelease"])
-        f.record["deploymentTask"]["commandId"] = f.command_id
-        op = operation("verify", "private")
-        build_id = f.owner.split(":build/", 1)[1]
-        f.record["lifecycleDispatch"] = dict(phase="OBSERVED", id="c" * 64, operation=op, buildId=build_id)
-        self.build = dict(id=build_id, arn=f.owner, projectName="techx-automation-lifecycle",
-            serviceRole="arn:aws:iam::058114477594:role/techx-automation-lifecycle-manager", buildStatus="SUCCEEDED", buildComplete=True,
-            environment=dict(environmentVariables=[dict(name=key, value=value, type="PLAINTEXT") for key, value in environment(f.record, op).items()]))
-        self.active_id = "techx-automation-lifecycle:abcdef98-1234"
+        if f.record.get("acceptedActive") or f.record.get("acceptedRollback"):
+            previous = f.record["lifecycleDispatch"]["buildId"]
+            self.build = deepcopy(f.clients["codebuild"].batch_get_builds(ids=[previous])["builds"][0])
+            self.assertEqual((self.build["buildStatus"], self.build["buildComplete"]), ("SUCCEEDED", True))
+        else:
+            f.record["deploymentTask"]["commandId"] = f.command_id
+            op = operation("verify", "private")
+            build_id = f.owner.split(":build/", 1)[1]
+            f.record["lifecycleDispatch"] = dict(phase="OBSERVED", id="c" * 64, operation=op, buildId=build_id)
+            self.build = dict(id=build_id, arn=f.owner, projectName="techx-automation-lifecycle",
+                serviceRole="arn:aws:iam::058114477594:role/techx-automation-lifecycle-manager", buildStatus="SUCCEEDED", buildComplete=True,
+                environment=dict(environmentVariables=[dict(name=key, value=value, type="PLAINTEXT") for key, value in environment(f.record, op).items()]))
+        self.active_id = "techx-automation-lifecycle:" + build_uuid
         self.active_build = dict(id=self.active_id, arn="arn:aws:codebuild:us-east-1:058114477594:build/" + self.active_id,
             projectName="techx-automation-lifecycle", serviceRole=self.build["serviceRole"], buildStatus="IN_PROGRESS", buildComplete=False,
             environment=dict(environmentVariables=[dict(name=key, value=value, type="PLAINTEXT") for key, value in environment(f.record, operation("release", "active")).items()]))
@@ -55,7 +62,8 @@ class ActiveHandoffTests(unittest.TestCase):
         f.remote_result = lambda: None
         f.statuses = ["Success"]
         self.d = Dispatcher(f.clients, f.store, "control-bucket", p.checks.execution, "execution-v1", clock=lambda: f.now)
-        self.objects = {}
+        self.objects = getattr(f, "handoff_objects", {})
+        f.handoff_objects = self.objects
         s3 = f.clients["s3"]
         old_get, old_put, old_list = s3.get_object, s3.put_object, s3.list_objects_v2
         def get_object(**kw):
@@ -75,17 +83,17 @@ class ActiveHandoffTests(unittest.TestCase):
         self.reviews = []
         def get(path):
             if path == "git/ref/heads/main": return dict(object=dict(sha=self.d.execution["sourceRevisions"]["techx-infra"]))
-            if path == "actions/runs/100": return deepcopy(self.runs[100])
-            if path == "actions/runs/100/approvals": return deepcopy(self.reviews)
+            if path == f"actions/runs/{review_run}": return deepcopy(self.runs[review_run])
+            if path == f"actions/runs/{review_run}/approvals": return deepcopy(self.reviews)
             if path.startswith("actions/workflows/staging-chart-promote.yml/runs?"): return dict(total_count=len(self.runs), workflow_runs=list(self.runs.values()))
             raise AssertionError(path)
         def dispatch(target, dispatch_id):
             self.posts.append(deepcopy(target))
-            self.runs[100] = dict(id=100, status="in_progress", event="workflow_dispatch", run_attempt=1, head_branch="main", head_sha=target["sourceSha"],
+            self.runs[review_run] = dict(id=review_run, status="in_progress", event="workflow_dispatch", run_attempt=1, head_branch="main", head_sha=target["sourceSha"],
                 path=".github/workflows/staging-chart-promote.yml", display_title="TechX handoff " + dispatch_id,
                 repository=dict(full_name=INFRA_REPO), head_repository=dict(full_name=INFRA_REPO), created_at=f.now.isoformat())
             if self.lost_post: raise TimeoutError("Lost workflow dispatch response")
-            return dict(workflow_run_id=100, run_url=f"https://api.github.com/repos/{INFRA_REPO}/actions/runs/100", html_url=f"https://github.com/{INFRA_REPO}/actions/runs/100")
+            return dict(workflow_run_id=review_run, run_url=f"https://api.github.com/repos/{INFRA_REPO}/actions/runs/{review_run}", html_url=f"https://github.com/{INFRA_REPO}/actions/runs/{review_run}")
         self.infra = SimpleNamespace(get=get, dispatch=dispatch)
         self.coordinator = SimpleNamespace(resume_approved=lambda _: self.fail("Active review cannot start a cold apply"))
         self.engine = Orchestrator(self.d, self.coordinator, {INFRA_REPO: self.infra, PLATFORM_REPO: p.p.github}, p.chart.github)
@@ -94,15 +102,15 @@ class ActiveHandoffTests(unittest.TestCase):
 
     def complete_review(self):
         self.observe()
-        reader, writer, infra = self.p.reviews()
+        reader, writer, infra = self.p.reviews(self.review_run)
         dispatch_id = self.f.record["workflowHandoff"]["id"]
         reader.dispatch_id = writer.dispatch_id = dispatch_id
-        self.f.identity["Arn"] = "arn:aws:sts::058114477594:assumed-role/techx-automation-chart-reader/techx-chart-read-100"
+        self.f.identity["Arn"] = f"arn:aws:sts::058114477594:assumed-role/techx-automation-chart-reader/techx-chart-read-{self.review_run}"
         request = reader.preview(self.p.p.source, self.p.chart.github, infra, app_id=12345, app_slug="techx-promotion")
-        self.f.identity["Arn"] = "arn:aws:sts::058114477594:assumed-role/techx-automation-promotion-approver/techx-promotion-approve-100"
+        self.f.identity["Arn"] = f"arn:aws:sts::058114477594:assumed-role/techx-automation-promotion-approver/techx-promotion-approve-{self.review_run}"
         self.ref = writer.approve(self.p.p.source, self.p.chart.github, infra, request, checksum(request), app_id=12345, app_slug="techx-promotion")
         self.reviews = self.p.approvals
-        self.runs[100].update(status="completed", conclusion="success", updated_at=self.f.now.isoformat())
+        self.runs[self.review_run].update(status="completed", conclusion="success", updated_at=self.f.now.isoformat())
 
     def test_dispatch_once_real_review_then_bind_only_the_active_grant(self):
         self.complete_review()

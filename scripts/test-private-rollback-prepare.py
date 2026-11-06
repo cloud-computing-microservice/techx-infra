@@ -31,9 +31,10 @@ proposal = load("private_rollback_git_fixture", "test-rollback-proposal.py")
 
 
 class PrivatePrepareTests(unittest.TestCase):
-    def setUp(self):
-        self.r = reservation.ReservationTests()
-        self.r.setUp(); self.addCleanup(self.r.doCleanups)
+    def setUp(self, *, reserved=None, chart=None, defer_dispatch=False):
+        self.r = reserved or reservation.ReservationTests()
+        if reserved is None: self.r.setUp()
+        self.addCleanup(self.r.doCleanups)
         self.r.arm()
         self.f, self.d = self.r.f, self.r.d
         f = self.f
@@ -41,28 +42,39 @@ class PrivatePrepareTests(unittest.TestCase):
         self.sources = deepcopy(f.record["sourceRevisions"])
         self.intent = deepcopy(slot(f.record)["intent"])
         self.manager_arn = "arn:aws:codebuild:us-east-1:058114477594:build/techx-automation-lifecycle:abcdef96-1234"
-        f.record["lifecycleDispatch"] = dict(id="6" * 64, phase="OBSERVED",
-            buildId=self.manager_arn.split("build/", 1)[1], operation=operation("rollback", "prepare"))
-        f.identity["Arn"] = "arn:aws:sts::058114477594:assumed-role/techx-automation-lifecycle-manager/codebuild-rollback"
         self.execution = self.r.a.execution
         self.runtime = self.r.a.p.r.runtime
         self.runtime.execution, self.runtime.clients = self.execution, f.clients
-        self.manager = DeploymentManager(f.clients, f.store, self.execution, self.d.version, self.d.bucket,
-            self.manager_arn, clock=lambda: f.now, sleep=lambda _: None)
-        self.pointer = self.manager.dispatch(self.runtime.private, "rollback", "prepare", 1)
-        self.dispatched = deepcopy(f.record)
-        self.task_id = self.pointer["taskId"]
-        self.task = claim_task(f.store, f.clients["s3"], self.d.bucket, self.task_id, f.instance_id, f.now)
         self.owner = f"arn:aws:ec2:us-east-1:058114477594:instance/{f.instance_id}"
-        f.record = claim(f.record, self.owner, "rollback", now=f.now)
-        self.epoch = f.record["lease"]["epoch"]
         self.policy = deepcopy(self.r.a.p.r.h.p.policy)
-        self.git_fixture = proposal.RevertTests()
-        self.git_fixture.setUp(); self.addCleanup(self.git_fixture.doCleanups)
-        self.chart = self.git_fixture.p
-        self.prepare_chart()
-        self.worker = PrivateRollbackPrepare(self.runtime, f.store, self.d.version, self.task_id, clock=lambda: f.now,
-            clients=lambda *args: (self.chart.github, self.r.a.p.r.h.infra, None))
+        if chart is None:
+            self.git_fixture = proposal.RevertTests()
+            self.git_fixture.setUp(); self.addCleanup(self.git_fixture.doCleanups)
+            self.chart = self.git_fixture.p
+            self.prepare_chart()
+        else:
+            self.chart = chart
+            chart.next_proposal(self.intent["failedChartSha"])
+            chart.proposal = SimpleNamespace(branch=f"rollback/{self.intent['sessionId']}-{self.intent['rollbackId'][:24]}")
+            get = chart.github.get
+            chart.github.get = lambda endpoint: deepcopy(self.policy) if endpoint == "branches/main/protection" else get(endpoint)
+            self.runtime.source = chart.source
+        if defer_dispatch:
+            self.dispatched = deepcopy(f.record)
+        else:
+            f.record["lifecycleDispatch"] = dict(id="6" * 64, phase="OBSERVED",
+                buildId=self.manager_arn.split("build/", 1)[1], operation=operation("rollback", "prepare"))
+            f.identity["Arn"] = "arn:aws:sts::058114477594:assumed-role/techx-automation-lifecycle-manager/codebuild-rollback"
+            self.manager = DeploymentManager(f.clients, f.store, self.execution, self.d.version, self.d.bucket,
+                self.manager_arn, clock=lambda: f.now, sleep=lambda _: None)
+            self.pointer = self.manager.dispatch(self.runtime.private, "rollback", "prepare", 1)
+            self.dispatched = deepcopy(f.record)
+            self.task_id = self.pointer["taskId"]
+            self.task = claim_task(f.store, f.clients["s3"], self.d.bucket, self.task_id, f.instance_id, f.now)
+            f.record = claim(f.record, self.owner, "rollback", now=f.now)
+            self.epoch = f.record["lease"]["epoch"]
+            self.worker = PrivateRollbackPrepare(self.runtime, f.store, self.d.version, self.task_id, clock=lambda: f.now,
+                clients=lambda *args: (self.chart.github, self.r.a.p.r.h.infra, None))
 
     def prepare_chart(self):
         p, intent = self.chart, self.intent

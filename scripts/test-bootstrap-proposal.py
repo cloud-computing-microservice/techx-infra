@@ -33,6 +33,7 @@ class ProposalTests(unittest.TestCase):
         self.files = {"values-staging.yaml": values, "releases/staging.json": b"{}", "templates/deployment.yaml": b"keep this template"}
         self.base = "a" * 40
         self.main, self.branch, self.pr = self.base, None, None
+        self.pr_number, self.previous_prs, self.previous_refs = 7, {}, {}
         self.base_tree = "1" * 40
         self.blobs = {blob_sha(data): data for data in self.files.values()}
         self.trees = {self.base_tree: {path: dict(sha=blob_sha(data), mode="100644") for path, data in self.files.items()}}
@@ -44,7 +45,10 @@ class ProposalTests(unittest.TestCase):
 
     def get(self, endpoint):
         if endpoint == "git/ref/heads/main": return dict(object=dict(sha=self.main))
-        if endpoint.startswith("git/ref/heads/release/"):
+        if endpoint.startswith(("git/ref/heads/release/", "git/ref/heads/rollback/")):
+            branch_name = endpoint.removeprefix("git/ref/heads/")
+            if branch_name in self.previous_refs:
+                return dict(ref="refs/heads/" + branch_name, object=dict(type="commit", sha=self.previous_refs[branch_name]))
             if self.branch is None: raise HTTPError("https://api.github.com/ref", 404, "missing", {}, None)
             return dict(ref=f"refs/heads/{self.proposal.branch}", object=dict(type="commit", sha=self.branch))
         if endpoint.startswith("git/commits/"): return deepcopy(self.commits[endpoint.split("/")[-1]])
@@ -57,7 +61,12 @@ class ProposalTests(unittest.TestCase):
             rows = [dict(path=path, type="blob", **metadata) for path, metadata in self.trees[sha].items()]
             if self.bad_tree and sha != self.base_tree: rows.append(dict(path="evil.txt", type="blob", mode="100644", sha="e" * 40))
             return dict(sha=sha, truncated=False, tree=rows)
-        if endpoint.startswith("pulls?"): return [deepcopy(self.pr)] if self.pr else []
+        if endpoint.startswith("pulls?"):
+            from urllib.parse import parse_qs, urlsplit
+            query = parse_qs(urlsplit(endpoint).query)
+            branch_name = query.get("head", [""])[0].split(":", 1)[-1]
+            return [deepcopy(pr) for pr in [self.pr, *self.previous_prs.values()]
+                    if pr and (not branch_name or pr["head"]["ref"] == branch_name)]
         raise AssertionError(endpoint)
 
     def post(self, endpoint, payload):
@@ -88,12 +97,26 @@ class ProposalTests(unittest.TestCase):
         if endpoint == "pulls":
             self.assertFalse(self.pr)
             self.assertEqual(payload["base"], "main")
-            self.pr = dict(number=7, html_url=f"https://github.com/{CHART_REPO}/pull/7", state="open", draft=False, merged_at=None,
+            self.pr = dict(number=self.pr_number, html_url=f"https://github.com/{CHART_REPO}/pull/{self.pr_number}", state="open", draft=False, merged_at=None,
                 head=dict(ref=payload["head"], sha=self.branch, repo=dict(full_name=CHART_REPO)),
                 base=dict(ref="main", sha=self.base, repo=dict(full_name=CHART_REPO)))
             if self.lost_pr: raise TimeoutError("GitHub PR response lost")
             return deepcopy(self.pr)
         raise AssertionError(endpoint)
+
+    def next_proposal(self, baseline):
+        """Keep the actual Git service history while opening another proposal."""
+        self.assertEqual(self.main, baseline)
+        if self.pr:
+            self.assertEqual(self.pr["state"], "closed")
+            self.previous_prs[self.pr["number"]] = deepcopy(self.pr)
+        if self.branch: self.previous_refs[self.proposal.branch] = self.branch
+        self.base, self.base_tree = baseline, self.commits[baseline]["tree"]["sha"]
+        self.branch, self.pr = None, None
+        self.pr_number += 1
+        # Install the next phase's read-only CI/review facade over the same
+        # commits, trees, blobs, refs and PRs; never rebuild accepted Git blobs.
+        self.github = SimpleNamespace(get=self.get, post=self.post)
 
     def perform(self): return self.proposal.perform(self.source)
 

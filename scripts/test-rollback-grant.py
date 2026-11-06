@@ -14,9 +14,10 @@ support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support
 
 
 class GrantTests(unittest.TestCase):
-    def setUp(self):
-        self.p = support.ProtectedReviewTests()
-        self.p.setUp(); self.addCleanup(self.p.doCleanups)
+    def setUp(self, *, review=None):
+        self.p = review or support.ProtectedReviewTests()
+        if review is None: self.p.setUp()
+        self.addCleanup(self.p.doCleanups)
         self.f, self.d, self.infra = self.p.f, self.p.d, self.p.infra
         self.request = self.p.preview()
         self.reference = self.p.approve(self.request)

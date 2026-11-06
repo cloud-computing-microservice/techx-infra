@@ -32,9 +32,10 @@ http_support = load("active_public_http_fixture", "test-public-probe.py")
 
 
 class ActivePublicTests(unittest.TestCase):
-    def setUp(self, action=None):
-        self.r = rollout_support.RolloutTests()
-        self.r.setUp(); self.addCleanup(self.r.doCleanups)
+    def setUp(self, action=None, *, rollout=None, run_id=200, build_uuid="abcdef97-1234"):
+        self.r = rollout or rollout_support.RolloutTests()
+        if rollout is None: self.r.setUp()
+        self.addCleanup(self.r.doCleanups)
         r = self.r
         r.perform()
         self.f, self.d = r.f, r.d
@@ -49,23 +50,23 @@ class ActivePublicTests(unittest.TestCase):
         self.run, self.job, self.dispatches = {}, {}, []
         original_get = r.h.infra.get
         def get(path):
-            if path == "actions/runs/200": return deepcopy(self.run)
-            if path == "actions/runs/200/jobs?filter=latest&per_page=100": return dict(total_count=1, jobs=[deepcopy(self.job)])
+            if path == f"actions/runs/{run_id}": return deepcopy(self.run)
+            if path == f"actions/runs/{run_id}/jobs?filter=latest&per_page=100": return dict(total_count=1, jobs=[deepcopy(self.job)])
             return original_get(path)
         def dispatch(target, dispatch_id):
             self.assertEqual(target["operation"], "accept-active-public")
             self.dispatches.append(deepcopy(target))
-            self.run.update(id=200, status="in_progress", event="workflow_dispatch", run_attempt=1, head_branch="main", head_sha=target["sourceSha"],
+            self.run.update(id=run_id, status="in_progress", event="workflow_dispatch", run_attempt=1, head_branch="main", head_sha=target["sourceSha"],
                 path=".github/workflows/staging-acceptance.yml", display_title="TechX handoff " + dispatch_id,
                 repository=dict(full_name=INFRA_REPO), head_repository=dict(full_name=INFRA_REPO), created_at=f.now.isoformat())
-            self.job.update(id=201, run_id=200, head_sha=target["sourceSha"], name="public", status="in_progress", runner_group_name="GitHub Actions", runner_id=202, labels=["ubuntu-24.04"])
-            return dict(workflow_run_id=200, run_url=f"https://api.github.com/repos/{INFRA_REPO}/actions/runs/200", html_url=f"https://github.com/{INFRA_REPO}/actions/runs/200")
+            self.job.update(id=run_id + 1, run_id=run_id, head_sha=target["sourceSha"], name="public", status="in_progress", runner_group_name="GitHub Actions", runner_id=run_id + 2, labels=["ubuntu-24.04"])
+            return dict(workflow_run_id=run_id, run_url=f"https://api.github.com/repos/{INFRA_REPO}/actions/runs/{run_id}", html_url=f"https://github.com/{INFRA_REPO}/actions/runs/{run_id}")
         r.h.infra.get, r.h.infra.dispatch = get, dispatch
         r.h.observe()
         self.release_id = f.record["releaseCandidate"]["id"]
         self.rollout_sha = f.record["releaseCandidate"]["rollout"]["receiptReference"]["sha256"]
         self.dispatch_id = f.record["workflowHandoff"]["id"]
-        self.worker = ActivePublicAcceptance(f.clients, f.store, self.d.bucket, self.d.execution, self.d.version, 200,
+        self.worker = ActivePublicAcceptance(f.clients, f.store, self.d.bucket, self.d.execution, self.d.version, run_id,
             self.dispatch_id, self.rollout_sha, release_id=self.release_id, clock=lambda: f.now)
         f.identity["Arn"] = self.worker.owner
         f.record = claim(f.record, self.worker.owner, "acceptance", now=f.now)
@@ -74,7 +75,7 @@ class ActivePublicTests(unittest.TestCase):
         # Public completion now hands off a distinct private verification build.
         # Observe service input/output for that exact operation, not the prior
         # rollout's successful build handle/environment.
-        self.private_build_id = "techx-automation-lifecycle:abcdef97-1234"
+        self.private_build_id = "techx-automation-lifecycle:" + build_uuid
         self.private_build = dict(deepcopy(r.build), id=self.private_build_id,
             arn="arn:aws:codebuild:us-east-1:058114477594:build/" + self.private_build_id,
             buildStatus="IN_PROGRESS", buildComplete=False)

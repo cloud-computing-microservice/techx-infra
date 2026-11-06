@@ -26,6 +26,16 @@ function aws {
   $index = [array]::IndexOf($args, '--cli-input-json')
   if ($index -lt 0) { throw 'Scoped simulation must send structured JSON, not shell-interpolated arguments.' }
   $script:scopedRequest = Get-Content -LiteralPath ($args[$index + 1].Substring(7)) -Raw | ConvertFrom-Json
+  if ($script:scopedMode -like 'inventory*') {
+    $global:LASTEXITCODE = 0
+    $fixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../contracts/iam-inventory-simulation.json') -Raw | ConvertFrom-Json
+    $row = @($fixture.EvaluationResults | Where-Object { $_.EvalActionName -eq $script:scopedRequest.ActionNames[0] })[0]
+    if ($script:scopedMode -eq 'inventoryWrongResource') { $row.EvalResourceName = 'arn:aws:cloudfront::058114477594:function/unrelated' }
+    if ($script:scopedMode -eq 'inventoryMissingContext') { $row.MissingContextValues = @('kms:ViaService') }
+    if ($script:scopedMode -eq 'inventoryUnknownDecision') { $row.EvalDecision = 'unknown' }
+    $rows = if ($script:scopedMode -eq 'inventoryExtraResult') { @($row, $row) } else { @($row) }
+    return @{ EvaluationResults = $rows; IsTruncated = ($script:scopedMode -eq 'inventoryTruncated') } | ConvertTo-Json -Depth 12
+  }
   $global:LASTEXITCODE = if ($script:scopedMode -eq 'apiError') { 1 } else { 0 }
   $decision = if ($script:scopedMode -in @('denied', 'partiallyAllowed')) { 'implicitDeny' } else { 'allowed' }
   $row = @{ EvalActionName = $script:scopedRequest.ActionNames[0]; EvalDecision = $decision; MissingContextValues = @() }
@@ -69,3 +79,42 @@ $failed = $false
 try { Invoke-TechxScopedSimulation -PrincipalArn $role -Cases @($case) | Out-Null } catch { $failed = $true }
 if (-not $failed) { throw 'A broad wildcard simulation must not substitute for the actual resource/context checks.' }
 Write-Host 'Scoped IAM ARN/context, positive/negative decisions and incomplete-response tests passed.'
+
+# Recorded read-only SimulateCustomPolicy responses from AWS, 2026-11-06.
+# This proves parsing of real service shapes; it does not prove live role access.
+$script:scopedMode = 'inventory'
+$inventoryCase = @{ name = 'read-functions'; action = 'cloudfront:ListFunctions'; expected = 'allowed'; resourceMode = 'action'; resources = @('*') }
+foreach ($action in @('cloudfront:ListFunctions', 'cloudfront:ListVpcOrigins', 'logs:DescribeLogGroups')) {
+  $inventoryCase.action = $action
+  $result = Invoke-TechxScopedSimulation -PrincipalArn $role -Cases @($inventoryCase)
+  if ($result.resourceMode -ne 'action' -or $result.resources[0] -ne '*') { throw 'Inventory evidence must identify its action-level scope.' }
+}
+$inventoryCase.action = 'cloudfront:ListFunctions'
+foreach ($mode in @('inventoryWrongResource', 'inventoryMissingContext', 'inventoryUnknownDecision', 'inventoryExtraResult', 'inventoryTruncated')) {
+  $script:scopedMode = $mode
+  $failed = $false
+  try { Invoke-TechxScopedSimulation -PrincipalArn $role -Cases @($inventoryCase) | Out-Null } catch { $failed = $true }
+  if (-not $failed) { throw "Action-level simulation accepted invalid service response: $mode" }
+}
+$script:scopedMode = 'inventory'
+foreach ($change in @(
+    @{ resourceMode = 'scoped' },
+    @{ resourceMode = 'unknown' },
+    @{ action = 's3:ListAllMyBuckets' },
+    @{ resources = @('*', '*') },
+    @{ resources = @('arn:aws:cloudfront::058114477594:function/simulation') }
+  )) {
+  $invalid = $inventoryCase.Clone()
+  foreach ($key in $change.Keys) { $invalid[$key] = $change[$key] }
+  $failed = $false
+  try { Invoke-TechxScopedSimulation -PrincipalArn $role -Cases @($invalid) | Out-Null } catch { $failed = $true }
+  if (-not $failed) { throw 'Inventory mode accepted an unreviewed action, scope or resource.' }
+}
+# The AWS template must never stand in for a concrete function ARN.
+$invalid = $inventoryCase.Clone()
+$invalid.resourceMode = 'scoped'
+$invalid.resources = @('arn:aws:cloudfront::058114477594:function/simulation')
+$failed = $false
+try { Invoke-TechxScopedSimulation -PrincipalArn $role -Cases @($invalid) | Out-Null } catch { $failed = $true }
+if (-not $failed) { throw 'An action-level template cannot prove resource-scoped permission.' }
+Write-Host 'Recorded IAM inventory responses and action/scoped isolation tests passed.'

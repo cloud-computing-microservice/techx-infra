@@ -354,7 +354,18 @@ terraform -chdir=bootstrap/automation output -json > bootstrap-outputs.private.j
 
 The matrix covers manager launch constraints, workload role boundaries, forbidden
 self/approval writes and fixed-project dispatch. API failures, missing context,
-incomplete resource results and unexpected decisions reject preflight. This is
+incomplete resource results and unexpected decisions reject preflight. Negative
+cases carry an explicit context baseline because IAM can report condition keys
+from unrelated statements on implicit denies; intentionally wrong boundaries or
+foreign ownership tags override that baseline. Only `ListFunctions`,
+`ListVpcOrigins` and `DescribeLogGroups` use explicit `resourceMode: action`
+inventory probes. Their wildcard result is action-level evidence, never proof
+of permission on a specific resource. The recorded IAM response fixture covers
+AWS's unresolved function ARN template without relaxing scoped ARN checks. The
+offline context contract also compares negative probes against condition keys
+in the rendered identity policies, so a newly added condition cannot silently
+leave those probes incomplete. Mocked policy-document data and AWS-managed
+policy changes still need the separately invoked live simulation. This is
 simulation evidence only: service behavior, resource policies, SCPs, AMI boot and
 SSM networking still require live acceptance. Keep toggles off until all gates
 in the workspace CI/CD plan are met; an expired demo authorization cannot fund a

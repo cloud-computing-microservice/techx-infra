@@ -34,7 +34,20 @@ function Invoke-TechxScopedSimulation {
           @($case.resources).Count -lt 1 -or $case.expected -notin @('allowed', 'denied')) {
         throw 'Each IAM case needs one concrete action, resource ARNs, context and an expected decision.'
       }
+      # Inventory actions are evaluated at action level by IAM. Keep this
+      # exception explicit and limited to the three reviewed inventory probes.
+      $mode = if ($case.resourceMode) { $case.resourceMode } else { 'scoped' }
+      $actionResources = @{
+        'cloudfront:ListFunctions' = @('*', 'arn:${Partition}:cloudfront::${Account}:function/*')
+        'cloudfront:ListVpcOrigins' = @('*')
+        'logs:DescribeLogGroups' = @('*')
+      }
+      if ($mode -notin @('scoped', 'action') -or ($mode -eq 'action' -and
+          (-not $actionResources.ContainsKey($case.action) -or @($case.resources).Count -ne 1 -or $case.resources[0] -ne '*'))) {
+        throw 'Action-level simulation requires an explicitly reviewed inventory action and only the wildcard resource.'
+      }
       foreach ($resource in @($case.resources)) {
+        if ($mode -eq 'action') { continue }
         if ($resource -eq '*' -or $resource -notmatch '^arn:aws:[^\s]+$') { throw 'Scoped simulations cannot use wildcard resource placeholders.' }
       }
       $request = @{ PolicySourceArn = $PrincipalArn; ActionNames = @($case.action); ResourceArns = @($case.resources) }
@@ -54,6 +67,9 @@ function Invoke-TechxScopedSimulation {
         throw "Unexpected IAM decision for $($case.name): $decision."
       }
       $perResource = @($results[0].ResourceSpecificResults | Where-Object { $null -ne $_ })
+      if ($mode -eq 'action' -and $perResource.Count -eq 0 -and $results[0].EvalResourceName -in $actionResources[$case.action]) {
+        $perResource = @([pscustomobject]@{ EvalResourceName = '*'; EvalResourceDecision = $decision })
+      }
       if ($perResource.Count -eq 0 -and @($case.resources).Count -eq 1 -and $results[0].EvalResourceName -eq $case.resources[0]) {
         $perResource = @([pscustomobject]@{ EvalResourceName = $results[0].EvalResourceName; EvalResourceDecision = $decision })
       }
@@ -68,7 +84,7 @@ function Invoke-TechxScopedSimulation {
           throw "Resource/context decision is incomplete for $($case.name)."
         }
       }
-      [pscustomobject]@{ name = $case.name; action = $case.action; decision = $decision; resources = @($case.resources); simulatedOnly = $true }
+      [pscustomobject]@{ name = $case.name; action = $case.action; decision = $decision; resources = @($case.resources); resourceMode = $mode; simulatedOnly = $true }
     }
   } finally {
     if (Test-Path -LiteralPath $requestPath) { Remove-Item -LiteralPath $requestPath }

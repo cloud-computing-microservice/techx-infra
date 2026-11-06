@@ -7,8 +7,8 @@ locals {
 
 # These are concrete resource/context API simulations, not proof of service
 # integration. Live IAM calls are made only by the separately invoked preflight.
-output "lifecycle_iam_simulation_cases_json" {
-  value = var.enable_lifecycle_control ? jsonencode({
+locals {
+  simulation_cases_json = var.enable_lifecycle_control ? jsonencode({
     manager = {
       principalArn = "${local.simulation_account_prefix}:role/techx-automation-lifecycle-manager"
       cases = [
@@ -116,10 +116,10 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "no-dispatcher-activation-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/private/staging/simulation/exposure/receipt.json"] },
         { name = "read-admission-encryption", action = "s3:GetEncryptionConfiguration", expected = "allowed", resources = [aws_s3_bucket.control.arn] },
         { name = "read-admission-kms", action = "kms:DescribeKey", expected = "allowed", resources = [aws_kms_key.control.arn] },
-        { name = "read-orphan-origins", action = "cloudfront:ListVpcOrigins", expected = "allowed", resources = ["*"] },
-        { name = "read-orphan-functions", action = "cloudfront:ListFunctions", expected = "allowed", resources = ["*"] },
+        { name = "read-orphan-origins", action = "cloudfront:ListVpcOrigins", expected = "allowed", resourceMode = "action", resources = ["*"] },
+        { name = "read-orphan-functions", action = "cloudfront:ListFunctions", expected = "allowed", resourceMode = "action", resources = ["*"] },
         { name = "read-origin-inventory-tags", action = "cloudfront:ListTagsForResource", expected = "allowed", resources = ["arn:aws:cloudfront::058114477594:vpcorigin/simulation"] },
-        { name = "read-workload-log-inventory", action = "logs:DescribeLogGroups", expected = "allowed", resources = ["*"] },
+        { name = "read-workload-log-inventory", action = "logs:DescribeLogGroups", expected = "allowed", resourceMode = "action", resources = ["*"] },
         { name = "protected-handoff-write", action = "s3:PutObject", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/handoffs/staging/simulation/intent.json"] },
         { name = "read-dispatched-promotion-grant", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/promotion-approvals/staging/simulation/approval.json"] },
         { name = "no-dispatcher-promotion-approval-write", action = "s3:PutObject", expected = "denied", resources = ["${aws_s3_bucket.control.arn}/promotion-approvals/staging/simulation/approval.json"] },
@@ -159,6 +159,44 @@ output "lifecycle_iam_simulation_cases_json" {
         { name = "no-publisher-cluster-create", action = "eks:CreateCluster", expected = "denied", resources = ["arn:aws:eks:us-east-1:058114477594:cluster/techx-staging"] }
       ]
     }
+  }) : "{}"
+  # IAM reports conditions from other statements on implicit-deny evaluations.
+  # Supply an explicit, permissive baseline so a negative result proves the
+  # forbidden action/resource rather than missing tags or request attributes.
+  # Deliberately invalid case-specific context always takes precedence.
+  simulation_negative_strings = var.enable_lifecycle_control ? merge({
+    "aws:RequestedRegion"     = "us-east-1"
+    "kms:ViaService"          = "s3.us-east-1.amazonaws.com"
+    "s3:prefix"               = "private/staging/simulation/"
+    "iam:PassedToService"     = "ec2.amazonaws.com"
+    "iam:AWSServiceName"      = "elasticloadbalancing.amazonaws.com"
+    "iam:PermissionsBoundary" = local.workload_boundary_arn
+    "iam:PolicyARN"           = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+    "acm:Export"              = "DISABLED"
+    "acm:KeyAlgorithm"        = "RSA_2048"
+    "acm:ValidationMethod"    = "DNS"
+    "acm:DomainNames"         = "shop.dinhminhkhoa.id.vn"
+    "ec2:Subnet"              = aws_subnet.executor_control[0].arn
+    "ec2:LaunchTemplate"      = aws_launch_template.executor[0].arn
+    "ec2:InstanceType"        = "t3.small"
+    "ec2:CreateAction"        = "RunInstances"
+    }, { for key, value in { Project = "techx", Environment = "staging", Role = "deployment-executor" } : "aws:RequestTag/${key}" => value },
+    { for key, value in { Project = "techx", Environment = "automation", Role = "github-app" } : "aws:ResourceTag/${key}" => value },
+    { for key, value in { Project = "techx", Environment = "staging" } : "ec2:ResourceTag/${key}" => value },
+  { for key, value in { Project = "techx", Environment = "staging", Role = "deployment-executor" } : "ssm:resourceTag/${key}" => value }) : {}
+  simulation_negative_context = merge({ for key, value in local.simulation_negative_strings : key => {
+    ContextKeyName = key, ContextKeyType = "string", ContextKeyValues = [value]
+  } }, { "ec2:IsLaunchTemplateResource" = { ContextKeyName = "ec2:IsLaunchTemplateResource", ContextKeyType = "boolean", ContextKeyValues = ["true"] } })
+}
+
+output "lifecycle_iam_simulation_cases_json" {
+  value = var.enable_lifecycle_control ? jsonencode({
+    for name, group in jsondecode(local.simulation_cases_json) : name => merge(group, {
+      cases = [for case in group.cases : merge(case, {
+        context = values(merge(case.expected == "denied" ? local.simulation_negative_context : {},
+        { for entry in try(case.context, []) : entry.ContextKeyName => entry }))
+      })]
+    })
   }) : null
 }
 

@@ -172,6 +172,8 @@ python (Join-Path $PSScriptRoot 'test-deployment-executor.py')
 if ($LASTEXITCODE -ne 0) { throw 'Executor launch, placement, readiness and uncertain-response tests failed.' }
 python (Join-Path $PSScriptRoot 'test-executor-network-contract.py')
 if ($LASTEXITCODE -ne 0) { throw 'Declared Terraform network and EC2 executor factory contract tests failed.' }
+python (Join-Path $PSScriptRoot 'test-lifecycle-iam-context.py')
+if ($LASTEXITCODE -ne 0) { throw 'Lifecycle IAM context regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-deployment-task-loader.py')
 if ($LASTEXITCODE -ne 0) { throw 'Immutable EC2 task admission, result and private diagnostic tests failed.' }
 python (Join-Path $PSScriptRoot 'test-plan-approval.py')

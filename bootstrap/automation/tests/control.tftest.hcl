@@ -268,6 +268,34 @@ run "lifecycle_is_scoped_and_pinned" {
     }
   }
   assert {
+    condition = alltrue(flatten([for group in jsondecode(output.lifecycle_iam_simulation_cases_json) : [
+      for case in group.cases : (
+        length(case.context) == length(distinct([for entry in case.context : entry.ContextKeyName])) &&
+        alltrue([for key in keys(local.simulation_negative_context) : contains([for entry in case.context : entry.ContextKeyName], key)])
+      ) if case.expected == "denied"
+    ]]))
+    error_message = "Every denied case needs complete, unique explicit context; missing keys cannot count as negative IAM proof."
+  }
+  assert {
+    condition = alltrue(flatten([for group in jsondecode(output.lifecycle_iam_simulation_cases_json) : [
+      for case in group.cases :
+      try(case.resourceMode == "action", false) == contains(["cloudfront:ListFunctions", "cloudfront:ListVpcOrigins", "logs:DescribeLogGroups"], case.action) &&
+      (try(case.resourceMode == "action", false) ? case.resources == ["*"] : alltrue([for resource in case.resources : startswith(resource, "arn:aws:")]))
+    ]]))
+    error_message = "Only the three reviewed inventory cases may use explicit action-level wildcard scope."
+  }
+  assert {
+    condition = (
+      [for case in jsondecode(output.lifecycle_iam_simulation_cases_json).executor.cases :
+        [for entry in case.context : entry.ContextKeyValues[0] if entry.ContextKeyName == "iam:PermissionsBoundary"][0]
+      if case.name == "wrong-boundary-denied"][0] == "arn:aws:iam::058114477594:policy/unapproved-boundary" &&
+      [for case in jsondecode(output.lifecycle_iam_simulation_cases_json).executor.cases :
+        [for entry in case.context : entry.ContextKeyValues[0] if entry.ContextKeyName == "ec2:ResourceTag/Project"][0]
+      if case.name == "no-foreign-vpn-client-disconnect"][0] == "unrelated"
+    )
+    error_message = "Negative-case boundary and foreign ownership overrides must survive the context baseline."
+  }
+  assert {
     condition     = aws_codebuild_project.lifecycle[0].source[0].type == "NO_SOURCE" && !aws_codebuild_project.lifecycle[0].environment[0].privileged_mode && aws_codebuild_project.lifecycle[0].concurrent_build_limit == 1
     error_message = "Manager must use the immutable loader, no Docker privilege and one build at a time."
   }

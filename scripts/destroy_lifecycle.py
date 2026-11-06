@@ -77,13 +77,15 @@ def observed_build(codebuild, build_id, execution, execution_version, bucket):
 
 
 def request_cleanup(clients, github, *, bucket, session_id, execution_version, run_id, source_sha,
-                    observations=240, sleep=time.sleep, monotonic=time.monotonic):
+                    observations=240, sleep=time.sleep, monotonic=time.monotonic, observe_build_id=None):
     if (not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", bucket)
             or not re.fullmatch(r"staging-[A-Za-z0-9-]{1,64}", session_id)):
         raise ValueError("A fixed control bucket and staging session are required")
     version(execution_version)
     if type(observations) is not int or not 1 <= observations <= 240:
         raise ValueError("Cleanup observation must be bounded to 40 minutes")
+    if observe_build_id is not None and (not isinstance(observe_build_id, str) or not re.fullmatch(BUILD, observe_build_id)):
+        raise ValueError("Observation requires an exact existing cleanup build ID")
     identity = clients["sts"].get_caller_identity()
     if (identity.get("Account") != ACCOUNT or identity.get("Arn") !=
             f"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-destroy-dispatcher/techx-destroy-{run_id}"):
@@ -92,34 +94,42 @@ def request_cleanup(clients, github, *, bucket, session_id, execution_version, r
     execution, _ = read_json(clients["s3"], bucket, f"executions/{session_id}.json", execution_version)
     if execution.get("sessionId") != session_id: raise ValueError("Execution belongs to a different session")
     current = current_session(clients["s3"], bucket, execution, execution_version)
+    if observe_build_id is not None:
+        # A retained handle may be observed after a workflow timeout or lost
+        # launcher response. It never authorizes reinvocation or marker repair.
+        observed_build(clients["codebuild"], observe_build_id, execution, execution_version, bucket)
+        current = current_session(clients["s3"], bucket, execution, execution_version)
     completed = completion(clients["s3"], bucket, execution, execution_version, current)
-    if completed: return completed
+    if completed:
+        return dict(completed, buildId=observe_build_id) if observe_build_id is not None else completed
     if current["status"] == "DESTROYED":
         # The dispatcher remains read-only. Only the independently scoped
         # cleanup producer can recover its marker from a valid committed proof.
         checkpoint_inventory(clients["s3"], bucket, execution, execution_version, current, metadata=True)
-    # Read again immediately before the only mutation. The AWS cleanup worker
-    # also checks current session before fencing or touching workload resources.
-    current_session(clients["s3"], bucket, execution, execution_version)
-    try:
-        response = clients["lambda"].invoke(FunctionName=LAUNCHER, InvocationType="RequestResponse",
-            Payload=encoded(dict(sessionId=session_id, executionVersion=execution_version, requestedEarly=True)))
-        if response.get("StatusCode") != 200 or response.get("FunctionError"):
-            raise ValueError("Cleanup launcher did not return a verified response")
-        payload = response["Payload"].read(16 * 1024 + 1)
-        if len(payload) > 16 * 1024: raise ValueError("Cleanup response exceeds policy")
-        result = json.loads(payload)
-        if result.get("sessionId") != session_id or result.get("status") not in ("started", "running", "already-destroyed"):
-            raise ValueError("Unrecognized cleanup launcher result")
-        if result["status"] == "already-destroyed":
-            latest = current_session(clients["s3"], bucket, execution, execution_version)
-            completed = completion(clients["s3"], bucket, execution, execution_version, latest)
-            if not completed: raise ValueError("Launcher completion is missing inventory evidence")
-            return completed
-        build_id = result.get("buildId", "")
-        if not re.fullmatch(BUILD, build_id): raise ValueError("Cleanup build handle is invalid")
-    except Exception as error:
-        raise DispatchUncertain("Cleanup dispatch was not positively observed; keep session/version and reconcile the AWS launcher/build. No automatic reinvocation.") from error
+    build_id = observe_build_id
+    if build_id is None:
+        # Read again immediately before the only mutation. The AWS cleanup worker
+        # also checks current session before fencing or touching workload resources.
+        current_session(clients["s3"], bucket, execution, execution_version)
+        try:
+            response = clients["lambda"].invoke(FunctionName=LAUNCHER, InvocationType="RequestResponse",
+                Payload=encoded(dict(sessionId=session_id, executionVersion=execution_version, requestedEarly=True)))
+            if response.get("StatusCode") != 200 or response.get("FunctionError"):
+                raise ValueError("Cleanup launcher did not return a verified response")
+            payload = response["Payload"].read(16 * 1024 + 1)
+            if len(payload) > 16 * 1024: raise ValueError("Cleanup response exceeds policy")
+            result = json.loads(payload)
+            if result.get("sessionId") != session_id or result.get("status") not in ("started", "running", "already-destroyed"):
+                raise ValueError("Unrecognized cleanup launcher result")
+            if result["status"] == "already-destroyed":
+                latest = current_session(clients["s3"], bucket, execution, execution_version)
+                completed = completion(clients["s3"], bucket, execution, execution_version, latest)
+                if not completed: raise ValueError("Launcher completion is missing inventory evidence")
+                return completed
+            build_id = result.get("buildId", "")
+            if not re.fullmatch(BUILD, build_id): raise ValueError("Cleanup build handle is invalid")
+        except Exception as error:
+            raise DispatchUncertain("Cleanup dispatch was not positively observed; keep session/version and reconcile the AWS launcher/build. No automatic reinvocation.") from error
     end = monotonic() + 2400
     for _ in range(observations):
         if monotonic() >= end: break
@@ -142,6 +152,7 @@ def main():
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--execution-version", required=True)
+    parser.add_argument("--observe-build-id", help="Only observe this retained cleanup build; never invoke the launcher")
     args = parser.parse_args()
     import boto3
     from botocore.config import Config
@@ -151,7 +162,8 @@ def main():
     github = GitHub(INFRA_REPO, os.environ["GITHUB_TOKEN"])
     try:
         result = request_cleanup(clients, github, bucket=args.bucket, session_id=args.session_id,
-            execution_version=args.execution_version, run_id=os.environ["GITHUB_RUN_ID"], source_sha=os.environ["GITHUB_SHA"])
+            execution_version=args.execution_version, run_id=os.environ["GITHUB_RUN_ID"], source_sha=os.environ["GITHUB_SHA"],
+            observe_build_id=args.observe_build_id)
     except DispatchUncertain:
         result = dict(sessionId=args.session_id, executionVersion=args.execution_version,
                       waiting="DISPATCH_UNCERTAIN", inventoryVerified=False)

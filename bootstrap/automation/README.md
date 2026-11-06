@@ -241,7 +241,7 @@ IAM/network/AWS behavior is not yet accepted and automation stays disabled.
 `deployment_executor.py` verifies the pinned account-owned AMI/bootstrap digest,
 exact launch-template version, t3.small with standard CPU credits, 20 GiB encrypted
 delete-on-termination root disk, IMDSv2, owned control VPC, no inbound rules,
-HTTPS/VPC DNS egress and direct IGW route. Launch intent is stored before
+HTTPS, Client VPN UDP 443 and VPC DNS egress and direct IGW route. Launch intent is stored before
 RunInstances with an idempotency client token and exact session tags on instance
 and volume. A lost response preserves intent and requests independent cleanup;
 it never launches a replacement blindly. Readiness requires Linux SSM online and
@@ -316,7 +316,12 @@ The boundary includes the ENI attribute update required by
 The mock control-plane test guards this permission within the deployment
 account/region ceiling. It does not prove live node/CNI behavior.
 
-The control network permits HTTPS egress and VPC DNS only. The HTTPS rule has a
+The control network permits HTTPS, Client VPN UDP 443 and VPC DNS egress only.
+An offline integration test reads the declared Terraform mock security-group
+rules into an EC2 SDK response and runs the actual executor factory. It verifies
+that the declared network can launch and that missing VPN or broader UDP rules
+cannot launch. This does not prove live VPN connectivity.
+The HTTPS rule has a
 local `AWS-0104` Trivy exception because dynamic AWS endpoints and signed tool
 sources are required without NAT. This is not a global scanner exemption.
 

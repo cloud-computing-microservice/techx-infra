@@ -24,11 +24,32 @@ subscription and exercise actual delivery in G1/G5. Terraform/mocked checks do
 not prove email delivery. See [CloudWatch SNS notifications](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Notify_Users_Alarm_Changes.html)
 and [SNS encryption permissions](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html).
 
+The protected opening job checks the actual topic owner and admitted KMS key,
+one confirmed email subscription with no pending subscriptions, and the five
+enabled alarms' exact metric/dimension/action contracts before session
+reservation. Firing alarms, missing/duplicate/paginated evidence and API errors
+block opening. It repeats these reads immediately before reservation and rejects
+a changed subscription. Preview stays cloud-free. The dispatcher receives only
+topic-scoped SNS reads and exact-alarm CloudWatch reads; it cannot publish,
+subscribe or change alarm configuration. The sanitized execution proof omits
+the recipient. These reads prove configuration/confirmation, not email delivery;
+the manual delivery acceptance in G1/G5 remains required.
+
 These retained control resources (five alarms, one custom metric, SNS topic and
 subscription, and their KMS/message requests) must be included separately in the
 approved estimate and closeout inventory. Workload teardown does not remove
 them. Alerts report a problem; they do not stop spending. No notification
 resources are created while cleanup control is disabled.
+
+`cost-estimate.ps1` includes a full month of retained cleanup alert costs even
+for a short demo: five standard alarms (USD 0.50), one custom metric (USD 0.30),
+and a USD 0.25 SNS/delivery/request allowance, without free-tier credits. The
+output states `retainedControlMonths: 1`; these allowances participate in the
+same usage, contingency and approved-budget gate. Charges after that horizon
+still require a separate retention/decommission decision. Rates/allowances are
+assumptions rather than spending caps; refresh them before approval using
+[CloudWatch pricing](https://aws.amazon.com/cloudwatch/pricing/) and
+[SNS pricing](https://aws.amazon.com/sns/pricing/).
 
 New lifecycle sessions require an explicit `approved_budget_usd` keyword when
 calling `initial_record`. `automation_budget.py` validates the finite 1–80 USD

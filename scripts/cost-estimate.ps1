@@ -27,9 +27,14 @@ if ($IncludeAutomation) {
   $fixed.automationAmiSnapshotMonthlyAllowance = 1.00
   $fixed.automationKmsMonthlyAllowance = 1.00
   $fixed.automationStateArtifactsSecretsAndLogs = 2.00
+  # Retained controls are budgeted for a full month, not prorated to this demo.
+  # No free-tier credit is assumed. Delivery/request allowance is not a quota.
+  $fixed.automationCleanupAlarmsMonthlyAllowance = 5 * 0.10
+  $fixed.automationCleanupMetricMonthlyAllowance = 0.30
+  $fixed.automationCleanupNotificationAllowance = 0.25
 }
 $usage = (($hourly.Values | Measure-Object -Sum).Sum * $Hours) + ($fixed.Values | Measure-Object -Sum).Sum
 $contingency = [Math]::Max(5.00, $usage * 0.50)
 $upper = [Math]::Ceiling(($usage + $contingency) * 100) / 100
 if ($upper -gt $applyGate) { throw "Estimated upper bound $upper USD exceeds the $applyGate USD apply gate." }
-[pscustomobject]@{ region = 'us-east-1'; profile = $Profile; maximumHours = $Hours; includesAutomation = $IncludeAutomation; hourlyAssumptions = $hourly; fixedAllowances = $fixed; estimatedUsageUsd = [Math]::Round($usage, 2); contingencyUsd = [Math]::Round($contingency, 2); upperBoundUsd = $upper; applyGateUsd = $applyGate; hardCapUsd = 80; approvedBudgetUsd = $ApprovedBudgetUsd; alertsDoNotStopSpending = $true; pricingReferences = @('https://aws.amazon.com/ec2/instance-types/t3/', 'https://aws.amazon.com/codebuild/pricing/', 'https://aws.amazon.com/kms/pricing/') } | ConvertTo-Json -Depth 4
+[pscustomobject]@{ region = 'us-east-1'; profile = $Profile; maximumHours = $Hours; includesAutomation = $IncludeAutomation; retainedControlMonths = $(if ($IncludeAutomation) { 1 } else { 0 }); hourlyAssumptions = $hourly; fixedAllowances = $fixed; estimatedUsageUsd = [Math]::Round($usage, 2); contingencyUsd = [Math]::Round($contingency, 2); upperBoundUsd = $upper; applyGateUsd = $applyGate; hardCapUsd = 80; approvedBudgetUsd = $ApprovedBudgetUsd; alertsDoNotStopSpending = $true; pricingReferences = @('https://aws.amazon.com/ec2/instance-types/t3/', 'https://aws.amazon.com/codebuild/pricing/', 'https://aws.amazon.com/kms/pricing/', 'https://aws.amazon.com/cloudwatch/pricing/', 'https://aws.amazon.com/sns/pricing/') } | ConvertTo-Json -Depth 4

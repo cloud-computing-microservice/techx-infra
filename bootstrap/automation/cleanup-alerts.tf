@@ -130,3 +130,13 @@ output "cleanup_alert_topic_arn" {
 output "cleanup_alert_alarm_names" {
   value = [for alarm in aws_cloudwatch_metric_alarm.cleanup : alarm.alarm_name]
 }
+
+resource "aws_iam_role_policy" "cleanup_alert_admission" {
+  count = var.enable_lifecycle_control ? 1 : 0
+  name  = "read-only-cleanup-alert-admission"
+  role  = aws_iam_role.lifecycle_dispatcher[0].name
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["sns:GetTopicAttributes", "sns:ListSubscriptionsByTopic"], Resource = aws_sns_topic.cleanup_alerts[0].arn },
+    { Effect = "Allow", Action = ["cloudwatch:DescribeAlarms"], Resource = local.cleanup_alert_alarm_arns }
+  ] })
+}

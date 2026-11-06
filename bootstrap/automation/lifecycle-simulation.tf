@@ -85,6 +85,12 @@ output "lifecycle_iam_simulation_cases_json" {
     dispatcher = {
       principalArn = "${local.simulation_account_prefix}:role/techx-automation-lifecycle-dispatcher"
       cases = [
+        { name = "read-cleanup-alert-topic", action = "sns:GetTopicAttributes", expected = "allowed", resources = [aws_sns_topic.cleanup_alerts[0].arn] },
+        { name = "read-cleanup-alert-subscription", action = "sns:ListSubscriptionsByTopic", expected = "allowed", resources = [aws_sns_topic.cleanup_alerts[0].arn] },
+        { name = "read-cleanup-alert-alarms", action = "cloudwatch:DescribeAlarms", expected = "allowed", resources = local.cleanup_alert_alarm_arns },
+        { name = "no-cleanup-alert-publish", action = "sns:Publish", expected = "denied", resources = [aws_sns_topic.cleanup_alerts[0].arn] },
+        { name = "no-other-alert-topic-read", action = "sns:GetTopicAttributes", expected = "denied", resources = ["arn:aws:sns:us-east-1:058114477594:unrelated"] },
+        { name = "no-other-alarm-read", action = "cloudwatch:DescribeAlarms", expected = "denied", resources = ["arn:aws:cloudwatch:us-east-1:058114477594:alarm:unrelated"] },
         { name = "fixed-manager-build", action = "codebuild:StartBuild", expected = "allowed", resources = [local.lifecycle_project_arn] },
         { name = "read-pinned-public-acceptance", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/acceptance/staging/simulation/public/dispatch/result.json"] },
         { name = "read-pinned-active-candidate", action = "s3:GetObjectVersion", expected = "allowed", resources = ["${aws_s3_bucket.control.arn}/releases/staging/simulation/active/candidate/manifest.json"] },

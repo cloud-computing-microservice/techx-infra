@@ -27,7 +27,7 @@ def main():
         import boto3
         from botocore.config import Config
         kwargs["clients"] = {name: boto3.client(name, region_name="us-east-1", config=Config(retries={"total_max_attempts": 1}))
-            for name in ("s3", "sts", "scheduler", "codebuild", "lambda", "cloudfront", "logs", "kms")}
+            for name in ("s3", "sts", "scheduler", "codebuild", "lambda", "cloudfront", "logs", "kms", "sns", "cloudwatch")}
         kwargs["store"] = S3SessionStore(kwargs["bucket"])
     githubs = {name: GitHub(repo, os.environ["GITHUB_TOKEN"]) for name, repo in REPOS.items()}
     workflow = StartWorkflow(githubs, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_SHA"], Path(__file__).parents[2],

@@ -1,0 +1,65 @@
+{
+  "EvaluationResults": [
+    {
+      "EvalActionName": "cloudfront:ListVpcOrigins",
+      "EvalResourceName": "*",
+      "EvalDecision": "allowed",
+      "MatchedStatements": [
+        {
+          "SourcePolicyId": "PolicyInputList.1",
+          "SourcePolicyType": "IAM Policy",
+          "StartPosition": {
+            "Line": 1,
+            "Column": 2331
+          },
+          "EndPosition": {
+            "Line": 1,
+            "Column": 2843
+          }
+        }
+      ],
+      "MissingContextValues": []
+    },
+    {
+      "EvalActionName": "cloudfront:ListFunctions",
+      "EvalResourceName": "arn:${Partition}:cloudfront::${Account}:function/*",
+      "EvalDecision": "allowed",
+      "MatchedStatements": [
+        {
+          "SourcePolicyId": "PolicyInputList.1",
+          "SourcePolicyType": "IAM Policy",
+          "StartPosition": {
+            "Line": 1,
+            "Column": 2331
+          },
+          "EndPosition": {
+            "Line": 1,
+            "Column": 2843
+          }
+        }
+      ],
+      "MissingContextValues": []
+    },
+    {
+      "EvalActionName": "logs:DescribeLogGroups",
+      "EvalResourceName": "*",
+      "EvalDecision": "allowed",
+      "MatchedStatements": [
+        {
+          "SourcePolicyId": "PolicyInputList.1",
+          "SourcePolicyType": "IAM Policy",
+          "StartPosition": {
+            "Line": 1,
+            "Column": 2331
+          },
+          "EndPosition": {
+            "Line": 1,
+            "Column": 2843
+          }
+        }
+      ],
+      "MissingContextValues": []
+    }
+  ],
+  "IsTruncated": false
+}

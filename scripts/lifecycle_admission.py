@@ -14,6 +14,7 @@ from automation_budget import approved_budget, validate_estimate
 from automation_bundle import extract, pack
 from automation_session import utc
 from cleanup_execution import assert_inventory
+from cleanup_alert_readiness import verify_cleanup_alerts
 from lifecycle_coordinator import ACCOUNT, OPENING_ACTIONS, Coordinator, initial_record
 from plan_review_store import checksum
 from promotion_authority import authority, identity as app_identity
@@ -195,6 +196,7 @@ class StartWorkflow:
                 f"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-lifecycle-dispatcher/techx-lifecycle-{self.run_id}"):
             raise ValueError("Only the dedicated opening run's dispatcher role may start")
         self.verify_storage()
+        cleanup_alerts = verify_cleanup_alerts(self.clients, self.kms_key)
         used = self.clients["s3"].list_objects_v2(Bucket=self.bucket, Prefix=f"executions/{record['sessionId']}.json", MaxKeys=1, ExpectedBucketOwner=ACCOUNT)
         if used.get("IsTruncated") is not False or used.get("Contents") != []:
             raise ValueError("This start request is consumed or its absence is unproven; never reopen a run")
@@ -214,7 +216,8 @@ class StartWorkflow:
             ip = ipaddress.ip_address(stream.read(128).decode().strip())
         if ip.version != 4 or not ip.is_global: raise ValueError("Opening runner needs an observed global IPv4")
         record["sourceAdmission"] = dict(requestSha256=request_sha256, workflowRun=request["workflowRun"], reviewer=reviewer,
-            previewChecks=request["sourceChecks"], startChecks=checks, inventorySha256=checksum(inventory), promotionAuthority=promotion, lifecycleIdentity=lifecycle)
+            previewChecks=request["sourceChecks"], startChecks=checks, inventorySha256=checksum(inventory), promotionAuthority=promotion,
+            lifecycleIdentity=lifecycle, cleanupAlerts=cleanup_alerts)
         with tempfile.TemporaryDirectory(prefix="techx-start-") as directory:
             bundle = Path(directory) / "source.tar.gz"
             digest = self.pack({name: (self.workspace / name, sha) for name, sha in sources.items()}, bundle)
@@ -226,5 +229,7 @@ class StartWorkflow:
                 raise ValueError("Promotion authority changed before reservation; no session may start")
             if app_identity(self.lifecycle_check()) != lifecycle:
                 raise ValueError("Lifecycle App changed before reservation; no session may start")
+            if verify_cleanup_alerts(self.clients, self.kms_key) != cleanup_alerts:
+                raise ValueError("Cleanup alert subscription changed before reservation; no session may start")
             if self.clock() + timedelta(minutes=30) >= utc(record["cleanupStartAt"]): raise ValueError("Opening window expired during preparation")
             return Coordinator(self.clients, self.store, self.bucket).start(record, bundle, inventory, estimate, str(ip))

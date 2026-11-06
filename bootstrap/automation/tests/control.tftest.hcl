@@ -272,6 +272,17 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Manager must use the immutable loader, no Docker privilege and one build at a time."
   }
   assert {
+    condition = (length(jsondecode(aws_iam_role_policy.cleanup_alert_admission[0].policy).Statement) == 2 &&
+      anytrue([for statement in jsondecode(aws_iam_role_policy.cleanup_alert_admission[0].policy).Statement :
+        toset(statement.Action) == toset(["sns:GetTopicAttributes", "sns:ListSubscriptionsByTopic"]) &&
+        statement.Resource == "arn:aws:sns:us-east-1:058114477594:techx-automation-cleanup-alerts"
+        ]) && anytrue([for statement in jsondecode(aws_iam_role_policy.cleanup_alert_admission[0].policy).Statement :
+        toset(statement.Action) == toset(["cloudwatch:DescribeAlarms"]) &&
+        toset(flatten([statement.Resource])) == toset(local.cleanup_alert_alarm_arns)
+    ]))
+    error_message = "Opening may only read the owned notification topic/subscriptions and exact five metric alarms; it must not publish or configure alerts."
+  }
+  assert {
     condition = (
       length([for statement in jsondecode(aws_iam_role_policy.lifecycle_dispatcher[0].policy).Statement : statement if
         statement.Resource == "arn:aws:s3:::techx-test-control/private/staging/*/exposure/*.json" &&

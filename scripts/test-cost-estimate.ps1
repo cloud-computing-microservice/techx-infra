@@ -14,10 +14,19 @@ foreach ($budget in @(30, 60, 80)) {
   if ($estimate.fixedAllowances.automationImageBuildAllowance -le 0 -or $estimate.fixedAllowances.automationAmiSnapshotMonthlyAllowance -le 0) {
     throw 'Estimator must include AMI build and retained snapshot costs.'
   }
+  if ($estimate.retainedControlMonths -ne 1 -or $estimate.fixedAllowances.automationCleanupAlarmsMonthlyAllowance -le 0 -or
+      $estimate.fixedAllowances.automationCleanupMetricMonthlyAllowance -le 0 -or $estimate.fixedAllowances.automationCleanupNotificationAllowance -le 0) {
+    throw 'Estimator must include retained cleanup alarms, metric and notification delivery for a full month.'
+  }
 }
-foreach ($budget in @(1, 0, 81, [double]::NaN, [double]::PositiveInfinity)) {
+# USD 20 covered the old four-hour estimate but omits the retained alert costs.
+foreach ($budget in @(20, 1, 0, 81, [double]::NaN, [double]::PositiveInfinity)) {
   $failed = $false
   try { & $script -Hours 4 -ApprovedBudgetUsd $budget | Out-Null } catch { $failed = $true }
   if (-not $failed) { throw 'Estimator accepted an invalid or insufficient budget.' }
+}
+$baseline = & $script -Hours 4 -IncludeAutomation $false | ConvertFrom-Json
+if ($baseline.retainedControlMonths -ne 0 -or @($baseline.fixedAllowances.PSObject.Properties.Name | Where-Object { $_ -like 'automation*' }).Count -ne 0) {
+  throw 'Non-automation estimates must not silently include automation controls.'
 }
 Write-Host 'Budget estimator regression tests passed.'

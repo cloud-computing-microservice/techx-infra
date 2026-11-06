@@ -18,6 +18,9 @@ from automation_session import utc
 spec = importlib.util.spec_from_file_location("admission_coordinator_support", Path(__file__).with_name("test-lifecycle-coordinator.py"))
 support = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(support)
+alert_spec = importlib.util.spec_from_file_location("opening_alert_fixture", Path(__file__).with_name("test-cleanup-alert-readiness.py"))
+alert_support = importlib.util.module_from_spec(alert_spec)
+alert_spec.loader.exec_module(alert_support)
 
 
 class AdmissionTests(unittest.TestCase):
@@ -56,6 +59,8 @@ class AdmissionTests(unittest.TestCase):
         self.used = dict(Contents=[], IsTruncated=False)
         self.clients["s3"].list_objects_v2 = lambda **kw: deepcopy(self.used)
         self.clients["kms"] = SimpleNamespace(describe_key=lambda **kw: dict(KeyMetadata=deepcopy(self.key)))
+        self.alerts = alert_support.AlertFixture(self.kms)
+        self.clients.update(self.alerts.clients)
         self.origins = dict(IsTruncated=False, Quantity=0)
         self.functions = dict(Quantity=0)
         self.logs = dict(logGroups=[])
@@ -124,6 +129,37 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.start(request)
         self.assertFalse(self.f.events)
         self.assertFalse(self.packed)
+
+    def test_unconfirmed_alerts_block_before_checkout_reservation_schedule_or_paid_build(self):
+        self.alerts.attributes["SubscriptionsConfirmed"] = "0"
+        self.alerts.attributes["SubscriptionsPending"] = "1"
+        with self.assertRaisesRegex(ValueError, "confirmed operator"): self.start()
+        self.assertFalse(self.checkouts)
+        self.assertFalse(self.f.events)
+
+    def test_alert_route_is_rechecked_after_preparation_without_exporting_operator_email(self):
+        self.start()
+        self.assertEqual([operation for operation, _ in self.alerts.calls].count("DescribeAlarms"), 2)
+        proof = self.f.current["sourceAdmission"]["cleanupAlerts"]
+        self.assertNotIn(self.alerts.subscription["Endpoint"], json.dumps(proof))
+
+    def test_changed_or_unavailable_alert_route_before_reservation_has_no_paid_successor(self):
+        pack = self.flow.pack
+        def changed(*args):
+            result = pack(*args)
+            self.alerts.subscription["SubscriptionArn"] = alert_support.TOPIC + ":abcdef12-1234-1234-1234-123456789abc"
+            return result
+        self.flow.pack = changed
+        with self.assertRaisesRegex(ValueError, "changed before reservation"): self.start()
+        self.assertFalse(self.f.events)
+
+    def test_alert_api_denial_or_firing_alarm_does_not_reserve_or_dispatch(self):
+        self.alerts.error = "DescribeAlarms"
+        with self.assertRaisesRegex(RuntimeError, "unavailable"): self.start()
+        self.alerts.error = None
+        self.alerts.alarms["MetricAlarms"][0]["StateValue"] = "ALARM"
+        with self.assertRaisesRegex(ValueError, "firing"): self.start()
+        self.assertFalse(self.f.events)
 
     def test_inputs_changed_after_preview_cannot_increase_budget_or_extend_window(self):
         request = self.flow.preview(self.inputs)

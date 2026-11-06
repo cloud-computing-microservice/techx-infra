@@ -44,6 +44,8 @@ python (Join-Path $PSScriptRoot 'test-leased-command.py')
 if ($LASTEXITCODE -ne 0) { throw 'Leased command heartbeat/termination regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-cleanup-launcher.py')
 if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup launcher regression tests failed.' }
+python (Join-Path $PSScriptRoot 'test-cleanup-alert-readiness.py')
+if ($LASTEXITCODE -ne 0) { throw 'Confirmed cleanup notification admission tests failed.' }
 python (Join-Path $PSScriptRoot 'test-cleanup-loader.py')
 if ($LASTEXITCODE -ne 0) { throw 'Independent cleanup bundle loader regression tests failed.' }
 python (Join-Path $PSScriptRoot 'test-cleanup-execution.py')

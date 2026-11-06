@@ -12,6 +12,22 @@ function Invoke-AwsJson([string[]]$Arguments) {
   return $raw | ConvertFrom-Json
 }
 
+function Test-VpcOriginEmptyPage($List) {
+  # Live ListVpcOrigins can omit IsTruncated/Marker on an empty first page.
+  # Require its explicit positive empty envelope; never infer zero from a
+  # partial/nonempty/paginated response or extend this exception to other APIs.
+  if ($null -eq $List) { return $false }
+  $fields = @($List.PSObject.Properties.Name)
+  foreach ($required in @('MaxItems', 'Quantity', 'Items')) {
+    if ($required -notin $fields) { return $false }
+  }
+  if (@($fields | Where-Object { $_ -notin @('MaxItems', 'Quantity', 'Items', 'Marker') }).Count -ne 0) { return $false }
+  if (($List.MaxItems -isnot [int] -and $List.MaxItems -isnot [long]) -or $List.MaxItems -lt 1 -or $List.MaxItems -gt 100 -or
+      ($List.Quantity -isnot [int] -and $List.Quantity -isnot [long]) -or $List.Quantity -ne 0 -or
+      $List.Items -isnot [array] -or $List.Items.Count -ne 0) { return $false }
+  return ('Marker' -notin $fields -or ($List.Marker -is [string] -and $List.Marker.Length -eq 0))
+}
+
 function Get-CloudFrontItems([string]$Operation, [string]$Field) {
   $marker = $null
   $seen = @{}
@@ -20,14 +36,15 @@ function Get-CloudFrontItems([string]$Operation, [string]$Field) {
     if ($marker) { $arguments += @('--marker', $marker) }
     $list = (Invoke-AwsJson $arguments).$Field
     $items = @($list.Items | Where-Object { $null -ne $_ })
+    $emptyVpcPage = $Operation -eq 'list-vpc-origins' -and $page -eq 0 -and (Test-VpcOriginEmptyPage $list)
     if ($null -eq $list -or $list.Quantity -isnot [long] -and $list.Quantity -isnot [int] -or
         $list.Quantity -ne $items.Count -or
-        ($Operation -ne 'list-functions' -and $list.IsTruncated -isnot [bool])) {
+        ($Operation -ne 'list-functions' -and $list.IsTruncated -isnot [bool] -and -not $emptyVpcPage)) {
       throw "Incomplete CloudFront inventory: $Operation"
     }
     $items
     $marker = $list.NextMarker
-    if ($Operation -ne 'list-functions' -and $list.IsTruncated -ne [bool]$marker) {
+    if ($Operation -ne 'list-functions' -and -not $emptyVpcPage -and $list.IsTruncated -ne [bool]$marker) {
       throw "Inconsistent CloudFront pagination: $Operation"
     }
     if (-not $marker) { return }

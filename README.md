@@ -185,6 +185,14 @@ pages or API errors. Function names and EKS/Client VPN log paths are scoped to
 the selected environment; automation control logs and other environments are
 retained. Older inventory snapshots missing these fields require a fresh read.
 These are read-only checks; they do not delete discovered orphan resources.
+CloudFront can return an HTTP-200 empty `ListVpcOrigins` first page with
+`MaxItems`, `Quantity: 0` and explicit `Items: []`, omitting `IsTruncated` even
+though the [documented response](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_ListVpcOrigins.html)
+and SDK model include that field. The CLI inventory and protected opening accept
+only this bounded empty envelope (optionally an empty initial `Marker`). Missing
+items, invalid counts/limits, pagination tokens, nonempty pages without the flag,
+unknown fields and the same omission on later pages remain failures. This does
+not relax distribution pagination or turn API errors into an empty inventory.
 Each phase
 applies a saved plan reviewed to permit only deletion/no-op; edge deletion is
 restricted to the edge modules. It preserves the live EKS API CIDRs and uses an

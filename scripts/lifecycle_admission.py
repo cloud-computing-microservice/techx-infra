@@ -26,6 +26,21 @@ ENVIRONMENT = "staging-start"
 INPUTS = {"action", "platform_sha", "chart_sha", "duration_hours", "approved_budget_usd", "budget_alert_email"}
 
 
+def empty_vpc_origin_response(value):
+    """CloudFront's observed empty first page can omit IsTruncated/Marker.
+
+    Keep this exception narrower than the documented SDK shape: no missing
+    Items, nonempty/foreign page, pagination token, null flag or unknown fields.
+    The opening caller only requests the first page with MaxItems=100.
+    """
+    return (isinstance(value, dict) and {"MaxItems", "Quantity", "Items"} <= set(value)
+        and set(value) <= {"MaxItems", "Quantity", "Items", "Marker"}
+        and type(value["MaxItems"]) is int and 1 <= value["MaxItems"] <= 100
+        and type(value["Quantity"]) is int and value["Quantity"] == 0
+        and isinstance(value["Items"], list) and value["Items"] == []
+        and ("Marker" not in value or value["Marker"] == ""))
+
+
 def typed_inputs(value):
     if not isinstance(value, dict) or set(value) != INPUTS: raise ValueError("Complete typed lifecycle inputs are required")
     if value["action"] not in OPENING_ACTIONS: raise ValueError("Unsupported opening action")
@@ -142,7 +157,8 @@ class StartWorkflow:
     def extra_inventory(self):
         origins = self.clients["cloudfront"].list_vpc_origins(MaxItems="100").get("VpcOriginList", {})
         functions = self.clients["cloudfront"].list_functions(MaxItems="100").get("FunctionList", {})
-        if (origins.get("IsTruncated") is not False or origins.get("NextMarker") or functions.get("NextMarker")
+        if (origins.get("IsTruncated") is not False and not empty_vpc_origin_response(origins)
+                or origins.get("NextMarker") or functions.get("NextMarker")
                 or any(not isinstance(value.get("Items", []), list) or type(value.get("Quantity")) is not int
                        or value["Quantity"] != len(value.get("Items", [])) for value in (origins, functions))
                 or any(not isinstance(row, dict) or not isinstance(row.get("Name"), str) or not row["Name"]

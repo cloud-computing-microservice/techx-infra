@@ -97,6 +97,32 @@ try {
     try { & (Join-Path $PSScriptRoot 'domain-vpn-inventory.ps1') | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw 'Incomplete or failed inventory must not succeed' }
   }
+  # HTTP 200 response observed from AWS CLI and boto3 in the target account.
+  # It lacks fields required by the SDK model; only this explicit empty first
+  # page has a compatibility path, never an arbitrary missing truncation flag.
+  $observedEmpty = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../contracts/cloudfront-empty-vpc-origins.json') -Raw | ConvertFrom-Json).VpcOriginList
+  $testState.originPages.first = @{ VpcOriginList=$observedEmpty }
+  Assert-TechxInventoryEmpty (& (Join-Path $PSScriptRoot 'domain-vpn-inventory.ps1') | ConvertFrom-Json) '000000000000' 'staging' 'us-east-1'
+  $testState.originPages.first = @{ VpcOriginList=@{ MaxItems=100; Quantity=0; Items=@(); Marker='' } }
+  Assert-TechxInventoryEmpty (& (Join-Path $PSScriptRoot 'domain-vpn-inventory.ps1') | ConvertFrom-Json) '000000000000' 'staging' 'us-east-1'
+  $invalidEmptyPages = @(
+    @{ Quantity=0 }, @{ MaxItems=100; Quantity=0 }, @{ MaxItems=100; Quantity=0; Items=$null },
+    @{ MaxItems=0; Quantity=0; Items=@() }, @{ MaxItems=101; Quantity=0; Items=@() }, @{ MaxItems=$true; Quantity=0; Items=@() },
+    @{ MaxItems=100; Quantity=$true; Items=@() }, @{ MaxItems=100; Quantity=1; Items=@(@{ Name='other-project' }) },
+    @{ MaxItems=100; Quantity=0; Items=@(); NextMarker='later' }, @{ MaxItems=100; Quantity=0; Items=@(); Marker='previous' },
+    @{ MaxItems=100; Quantity=0; Items=@(); Marker=$null }, @{ MaxItems=100; Quantity=0; Items=@(); IsTruncated=$null },
+    @{ MaxItems=100; Quantity=0; Items=@(); IsTruncated=$true }, @{ MaxItems=100; Quantity=0; Items=@(); Unexpected='field' }
+  )
+  foreach ($page in $invalidEmptyPages) {
+    $testState.originPages.first = @{ VpcOriginList=$page }
+    Assert-InventoryReadFails
+  }
+  $testState.originPages = @{ first=@{ VpcOriginList=@{ Quantity=0; Items=@(); IsTruncated=$true; NextMarker='later' } }; later=@{ VpcOriginList=$observedEmpty } }
+  Assert-InventoryReadFails
+  $testState.originPages = @{}
+  $testState.distributionPages.first = @{ DistributionList=$observedEmpty }
+  Assert-InventoryReadFails
+  $testState.distributionPages = @{}
   $originArn = 'arn:aws:cloudfront::000000000000:vpcorigin/orphan'
   $testState.workloadTags[$originArn] = $true
   $origin = @{ Id='orphan'; Arn=$originArn; Name='techx-staging-internal-alb'; Status='Deployed' }

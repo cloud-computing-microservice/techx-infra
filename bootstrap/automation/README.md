@@ -1,5 +1,9 @@
 # Automation bootstrap
 
+For an interrupted cleanup, use the [incident recovery runbook](CLEANUP_RECOVERY.md).
+The teardown workflow accepts an optional existing `observe_build_id` to continue
+bounded read-only observation without invoking the launcher or repairing state.
+
 This root is separate from workload state. It defines the private, versioned
 S3/KMS backend/control bucket, publisher OIDC role, and the optional independent
 cleanup control plane (Lambda launcher, Scheduler group/role, AWS watchdog,

@@ -164,6 +164,73 @@ class DestroyTests(unittest.TestCase):
         self.assertEqual(result["buildId"], self.build_id)
         self.assertEqual(len(self.calls), 1)
 
+    def test_read_only_continuation_observes_same_build_after_timeout(self):
+        self.finish = False
+        first = self.request()
+        self.clients.pop("lambda")  # No mutation client exists in this boundary.
+        self.finish = True
+        result = self.request(observe_build_id=first["buildId"])
+        self.assertEqual(result["status"], "DESTROYED")
+        self.assertEqual(result["buildId"], first["buildId"])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_read_only_observation_remains_pending_without_reinvocation(self):
+        self.clients.pop("lambda")
+        self.finish = False
+        result = self.request(observe_build_id=self.build_id)
+        self.assertEqual(result["waiting"], "CLEANUP_RUNNING")
+        self.assertFalse(result["inventoryVerified"])
+        self.assertEqual(self.calls, [])
+
+    def test_read_only_mode_requires_exact_handle_and_execution_before_observation(self):
+        self.clients.pop("lambda")
+        self.finish = False
+        for value in ("", "techx-automation-lifecycle:aaaa", "foreign:aaaa", self.build_id + " --flag", True):
+            with self.subTest(handle=value), self.assertRaisesRegex(ValueError, "exact existing"):
+                self.request(observe_build_id=value)
+        self.assertEqual(self.build_reads, 0)
+        self.build["environment"]["environmentVariables"][1]["value"] = "foreign-version"
+        with self.assertRaisesRegex(ValueError, "different scope"):
+            self.request(observe_build_id=self.build_id)
+        self.assertEqual(self.calls, [])
+
+    def test_read_only_unknown_or_failed_build_cannot_request_a_successor(self):
+        self.clients.pop("lambda")
+        self.finish = False
+        for status in ("FAILED", "FAULT", "STOPPED", "TIMED_OUT", "UNKNOWN"):
+            self.build.update(buildStatus=status, buildComplete=True)
+            with self.subTest(status=status), self.assertRaisesRegex(ValueError, "failed or returned"):
+                self.request(observe_build_id=self.build_id)
+        self.clients["codebuild"].batch_get_builds = lambda **kw: dict(builds=[], buildsNotFound=[self.build_id])
+        with self.assertRaisesRegex(ValueError, "missing or ambiguous"):
+            self.request(observe_build_id=self.build_id)
+        self.assertEqual(self.calls, [])
+
+    def test_read_only_destroyed_missing_marker_never_requests_repair(self):
+        self.clients.pop("lambda")
+        self.finish = False
+        self.complete()
+        del self.objects[f"cleanup/{self.session}/complete.json"]
+        self.build.update(buildStatus="SUCCEEDED", buildComplete=True)
+        before = deepcopy(self.objects)
+        with self.assertRaisesRegex(ValueError, "without protected inventory"):
+            self.request(observe_build_id=self.build_id)
+        self.assertEqual(self.objects, before)
+        self.assertEqual(self.calls, [])
+
+    def test_session_change_while_observing_cannot_claim_prior_completion(self):
+        self.clients.pop("lambda")
+        self.finish = False
+        original = self.get_build
+        def changed(**kwargs):
+            result = original(**kwargs)
+            self.current["executionVersion"] = "new-version"
+            return result
+        self.clients["codebuild"].batch_get_builds = changed
+        with self.assertRaisesRegex(ValueError, "stale, inactive or different"):
+            self.request(observe_build_id=self.build_id)
+        self.assertEqual(self.calls, [])
+
     def test_build_must_be_same_project_role_and_execution(self):
         self.finish = False
         for key, value in (("serviceRole", "arn:aws:iam::058114477594:role/other"),

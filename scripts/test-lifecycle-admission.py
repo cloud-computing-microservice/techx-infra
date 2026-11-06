@@ -128,6 +128,31 @@ class AdmissionTests(unittest.TestCase):
         self.run_data["run_attempt"] = 2
         with self.assertRaises(ValueError): self.start(request)
         self.assertFalse(self.f.events)
+
+    def test_observed_empty_vpc_origin_response_allows_the_real_opening_path(self):
+        self.origins = json.loads(Path(__file__).parents[1].joinpath("contracts/cloudfront-empty-vpc-origins.json").read_text(encoding="utf-8"))["VpcOriginList"]
+        self.start()
+        self.assertIn("schedule", self.f.events)
+        self.assertIn("start-build", self.f.events)
+        self.assertLess(self.f.events.index("schedule"), self.f.events.index("start-build"))
+
+    def test_missing_flag_exception_cannot_hide_an_incomplete_or_paginated_inventory(self):
+        observed = dict(MaxItems=100, Quantity=0, Items=[])
+        cases = [dict(Quantity=0), dict(MaxItems=100, Quantity=0), dict(observed, Items=None),
+            dict(observed, Quantity=True), dict(observed, MaxItems=0), dict(observed, MaxItems=101), dict(observed, MaxItems=True),
+            dict(observed, Quantity=1, Items=[dict(Name="other-project")]), dict(observed, NextMarker="later"),
+            dict(observed, Marker="previous"), dict(observed, Marker=None), dict(observed, IsTruncated=None),
+            dict(observed, IsTruncated=True), dict(observed, Unexpected="field")]
+        for page in cases:
+            self.origins = page
+            with self.subTest(page=page), self.assertRaisesRegex(ValueError, "inventory is incomplete"):
+                self.start()
+            self.assertFalse(self.f.events)
+
+    def test_explicit_empty_first_marker_does_not_invent_a_following_page(self):
+        self.origins = dict(MaxItems=100, Quantity=0, Items=[], Marker="")
+        self.flow.extra_inventory()
+        self.assertFalse(self.f.events)
         self.assertFalse(self.packed)
 
     def test_unconfirmed_alerts_block_before_checkout_reservation_schedule_or_paid_build(self):

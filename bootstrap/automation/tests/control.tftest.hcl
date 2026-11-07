@@ -92,6 +92,22 @@ run "cleanup_control_is_project_scoped" {
     enable_plan_approval   = true
   }
   assert {
+    condition = (length(data.aws_iam_policy_document.cleanup_alerts[0].statement) == 3 &&
+      alltrue([for statement in data.aws_iam_policy_document.cleanup_alerts[0].statement :
+        alltrue([for action in statement.actions : contains([
+          "sns:AddPermission", "sns:DeleteTopic", "sns:GetDataProtectionPolicy",
+          "sns:GetTopicAttributes", "sns:ListSubscriptionsByTopic", "sns:ListTagsForResource",
+          "sns:Publish", "sns:PutDataProtectionPolicy", "sns:RemovePermission",
+          "sns:SetTopicAttributes", "sns:Subscribe"
+        ], action)])
+        ]) && anytrue([for statement in data.aws_iam_policy_document.cleanup_alerts[0].statement :
+        statement.sid == "RequireTLS" && statement.effect == "Deny" &&
+        length(statement.actions) == 11 &&
+        anytrue([for condition in statement.condition : condition.test == "Bool" && condition.variable == "aws:SecureTransport" && toset(condition.values) == toset(["false"])])
+    ]))
+    error_message = "SNS topic policies must use documented actions; the live API rejects wildcard IAM actions. TLS denial must retain the complete supported set."
+  }
+  assert {
     condition = (length(aws_cloudwatch_metric_alarm.cleanup) == 5 &&
       aws_sns_topic.cleanup_alerts[0].kms_master_key_id == aws_kms_key.control.arn &&
       aws_sns_topic_subscription.cleanup_alerts[0].protocol == "email" &&

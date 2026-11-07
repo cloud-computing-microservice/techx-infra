@@ -12,6 +12,19 @@ false. The lifecycle coordinator startup API is implemented, but its deployment
 executor, plan approval bridge and GitHub workflow are still being integrated;
 do not enable cleanup control or release automation before the complete path is ready.
 
+Before enabling cleanup, read `aws lambda get-account-settings` in `us-east-1`
+and verify that quota permits the launcher's required reserved concurrency of
+one. A reduced account quota of ten can reject that reservation because Lambda
+must retain unreserved capacity. Request a quota increase and wait for the actual
+limit to change; do not remove the reservation to make apply pass. A partially
+failed apply must be reconciled from its saved state before a fresh reviewed plan.
+
+The SNS resource policy uses the explicit supported
+[topic-policy action set](https://docs.aws.amazon.com/sns/latest/dg/sns-access-policy-language-api-permissions-reference.html)
+for both owner permissions and TLS denial. `sns:*` is rejected by the live topic
+policy API; this differs from a general identity IAM policy. Alarm publishing
+remains limited to the five exact same-account alarm ARNs.
+
 Cleanup control requires a private `cleanup_alert_email` input. It creates an
 encrypted SNS operator topic and five CloudWatch alarms for launcher errors,
 launcher throttling, failed cleanup builds, nonempty delivery DLQ and cleanup

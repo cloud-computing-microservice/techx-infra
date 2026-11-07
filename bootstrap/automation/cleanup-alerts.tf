@@ -10,6 +10,13 @@ variable "cleanup_alert_email" {
 }
 
 locals {
+  # SNS resource policies reject sns:*; use the documented topic-policy actions.
+  cleanup_topic_policy_actions = [
+    "sns:AddPermission", "sns:DeleteTopic", "sns:GetDataProtectionPolicy",
+    "sns:GetTopicAttributes", "sns:ListSubscriptionsByTopic", "sns:ListTagsForResource",
+    "sns:Publish", "sns:PutDataProtectionPolicy", "sns:RemovePermission",
+    "sns:SetTopicAttributes", "sns:Subscribe"
+  ]
   cleanup_alert_metrics = {
     launcher-errors = {
       namespace  = "AWS/Lambda", metric = "Errors", statistic = "Sum", period = 60
@@ -47,7 +54,7 @@ data "aws_iam_policy_document" "cleanup_alerts" {
   count = var.enable_cleanup_control ? 1 : 0
   statement {
     sid       = "TopicOwner"
-    actions   = ["sns:*"]
+    actions   = local.cleanup_topic_policy_actions
     resources = [aws_sns_topic.cleanup_alerts[0].arn]
     principals {
       type        = "AWS"
@@ -76,7 +83,7 @@ data "aws_iam_policy_document" "cleanup_alerts" {
   statement {
     sid       = "RequireTLS"
     effect    = "Deny"
-    actions   = ["sns:*"]
+    actions   = local.cleanup_topic_policy_actions
     resources = [aws_sns_topic.cleanup_alerts[0].arn]
     principals {
       type        = "*"

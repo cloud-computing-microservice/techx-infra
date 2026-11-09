@@ -207,7 +207,7 @@ resource "aws_iam_role" "lifecycle_dispatcher" {
     Effect = "Allow", Action = "sts:AssumeRoleWithWebIdentity", Principal = { Federated = local.oidc_arn }
     Condition = { StringEquals = {
       "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-      "token.actions.githubusercontent.com:sub" = ["repo:cloud-computing-microservice/techx-infra:environment:staging-lifecycle", "repo:cloud-computing-microservice/techx-infra:environment:staging-start"]
+      "token.actions.githubusercontent.com:sub" = ["${local.github_oidc_subject_prefixes.infra}:environment:staging-lifecycle", "${local.github_oidc_subject_prefixes.infra}:environment:staging-start"]
     } }
   }] })
   max_session_duration = 3600

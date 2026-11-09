@@ -7,7 +7,7 @@ resource "aws_iam_role" "bootstrap_publisher" {
     Effect = "Allow", Action = "sts:AssumeRoleWithWebIdentity", Principal = { Federated = local.oidc_arn }
     Condition = { StringEquals = {
       "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-      "token.actions.githubusercontent.com:sub" = "repo:cloud-computing-microservice/techx-platform:environment:staging-bootstrap"
+      "token.actions.githubusercontent.com:sub" = "${local.github_oidc_subject_prefixes.platform}:environment:staging-bootstrap"
     } }
   }] })
   max_session_duration = 3600

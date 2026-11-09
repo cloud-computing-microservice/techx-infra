@@ -12,6 +12,24 @@ false. The lifecycle coordinator startup API is implemented, but its deployment
 executor, plan approval bridge and GitHub workflow are still being integrated;
 do not enable cleanup control or release automation before the complete path is ready.
 
+The GitHub OIDC trust uses exact immutable subject prefixes, not repository
+names alone. The reviewed owner ID is `328679702`; infra is `1322975868` and
+platform is `1322975781`. Each role still admits only its existing protected
+environment(s) with audience `sts.amazonaws.com`, using `StringEquals`.
+No legacy-name fallback or wildcard ID is trusted. Before bootstrap review,
+verify the active prefix against GitHub (do not infer it from opt-in flags):
+
+```powershell
+gh api repos/cloud-computing-microservice/techx-infra/actions/oidc/customization/sub --jq .sub_claim_prefix
+gh api repos/cloud-computing-microservice/techx-platform/actions/oidc/customization/sub --jq .sub_claim_prefix
+```
+
+A rename, transfer or recreation requires reviewing the exact identity and
+updating trust through Terraform. Do not disable immutable subjects to fit an
+old policy. See [GitHub's immutable subject change](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/).
+The 09/11 opening run exposed this mismatch before admission/workload; a new
+first-attempt run is required after trust is corrected and applied.
+
 Before enabling cleanup, read `aws lambda get-account-settings` in `us-east-1`
 and verify that quota permits the launcher's required reserved concurrency of
 one. A reduced account quota of ten can reject that reservation because Lambda

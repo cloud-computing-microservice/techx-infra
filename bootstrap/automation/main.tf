@@ -36,6 +36,12 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 locals {
+  # Exact prefixes read from GitHub's OIDC settings. Retain immutable IDs so a
+  # recycled organization/repository name cannot inherit these credentials.
+  github_oidc_subject_prefixes = {
+    infra    = "repo:cloud-computing-microservice@328679702/techx-infra@1322975868"
+    platform = "repo:cloud-computing-microservice@328679702/techx-platform@1322975781"
+  }
   oidc_arn = var.create_github_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : "arn:aws:iam::058114477594:oidc-provider/token.actions.githubusercontent.com"
 }
 
@@ -364,7 +370,7 @@ data "aws_iam_policy_document" "publisher_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:cloud-computing-microservice/techx-platform:environment:staging-release"]
+      values   = ["${local.github_oidc_subject_prefixes.platform}:environment:staging-release"]
     }
   }
 }

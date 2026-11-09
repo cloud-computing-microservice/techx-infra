@@ -25,6 +25,13 @@ for both owner permissions and TLS denial. `sns:*` is rejected by the live topic
 policy API; this differs from a general identity IAM policy. Alarm publishing
 remains limited to the five exact same-account alarm ARNs.
 
+The control key keeps CloudWatch Logs cryptographic operations scoped by the
+two owned Lambda/CodeBuild log-group encryption-context patterns. Context values
+use `StringLike`; `DescribeKey` has no encryption context and is granted separately
+to the regional Logs service with exact `kms:CallerAccount`. IAM Access Analyzer
+rejects combining this metadata action with an encryption-context condition.
+See the [KMS condition-key reference](https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html).
+
 Cleanup control requires a private `cleanup_alert_email` input. It creates an
 encrypted SNS operator topic and five CloudWatch alarms for launcher errors,
 launcher throttling, failed cleanup builds, nonempty delivery DLQ and cleanup

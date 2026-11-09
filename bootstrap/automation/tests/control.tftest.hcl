@@ -83,6 +83,32 @@ run "control_off_by_default" {
     condition     = aws_s3_bucket_public_access_block.control.block_public_policy && aws_s3_bucket_public_access_block.control.restrict_public_buckets && aws_kms_key.control.enable_key_rotation
     error_message = "Control storage must stay private and encrypted with a rotating key."
   }
+  assert {
+    condition = (anytrue([for statement in data.aws_iam_policy_document.control_key.statement :
+      statement.sid == "AutomationLogs" &&
+      toset(statement.actions) == toset(["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*"]) &&
+      anytrue([for condition in statement.condition :
+        condition.test == "StringLike" && condition.variable == "kms:EncryptionContext:aws:logs:arn" &&
+        toset(condition.values) == toset([
+          "arn:aws:logs:us-east-1:058114477594:log-group:/aws/lambda/techx-automation-*",
+          "arn:aws:logs:us-east-1:058114477594:log-group:/aws/codebuild/techx-automation-*"
+        ])
+      ])
+      ]) && alltrue([for statement in data.aws_iam_policy_document.control_key.statement :
+      !contains(statement.actions, "kms:DescribeKey") || alltrue([for condition in statement.condition : !startswith(condition.variable, "kms:EncryptionContext")])
+    ]))
+    error_message = "Log encryption must keep the exact owned log-group patterns; DescribeKey cannot use an encryption-context condition."
+  }
+  assert {
+    condition = anytrue([for statement in data.aws_iam_policy_document.control_key.statement :
+      statement.sid == "AutomationLogsMetadata" && toset(statement.actions) == toset(["kms:DescribeKey"]) &&
+      anytrue([for principal in statement.principals : principal.type == "Service" && toset(principal.identifiers) == toset(["logs.us-east-1.amazonaws.com"])]) &&
+      length(statement.condition) == 1 && anytrue([for condition in statement.condition :
+        condition.test == "StringEquals" && condition.variable == "kms:CallerAccount" && toset(condition.values) == toset(["058114477594"])
+      ])
+    ])
+    error_message = "CloudWatch Logs key metadata access must stay DescribeKey-only, regional-service-only and same-account."
+  }
 }
 
 run "cleanup_control_is_project_scoped" {

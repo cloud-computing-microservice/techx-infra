@@ -116,16 +116,32 @@ data "aws_iam_policy_document" "control_key" {
   }
   statement {
     sid       = "AutomationLogs"
-    actions   = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"]
+    actions   = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*"]
     resources = ["*"]
     principals {
       type        = "Service"
       identifiers = ["logs.us-east-1.amazonaws.com"]
     }
     condition {
-      test     = "ArnLike"
+      test     = "StringLike"
       variable = "kms:EncryptionContext:aws:logs:arn"
       values   = ["arn:aws:logs:us-east-1:058114477594:log-group:/aws/lambda/techx-automation-*", "arn:aws:logs:us-east-1:058114477594:log-group:/aws/codebuild/techx-automation-*"]
+    }
+  }
+  statement {
+    sid       = "AutomationLogsMetadata"
+    actions   = ["kms:DescribeKey"]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["logs.us-east-1.amazonaws.com"]
+    }
+    # DescribeKey has no encryption context. Restrict metadata access to this
+    # account; cryptographic operations above retain their log-group conditions.
+    condition {
+      test     = "StringEquals"
+      variable = "kms:CallerAccount"
+      values   = ["058114477594"]
     }
   }
 }

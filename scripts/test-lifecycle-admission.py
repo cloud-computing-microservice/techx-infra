@@ -56,7 +56,8 @@ class AdmissionTests(unittest.TestCase):
         self.clients["sts"].get_caller_identity = lambda: dict(Account="058114477594",
             Arn="arn:aws:sts::058114477594:assumed-role/techx-automation-lifecycle-dispatcher/techx-lifecycle-100")
         self.clients["s3"].get_bucket_encryption = lambda **kw: deepcopy(self.encryption)
-        self.used = dict(Contents=[], IsTruncated=False)
+        self.unused_execution = json.loads(Path(__file__).parents[1].joinpath("contracts/s3-empty-execution-prefix.json").read_text(encoding="utf-8"))
+        self.used = deepcopy(self.unused_execution)
         self.clients["s3"].list_objects_v2 = lambda **kw: deepcopy(self.used)
         self.clients["kms"] = SimpleNamespace(describe_key=lambda **kw: dict(KeyMetadata=deepcopy(self.key)))
         self.alerts = alert_support.AlertFixture(self.kms)
@@ -128,6 +129,39 @@ class AdmissionTests(unittest.TestCase):
         self.run_data["run_attempt"] = 2
         with self.assertRaises(ValueError): self.start(request)
         self.assertFalse(self.f.events)
+
+    def test_observed_s3_empty_prefix_without_contents_can_admit_after_all_other_checks(self):
+        self.assertNotIn("Contents", self.used)
+        shape = botocore.session.get_session().get_service_model("s3").operation_model("ListObjectsV2").output_shape
+        validate_parameters({key: value for key, value in self.used.items() if key != "ResponseMetadata"}, shape)
+        self.start()
+        self.assertLess(self.f.events.index("schedule"), self.f.events.index("start-build"))
+
+    def test_explicit_empty_contents_still_requires_complete_zero_key_metadata(self):
+        self.used["Contents"] = []
+        self.start()
+        self.assertLess(self.f.events.index("schedule"), self.f.events.index("start-build"))
+
+    def test_incomplete_paginated_or_consumed_s3_response_never_reserves_or_launches(self):
+        empty = self.unused_execution
+        cases = [{"IsTruncated": False, "Contents": []},
+            *[{key: value for key, value in empty.items() if key != missing}
+              for missing in ("ResponseMetadata", "IsTruncated", "Name", "Prefix", "MaxKeys", "KeyCount")],
+            dict(empty, KeyCount=True), dict(empty, KeyCount=1), dict(empty, MaxKeys=True), dict(empty, MaxKeys=2),
+            dict(empty, IsTruncated=True), dict(empty, IsTruncated=None), dict(empty, Name="other-bucket"),
+            dict(empty, Prefix="executions/other-session.json"), dict(empty, Contents=None),
+            dict(empty, Contents=[dict(Key="executions/staging-gh-100.json")]),
+            dict(empty, NextContinuationToken="next"), dict(empty, ContinuationToken="old"),
+            dict(empty, CommonPrefixes=[dict(Prefix="other/")]), dict(empty, Unexpected="field"),
+            dict(empty, ResponseMetadata=None), dict(empty, ResponseMetadata=dict(HTTPStatusCode=500)),
+            dict(empty, EncodingType="unexpected")]
+        for page in cases:
+            self.used = page
+            with self.subTest(page=page), self.assertRaisesRegex(ValueError, "absence is unproven"):
+                self.start()
+            self.assertFalse(self.f.events)
+            self.assertFalse(self.checkouts)
+            self.assertFalse(self.packed)
 
     def test_observed_empty_vpc_origin_response_allows_the_real_opening_path(self):
         self.origins = json.loads(Path(__file__).parents[1].joinpath("contracts/cloudfront-empty-vpc-origins.json").read_text(encoding="utf-8"))["VpcOriginList"]
@@ -230,9 +264,9 @@ class AdmissionTests(unittest.TestCase):
 
     def test_old_execution_or_nonempty_incomplete_inventory_cannot_start(self):
         request = self.flow.preview(self.inputs)
-        self.used = dict(Contents=[dict(Key="executions/staging-gh-100.json")], IsTruncated=False)
+        self.used = dict(self.unused_execution, Contents=[dict(Key="executions/staging-gh-100.json")], KeyCount=1)
         with self.assertRaises(ValueError): self.start(request)
-        self.used = dict(Contents=[], IsTruncated=False)
+        self.used = deepcopy(self.unused_execution)
         self.f.inventory["ebsVolumes"] = ["vol-leftover"]
         with self.assertRaises(ValueError): self.start(request)
         self.f.inventory["ebsVolumes"] = []

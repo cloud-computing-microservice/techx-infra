@@ -683,6 +683,14 @@ output is checksum/extract verified against all three SHAs before reservation.
 The hosted IP is only the initial snapshot; the EC2 planner substitutes its own
 observed stable /32 before generating the separately approved Terraform plan.
 
+A new opening must prove its exact `executions/<session>.json` prefix is unused.
+S3's successful empty response omits `Contents`; this is accepted only with
+HTTP 200, explicit `KeyCount=0`, `IsTruncated=false`, the exact bucket/prefix
+and requested `MaxKeys=1`. Missing metadata, objects or pagination still block
+before checkout/reservation. The sanitized observed response is in
+`contracts/s3-empty-execution-prefix.json`; omission alone never authorizes a
+consumed run or an uncertain listing.
+
 Coordinator persists complete execution/private inputs/current pointer before
 attempting the cleanup schedule. A lost schedule response retains a failed,
 recoverable session and requests cleanup, rather than reopening OFF. No manager

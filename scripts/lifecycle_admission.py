@@ -26,6 +26,26 @@ ENVIRONMENT = "staging-start"
 INPUTS = {"action", "platform_sha", "chart_sha", "duration_hours", "approved_budget_usd", "budget_alert_email"}
 
 
+def empty_execution_prefix_response(value, bucket, prefix):
+    """Prove a complete, successful zero-key first page for this exact request.
+
+    S3 omits Contents for an empty prefix. Only accept that omission alongside
+    explicit zero-count/complete-page metadata; a missing object list alone is
+    never proof that a previously consumed start request is unused.
+    """
+    return (isinstance(value, dict)
+        and set(value) <= {"ResponseMetadata", "IsTruncated", "Name", "Prefix", "MaxKeys", "KeyCount", "EncodingType", "Contents"}
+        and isinstance(value.get("ResponseMetadata"), dict)
+        and type(value["ResponseMetadata"].get("HTTPStatusCode")) is int
+        and value["ResponseMetadata"]["HTTPStatusCode"] == 200
+        and value.get("IsTruncated") is False
+        and value.get("Name") == bucket and value.get("Prefix") == prefix
+        and type(value.get("MaxKeys")) is int and value["MaxKeys"] == 1
+        and type(value.get("KeyCount")) is int and value["KeyCount"] == 0
+        and ("Contents" not in value or value["Contents"] == [])
+        and ("EncodingType" not in value or value["EncodingType"] == "url"))
+
+
 def empty_vpc_origin_response(value):
     """CloudFront's observed empty first page can omit IsTruncated/Marker.
 
@@ -213,8 +233,9 @@ class StartWorkflow:
             raise ValueError("Only the dedicated opening run's dispatcher role may start")
         self.verify_storage()
         cleanup_alerts = verify_cleanup_alerts(self.clients, self.kms_key)
-        used = self.clients["s3"].list_objects_v2(Bucket=self.bucket, Prefix=f"executions/{record['sessionId']}.json", MaxKeys=1, ExpectedBucketOwner=ACCOUNT)
-        if used.get("IsTruncated") is not False or used.get("Contents") != []:
+        execution_prefix = f"executions/{record['sessionId']}.json"
+        used = self.clients["s3"].list_objects_v2(Bucket=self.bucket, Prefix=execution_prefix, MaxKeys=1, ExpectedBucketOwner=ACCOUNT)
+        if not empty_execution_prefix_response(used, self.bucket, execution_prefix):
             raise ValueError("This start request is consumed or its absence is unproven; never reopen a run")
         for name, sha in sources.items(): self.checkout(self.workspace / name, sha)
         estimate = self.estimate(record)

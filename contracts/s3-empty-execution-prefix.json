@@ -1,0 +1,9 @@
+{
+  "ResponseMetadata": { "HTTPStatusCode": 200 },
+  "IsTruncated": false,
+  "Name": "control-bucket",
+  "Prefix": "executions/staging-gh-100.json",
+  "MaxKeys": 1,
+  "EncodingType": "url",
+  "KeyCount": 0
+}

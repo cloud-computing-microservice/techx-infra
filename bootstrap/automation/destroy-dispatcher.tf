@@ -7,7 +7,7 @@ resource "aws_iam_role" "destroy_dispatcher" {
     Effect = "Allow", Action = "sts:AssumeRoleWithWebIdentity", Principal = { Federated = local.oidc_arn }
     Condition = { StringEquals = {
       "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-      "token.actions.githubusercontent.com:sub" = "repo:cloud-computing-microservice/techx-infra:environment:staging-destroy"
+      "token.actions.githubusercontent.com:sub" = "${local.github_oidc_subject_prefixes.infra}:environment:staging-destroy"
     } }
   }] })
   max_session_duration = 3600

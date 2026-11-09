@@ -163,7 +163,7 @@ run "cleanup_control_is_project_scoped" {
   }
   assert {
     condition = (length(aws_iam_role.destroy_dispatcher) == 1 &&
-      jsondecode(aws_iam_role.destroy_dispatcher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-infra:environment:staging-destroy" &&
+      jsondecode(aws_iam_role.destroy_dispatcher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice@328679702/techx-infra@1322975868:environment:staging-destroy" &&
       alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.destroy_dispatcher[0].policy).Statement : [for action in statement.Action :
         contains(["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket", "kms:Decrypt", "lambda:InvokeFunction", "codebuild:BatchGetBuilds"], action)
       ]])) &&
@@ -193,7 +193,7 @@ run "cleanup_control_is_project_scoped" {
       for name, role in aws_iam_role.plan_review : [
         for statement in jsondecode(role.assume_role_policy).Statement :
         statement.Condition.StringEquals["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com" &&
-        statement.Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-infra:environment:${name == "approver" ? "staging-apply" : "staging-plan-read"}"
+        statement.Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice@328679702/techx-infra@1322975868:environment:${name == "approver" ? "staging-apply" : "staging-plan-read"}"
       ]
     ]))
     error_message = "OIDC roles must trust only the exact protected infra environments."
@@ -372,7 +372,7 @@ run "lifecycle_is_scoped_and_pinned" {
   }
   assert {
     condition = (
-      jsondecode(aws_iam_role.public_acceptance[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-infra:environment:staging-acceptance" &&
+      jsondecode(aws_iam_role.public_acceptance[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice@328679702/techx-infra@1322975868:environment:staging-acceptance" &&
       alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.public_acceptance[0].policy).Statement : [for action in statement.Action :
         contains(["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "kms:Decrypt", "kms:GenerateDataKey", "scheduler:GetSchedule"], action)
       ]])) &&
@@ -389,7 +389,7 @@ run "lifecycle_is_scoped_and_pinned" {
   }
   assert {
     condition = toset(jsondecode(aws_iam_role.lifecycle_dispatcher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]) == toset([
-      "repo:cloud-computing-microservice/techx-infra:environment:staging-lifecycle", "repo:cloud-computing-microservice/techx-infra:environment:staging-start"
+      "repo:cloud-computing-microservice@328679702/techx-infra@1322975868:environment:staging-lifecycle", "repo:cloud-computing-microservice@328679702/techx-infra@1322975868:environment:staging-start"
     ])
     error_message = "The opener and continuation must use the two protected environment subjects only."
   }
@@ -479,7 +479,7 @@ run "lifecycle_is_scoped_and_pinned" {
   }
   assert {
     condition = (length(aws_iam_role.bootstrap_publisher) == 1 &&
-      jsondecode(aws_iam_role.bootstrap_publisher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-platform:environment:staging-bootstrap" &&
+      jsondecode(aws_iam_role.bootstrap_publisher[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice@328679702/techx-platform@1322975781:environment:staging-bootstrap" &&
       alltrue([for statement in jsondecode(aws_iam_role_policy.bootstrap_publisher_control[0].policy).Statement :
         toset(statement.Resource) == toset(["arn:aws:s3:::techx-test-control/releases/staging/*/bootstrap.json", "arn:aws:s3:::techx-test-control/proposals/staging/*/bootstrap.json"])
       if contains(statement.Action, "s3:PutObject")])
@@ -488,7 +488,7 @@ run "lifecycle_is_scoped_and_pinned" {
   }
   assert {
     condition = (toset(jsondecode(aws_iam_role.chart_selector[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]) == toset([
-      "repo:cloud-computing-microservice/techx-infra:environment:staging-chart-select", "repo:cloud-computing-microservice/techx-infra:environment:staging-chart-reuse"
+      "repo:cloud-computing-microservice@328679702/techx-infra@1322975868:environment:staging-chart-select", "repo:cloud-computing-microservice@328679702/techx-infra@1322975868:environment:staging-chart-reuse"
       ]) &&
       alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.chart_selector[0].policy).Statement : [for action in statement.Action :
         !contains(["codebuild:StartBuild", "iam:PassRole", "ec2:RunInstances", "ecr:PutImage", "secretsmanager:GetSecretValue"], action)
@@ -497,7 +497,7 @@ run "lifecycle_is_scoped_and_pinned" {
     error_message = "Chart selector must have a protected subject and no deploy/publish/secret credentials authority."
   }
   assert {
-    condition = (jsondecode(aws_iam_role.chart_reader[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-infra:environment:staging-chart-read" &&
+    condition = (jsondecode(aws_iam_role.chart_reader[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice@328679702/techx-infra@1322975868:environment:staging-chart-read" &&
       alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.chart_reader[0].policy).Statement : [for action in statement.Action :
         contains(["s3:GetObject", "s3:GetObjectVersion", "scheduler:GetSchedule", "kms:Decrypt"], action)
       ]]))
@@ -658,7 +658,7 @@ run "lifecycle_is_scoped_and_pinned" {
         contains(condition.values, "arn:aws:iam::058114477594:role/techx-automation-promotion-approver")
       ])
       ]) == 1 && length(aws_iam_role.promotion_approver) == 1 &&
-      jsondecode(aws_iam_role.promotion_approver[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice/techx-infra:environment:staging-chart-promote" &&
+      jsondecode(aws_iam_role.promotion_approver[0].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:cloud-computing-microservice@328679702/techx-infra@1322975868:environment:staging-chart-promote" &&
       alltrue(flatten([for statement in jsondecode(aws_iam_role_policy.promotion_approver[0].policy).Statement : [for action in statement.Action :
         contains(["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "scheduler:GetSchedule", "kms:Decrypt", "kms:GenerateDataKey"], action)
       ]])) &&

@@ -5,7 +5,7 @@ resource "aws_iam_role" "public_acceptance" {
     Effect = "Allow", Action = "sts:AssumeRoleWithWebIdentity", Principal = { Federated = local.oidc_arn },
     Condition = { StringEquals = {
       "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com",
-      "token.actions.githubusercontent.com:sub" = "repo:cloud-computing-microservice/techx-infra:environment:staging-acceptance"
+      "token.actions.githubusercontent.com:sub" = "${local.github_oidc_subject_prefixes.infra}:environment:staging-acceptance"
     } }
   }] })
   max_session_duration = 3600

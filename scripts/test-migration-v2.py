@@ -166,6 +166,10 @@ class MigrationContracts(unittest.TestCase):
             bind_authorized_window(self.control, self.grant_body, self.grant_ref, purpose="staging")
         with self.assertRaisesRegex(ValueError, "actual execution scope"):
             bind_authorized_window(self.staging, self.grant_body, self.grant_ref, purpose="legacy-migration")
+        mislabeled = {k:v for k,v in self.control.items() if k not in ("purpose", "scope")}
+        mislabeled["environment"] = "staging"
+        with self.assertRaises(ValueError):
+            bind_authorized_window(mislabeled, self.grant_body, self.grant_ref, purpose="staging")
         for changes in (dict(account="111111111111"), dict(region="us-west-2"), dict(schemaVersion=True), dict(executorBackend="codebuild")):
             with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "scope/backend"):
                 bind_authorized_window(dict(self.staging, **changes), self.grant_body, self.grant_ref, purpose="staging")

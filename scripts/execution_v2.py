@@ -17,6 +17,9 @@ BUCKET = f"techx-automation-{ACCOUNT}-{REGION}"
 PREFIX = "automation/v2/staging/"
 SOURCES = {"techx-infra", "techx-platform", "techx-chart"}
 STATUSES = {"PLANNING", "PROVISIONING", "READY", "TESTING", "FAILED_NEEDS_CLEANUP", "DESTROYING", "DESTROYED"}
+CONTROL_EXECUTION_FIELDS = {"schemaVersion", "executorBackend", "purpose", "scope", "migrationId", "account", "region", "windowId",
+                            "authorizationReference", "legacyReferences", "legacySnapshotSha256", "sourceRevisions", "approvedBudgetUsd",
+                            "startedAt", "cleanupStartAt", "deadline", "configurationReference", "bundleReference"}
 
 
 def fields(value, required):
@@ -160,8 +163,12 @@ def bind_authorized_window(value, body, ref, *, purpose):
             or value.get("executorBackend") != "ec2-ssm"):
         raise ValueError("Execution scope/backend differs from the approved window")
     if (purpose == "staging" and (value.get("environment") != "staging" or value.get("purpose") is not None or value.get("scope") is not None)
-            or purpose == "legacy-migration" and (value.get("purpose") != "legacy-migration" or value.get("scope") != "control-only")):
+            or purpose == "legacy-migration" and (value.get("purpose") != "legacy-migration" or value.get("scope") != "control-only" or value.get("environment") is not None)):
         raise ValueError("Caller purpose does not match the actual execution scope")
+    if purpose == "staging":
+        validate_execution(value)
+    elif purpose == "legacy-migration":
+        fields(value, CONTROL_EXECUTION_FIELDS)
     window_reference(ref, value["windowId"])
     if value["authorizationReference"] != ref:
         raise ValueError("Execution changed its window authorization version")

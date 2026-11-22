@@ -10,7 +10,7 @@ import json
 import re
 from urllib.parse import quote
 
-from execution_v2 import (ACCOUNT, REGION, SOURCES, bind_authorized_window, cost_window, decode_object,
+from execution_v2 import (ACCOUNT, REGION, SOURCES, CONTROL_EXECUTION_FIELDS, bind_authorized_window, cost_window, decode_object,
                           fields, integer, read_legacy, reference, text, timestamp, window_reference)
 from recovery_v2 import checksum, service_time
 
@@ -117,9 +117,7 @@ def read_control_execution(body, ref, snapshot, *, authorization_body, authoriza
     key = ref.get("key") if isinstance(ref, dict) else None
     text(key, r"migration/control/migration-v1-[a-z0-9-]{1,60}/execution\.json")
     value = decode_object(body, ref, key=key)
-    fields(value, {"schemaVersion", "executorBackend", "purpose", "scope", "migrationId", "account", "region", "windowId",
-                   "authorizationReference", "legacyReferences", "legacySnapshotSha256", "sourceRevisions", "approvedBudgetUsd",
-                   "startedAt", "cleanupStartAt", "deadline", "configurationReference", "bundleReference"})
+    fields(value, CONTROL_EXECUTION_FIELDS)
     control_reference(ref, value["migrationId"])
     if (type(value["schemaVersion"]) is not int or value["schemaVersion"] != 2 or value["executorBackend"] != "ec2-ssm"
             or value["purpose"] != "legacy-migration" or value["scope"] != "control-only"

@@ -12,6 +12,8 @@ python (Join-Path $PSScriptRoot 'test-legacy-reconciliation.py')
 if ($LASTEXITCODE -ne 0) { throw 'Legacy reconciliation collector verification failed.' }
 python (Join-Path $PSScriptRoot 'test-legacy-authority.py')
 if ($LASTEXITCODE -ne 0) { throw 'Legacy authority observation verification failed.' }
+python (Join-Path $PSScriptRoot 'test-legacy-actors.py')
+if ($LASTEXITCODE -ne 0) { throw 'Legacy actor observation verification failed.' }
 
 foreach ($path in @(
     '.gitignore', 'LICENSE', 'README.md',

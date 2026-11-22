@@ -23,14 +23,16 @@ from recovery_v2 import service_time
 ENDPOINTS = {"sts": f"https://sts.{REGION}.amazonaws.com", "s3": f"https://s3.{REGION}.amazonaws.com",
              "cloudtrail": f"https://cloudtrail.{REGION}.amazonaws.com", "codebuild": f"https://codebuild.{REGION}.amazonaws.com",
              "iam": "https://iam.amazonaws.com", "lambda": f"https://lambda.{REGION}.amazonaws.com",
-             "events": f"https://events.{REGION}.amazonaws.com", "scheduler": f"https://scheduler.{REGION}.amazonaws.com"}
+             "events": f"https://events.{REGION}.amazonaws.com", "scheduler": f"https://scheduler.{REGION}.amazonaws.com",
+             "ec2": f"https://ec2.{REGION}.amazonaws.com", "ssm": f"https://ssm.{REGION}.amazonaws.com"}
 READS = {"sts": {"get_caller_identity"}, "s3": {"get_object", "head_object", "list_object_versions"},
          "cloudtrail": {"lookup_events"}, "codebuild": {"list_builds_for_project", "batch_get_builds"},
          "iam": {"list_roles", "get_role", "list_role_policies", "get_role_policy", "list_attached_role_policies",
-                 "get_policy", "get_policy_version"},
+                 "get_policy", "get_policy_version", "list_instance_profiles_for_role"},
          "lambda": {"list_functions", "get_function_configuration"},
          "events": {"list_rules", "describe_rule", "list_targets_by_rule"},
-         "scheduler": {"list_schedule_groups", "list_schedules", "get_schedule"}}
+         "scheduler": {"list_schedule_groups", "list_schedules", "get_schedule"},
+         "ec2": {"describe_instances"}, "ssm": {"describe_instance_information", "list_commands", "list_command_invocations"}}
 PROJECTS = ("techx-automation-lifecycle", "techx-automation-cleanup")
 TERMINAL = {"SUCCEEDED", "FAILED", "FAULT", "STOPPED", "TIMED_OUT"}
 _COLLECTION_SEAL = object()

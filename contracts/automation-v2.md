@@ -272,6 +272,42 @@ Neither branch creates a v1 completion marker or changes `CALLING` to `PREPARED`
 fact, actual human review, all terminal actors, fresh zero inventory/state and
 effective policy retirement before publishing/consuming it as admission evidence.
 
+## R02 authenticated collection (in progress)
+
+`scripts/legacy_reconciliation.py collect` owns read-only SDK calls against fixed
+AWS endpoints, checks STS account, expected bucket owner, exact object versions
+and KMS key, and records private raw responses, request IDs and original object
+bytes outside Git. It reads all returned session versions, both project build
+histories, StartBuild CloudTrail pages and legacy role/function/rule candidates.
+It rechecks current session/pointer/input versions before and after collection.
+Pagination errors, access errors, missing metadata and source changes fail the
+collection; they never become empty success evidence.
+
+Example (paths must be absolute and private output must be outside every Git
+checkout):
+
+```powershell
+python scripts/legacy_reconciliation.py collect --profile default `
+  --session-id staging-gh-42628903617 `
+  --expected-execution-reference C:\private\execution-reference.json `
+  --private-output C:\private\techx-evidence
+```
+
+The reference file contains the exact original S3 bucket/key/versionId/sha256,
+not credentials. Exit 0 means only that collection completed. Every result has
+`migrationStatus=NOT_VERIFIED` and `attestationEligible=false`. A collection is
+not a closeout and cannot admit staging. Missing/redacted dispatch bindings stay
+unresolved; empty build listings do not establish rejected creation. Version
+pagination cannot establish that expired/deleted historical versions never
+existed. Raw evidence inherits the destination's OS permissions; use the local
+private secrets directory with restricted ACLs on Windows.
+
+Remaining R02 work includes complete actor/workload observations, independent
+effective authority retirement verification, actual protected human review,
+healthy recovery ownership and terminal-worker verification, and trusted
+closeout publication/verification. This collector neither disables the old
+watchdog nor mutates v1 records, IAM, DNS, workload or compute.
+
 ## Verification
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
@@ -284,3 +320,6 @@ cleanup, terminal proof and finalizer misuse; it also runs in infrastructure CI.
 control-only scope, redacted service evidence and explicit cutover branches.
 See [the R01 coverage map](automation-v2-coverage.md) for contract/runtime scope.
 Fixtures are synthetic offline data; they are not cloud execution evidence.
+`python scripts/test-legacy-reconciliation.py` exercises the injected SDK call
+chain, pagination, private provenance, races, service failures and non-attesting
+assessment boundary. It also runs in infrastructure CI.

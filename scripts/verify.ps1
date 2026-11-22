@@ -1,5 +1,8 @@
 $ErrorActionPreference = 'Stop'
 
+python (Join-Path $PSScriptRoot 'test-execution-v2.py')
+if ($LASTEXITCODE -ne 0) { throw 'V2 immutable execution, identity, SSM observation and legacy isolation contract tests failed.' }
+
 foreach ($path in @(
     '.gitignore', 'LICENSE', 'README.md',
     'scripts/apply-reviewed-plan.ps1',

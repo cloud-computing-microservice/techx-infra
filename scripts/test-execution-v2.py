@@ -16,6 +16,8 @@ class V2Contracts(unittest.TestCase):
         self.now = datetime(2026, 11, 22, 1, tzinfo=timezone.utc)
         self.execution = dict(schemaVersion=2, executorBackend="ec2-ssm", account=ACCOUNT, region="us-east-1",
                               environment="staging", sessionId="staging-v2-contract-test",
+                              windowId="window-gh-123456", authorizationReference=dict(bucket=BUCKET,
+                                  key="automation/v2/windows/window-gh-123456.json", versionId="window-version", sha256="f" * 64),
                               sourceRevisions={"techx-infra": "a" * 40, "techx-chart": "b" * 40, "techx-platform": "c" * 40},
                               approvedBudgetUsd="60.00", startedAt="2026-11-22T01:00:00Z",
                               cleanupStartAt="2026-11-22T09:00:00Z", deadline="2026-11-22T11:00:00Z", initialEpoch=1)

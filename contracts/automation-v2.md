@@ -70,10 +70,47 @@ new command is sent. Worker observations include `launchedAt` and `publicCidr`;
 review/apply admission must compare the registered boot and network identity to
 reject stop/start reuse or an IP change.
 
-Additional contracts are still needed for launch phase recovery, plan/review,
-durable stage results, provisional cleanup, finalizer proof and legacy migration.
+Additional contracts are still needed for plan/review, provisional cleanup,
+finalizer proof and legacy migration.
 Do not use a format-valid identity, service `Success` alone, or process exit code
 as authority to advance the lifecycle.
+
+## Launch recovery and durable results
+
+The launch intent also pins `configurationReference`, an exact private version
+at `automation/v2/staging/config/<purpose>.json`. The deterministic launch token
+includes that reference. Configuration contents and resource permission policy
+must still be checked by the launcher before it can create a worker.
+
+`scripts/recovery_v2.py` provides pure checkpoint transitions:
+
+- `prepare_launch` validates the immutable intent and returns `PREPARED`.
+- `begin_launch` accepts only `PREPARED`, the current epoch and an open launch
+  window. Deployment/probe launches stop at `cleanupStartAt`; bounded cleanup
+  recovery may continue after the deadline. Persist `CALLING` with CAS **before**
+  calling EC2. There is no reset/retry operation for uncertain `CALLING`.
+- `observe_launch` requires the exact worker's trusted EC2/STS observations to
+  resolve `CALLING`. Repeat observation is idempotent; another instance, boot or
+  public IP cannot replace the recorded worker identity.
+
+The checkpoint contains exactly `schemaVersion`, `launchToken`, `phase`,
+`callStartedAt`, `instanceId`, `observedAt`, `workerIdentitySha256`.
+It is not a launcher: API calls, CAS writes, service reconciliation, generation
+retirement and bounded replacement proof belong to R03/R04.
+
+`validate_successful_result` checks an exact-version private JSON receipt at
+`automation/v2/staging/results/<sessionId>/<taskId>/<commandId>.json` together
+with the already bound command and a positive `GetCommandInvocation` response.
+Both AWS statuses must be terminal `Success`, response code must be integer zero,
+the exact `runTask` document step must match, and service/result timestamps must
+be ordered. Receipt timestamps preserve up to six fractional second digits.
+
+Receipt fields are exactly `schemaVersion`, `handle`, `workerIdentitySha256`,
+`outcome`, `startedAt`, `finishedAt`, `evidenceReference`. The evidence reference
+must point to the task's private exact version at
+`automation/v2/staging/evidence/<sessionId>/<taskId>.json`; its contents require
+the operation-specific validator. Receipt parsing cannot replace fresh lease
+fencing, approval, business acceptance or cleanup completion checks.
 
 ## Legacy isolation
 
@@ -90,4 +127,6 @@ separate v2 mutation store and protected cutover are not implemented here.
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
 suite runs in `scripts/verify.ps1` and the existing infrastructure CI workflow.
+Run `python scripts/test-recovery-v2.py` for checkpoint and result regressions;
+it also runs in the existing verification workflow.
 Fixtures are synthetic offline data; they are not cloud execution evidence.

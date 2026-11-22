@@ -38,7 +38,9 @@ class V2Contracts(unittest.TestCase):
                            attempt=1, clientToken="d" * 64, createdAt="2026-11-22T01:00:00Z", launchTemplateId="lt-" + "1" * 17,
                            launchTemplateVersion="3", imageId="ami-" + "2" * 17,
                            instanceProfileArn=f"arn:aws:iam::{ACCOUNT}:instance-profile/techx-automation-v2-deployment-executor",
-                           subnetId="subnet-" + "3" * 17, securityGroupId="sg-" + "4" * 17)
+                           subnetId="subnet-" + "3" * 17, securityGroupId="sg-" + "4" * 17,
+                           configurationReference=dict(bucket=BUCKET, key="automation/v2/staging/config/deployment.json",
+                                                       versionId="exact-config-version", sha256="e" * 64))
         self.intent["clientToken"] = launch_token(self.intent)
         self.instance = dict(InstanceId="i-" + "5" * 17, ClientToken=self.intent["clientToken"], State=dict(Name="running"),
                              LaunchTemplate=dict(LaunchTemplateId=self.intent["launchTemplateId"], Version="3"),

@@ -109,17 +109,26 @@ def _reject_constant(value):
     raise ValueError(f"Nonfinite JSON constant: {value}")
 
 
-def decode_execution(body, ref, session):
-    """Validate the exact version's raw bytes, not a reserialized JSON hash."""
-    execution_reference(ref, session)
-    if not isinstance(body, bytes) or not 0 < len(body) <= 32768:
-        raise ValueError("Execution must be bounded raw object bytes")
+def decode_object(body, ref, *, key, max_bytes=32768):
+    """Validate a private exact version's raw bytes before parsing JSON."""
+    reference(ref, key=key)
+    if not isinstance(body, bytes) or not 0 < len(body) <= max_bytes:
+        raise ValueError("Private object must be bounded raw bytes")
     if hashlib.sha256(body).hexdigest() != ref["sha256"]:
-        raise ValueError("Execution checksum mismatch")
+        raise ValueError("Private object checksum mismatch")
     try:
         record = json.loads(body, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
     except (UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError("Invalid execution JSON") from error
+        raise ValueError("Invalid private object JSON") from error
+    if not isinstance(record, dict):
+        raise ValueError("Private object must be a JSON object")
+    return record
+
+
+def decode_execution(body, ref, session):
+    """Validate the exact version's raw bytes, not a reserialized JSON hash."""
+    execution_reference(ref, session)
+    record = decode_object(body, ref, key=ref["key"])
     validate_execution(record)
     if record["sessionId"] != session:
         raise ValueError("Execution belongs to another session")

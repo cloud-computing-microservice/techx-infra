@@ -308,6 +308,27 @@ healthy recovery ownership and terminal-worker verification, and trusted
 closeout publication/verification. This collector neither disables the old
 watchdog nor mutates v1 records, IAM, DNS, workload or compute.
 
+### R02 authority observation collector
+
+`python scripts/legacy_authority.py --profile default --private-output C:\private\techx-evidence`
+uses the same fixed-endpoint, account-bound SDK journal. It reads the complete
+legacy role roster, trust documents, inline and attached policies at observed
+default versions, permissions boundaries, Lambda configuration, EventBridge
+rule targets, and schedules in the legacy **techx-staging** group (matching
+`bootstrap/automation/cleanup.tf`). Migration manifests use that same group.
+New v2 names are excluded, unexpected legacy scopes fail collection. Managed
+policy pointers and inline content are read again; changed roles/policies or
+rosters fail collection. An absent schedule group is observed through a
+successful paginated ListScheduleGroups call; API errors are never emptiness.
+
+The collector reports only narrowly recognized unconditional deny-all structure.
+Conditional or partial denies do not count. It does not infer effective IAM
+retirement from a small action simulation, nor drain Lambda/SSM/EC2 actors from
+policy shape or disabled triggers. Raw policy/configuration data stays private.
+Output always says NOT_VERIFIED, actorDrain=NOT_OBSERVED and is ineligible for
+attestation. Independent live verification, reviewed mutation, complete actor
+inventory/drain and recovery-owner/terminal proof remain required by R02.
+
 ## Verification
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
@@ -323,3 +344,5 @@ Fixtures are synthetic offline data; they are not cloud execution evidence.
 `python scripts/test-legacy-reconciliation.py` exercises the injected SDK call
 chain, pagination, private provenance, races, service failures and non-attesting
 assessment boundary. It also runs in infrastructure CI.
+`python scripts/test-legacy-authority.py` checks SDK policy/trigger collection,
+scope, pagination, policy and role races, and conservative deny observations.

@@ -10,6 +10,8 @@ python (Join-Path $PSScriptRoot 'test-migration-v2.py')
 if ($LASTEXITCODE -ne 0) { throw 'V2 shared cloud window, control-only migration and original legacy dispatch contract tests failed.' }
 python (Join-Path $PSScriptRoot 'test-legacy-reconciliation.py')
 if ($LASTEXITCODE -ne 0) { throw 'Legacy reconciliation collector verification failed.' }
+python (Join-Path $PSScriptRoot 'test-legacy-authority.py')
+if ($LASTEXITCODE -ne 0) { throw 'Legacy authority observation verification failed.' }
 
 foreach ($path in @(
     '.gitignore', 'LICENSE', 'README.md',

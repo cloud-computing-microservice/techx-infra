@@ -201,7 +201,7 @@ def read_manifest(body, ref, control, control_ref, snapshot):
     for arn in triggers:
         text(arn, rf"arn:aws:(?:lambda:{REGION}:{ACCOUNT}:function:techx-automation-(?!v2(?:-|$))[a-z0-9-]+|"
                   rf"events:{REGION}:{ACCOUNT}:rule/techx-automation-(?!v2(?:-|$))[a-z0-9-]+|"
-                  rf"scheduler:{REGION}:{ACCOUNT}:schedule/techx-automation/(?!v2-|staging-v2-|cleanup-staging-v2-)[a-zA-Z0-9-]+)")
+                  rf"scheduler:{REGION}:{ACCOUNT}:schedule/techx-staging/(?!v2-|staging-v2-|cleanup-staging-v2-)[a-zA-Z0-9-]+)")
     reference(value["reviewReference"], key=f"migration/control/{control['migrationId']}/review.json")
     return value
 

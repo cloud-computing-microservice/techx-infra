@@ -205,6 +205,17 @@ class MigrationContracts(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError): read_manifest(body, ref, self.bound_control, self.control_ref, self.snapshot)
         with self.assertRaises(ValueError): read_manifest(self.manifest_body, self.manifest_ref, self.control, self.control_ref, self.snapshot)
 
+    def test_manifest_scheduler_scope_matches_legacy_terraform_group(self):
+        source = (Path(__file__).resolve().parents[1] / "bootstrap/automation/cleanup.tf").read_text()
+        self.assertIn('name  = "techx-staging"', source)
+        arn = f"arn:aws:scheduler:us-east-1:{ACCOUNT}:schedule/techx-staging/cleanup-staging-gh-1001"
+        value = dict(self.manifest, disabledTriggers=[arn])
+        body, ref = pack(self.manifest_ref["key"], value)
+        self.assertEqual(read_manifest(body, ref, self.bound_control, self.control_ref, self.snapshot), value)
+        for altered in (arn.replace("/techx-staging/", "/techx-automation/"), arn.replace("/cleanup-staging-gh-1001", "/cleanup-staging-v2-new")):
+            body, ref = pack(self.manifest_ref["key"], dict(value, disabledTriggers=[altered]))
+            with self.assertRaises(ValueError): read_manifest(body, ref, self.bound_control, self.control_ref, self.snapshot)
+
     def test_closeout_preserves_unknown_as_unknown_and_does_not_complete_v1(self):
         before = deepcopy(self.objects)
         value = self.close()

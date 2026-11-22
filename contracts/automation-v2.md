@@ -360,6 +360,59 @@ roster, independently verified retirement and migration recovery ownership still
 need runtime integration. This CLI is read-only and cannot stop actors or publish
 closeout. It adds no operator upload or force-complete route.
 
+## R03 session CAS runtime (in progress)
+
+`scripts/session_runtime_v2.py` is an SDK-backed internal transport for an
+already-admitted session, not a bootstrap CLI or an admission/readiness service.
+It fetches exact canonical execution and shared-window versions, checks KMS,
+expected account/bucket owner and actual STS role identity, then reads
+`automation/v2/staging/sessions/<sessionId>.json`. The client must use the fixed
+regional endpoints and `Config(retries={"total_max_attempts":1})`; SDK mutation
+retries are rejected before any operation.
+
+The runtime record adds `runtimeRevision` and `lastMutationId` to the R01
+envelope. `SessionObservation.envelope()` projects that envelope for existing
+pure validators. Each read fetches tags for the **exact same VersionId** and
+requires all eight body/tag bindings to match: schema, backend, session,
+execution hash, status, fence epoch, revision and mutation ID. These are actual
+service reads; decoded operator JSON cannot create the observation object.
+
+Preparation restricts transitions by the actual dedicated role and live window;
+cleanup may fence the original session after its deadline, while deployment
+transitions stop at cleanupStartAt. Cleanup increments the fence epoch. A new
+runtime revision prevents same-body ABA within supported state transitions.
+
+Before the conditional session write, commit creates an immutable intent at
+`automation/v2/staging/session-mutations/<sessionId>/<mutationId>.json` using
+If-None-Match. The semantic ID is independent of the process/principal; a nonce
+identifies the winning attempt. Only a positive new-claim response permits one
+If-Match session write, with another live identity/window/session check first.
+An existing or uncertain claim is observation-only. A process restart cannot
+re-prepare an unknown write and regain permission to send it.
+
+Acknowledgement requires positive write metadata/checksum/encryption and exact
+read-back body/version/ETag/tags. Lost responses stay uncertain; superseding
+fences prevent next-stage acknowledgement. `reconcile(prepared)` and
+`recover(mutationId)` are read-only, including outside the deploy window. Recovery
+reads the canonical protected claim and its original session version; absence of
+the intended head never means rejected creation or permission to replay.
+
+There is no create, arbitrary-key write, expired-lease takeover or completion
+API. Bare DESTROYED data is rejected by this reader. R04 must provide the separate
+protected finalizer receipt/terminal reader; R06 must verify it before re-admission.
+
+**Not yet enforced in AWS:** R05 must bind allowed status tags to role policies,
+require conditional headers, protect create-once claims and immutable/terminal
+prefixes, and constrain copy/retag/delete/version-mutation routes. S3 tags are
+mutable and are not a signature; existing-object tag conditions cannot prevent
+PutObject overwrites. See [AWS tag policy documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/tagging-and-policies.html)
+and [tagging permissions](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectTagging.html).
+The SDK role check is necessary but does not implement the remaining R03
+OIDC/STS/GitHub run/job bridge or complete worker identity/launch binding. A CAS
+acknowledgement proves storage state only, never reviewed business acceptance.
+Typed SSM orchestration, lease ownership and R04/R06 readiness/finalization guards
+still need integration before any v2 cloud admission.
+
 ## Verification
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
@@ -380,3 +433,8 @@ scope, pagination, policy and role races, and conservative deny observations.
 `python scripts/test-legacy-actors.py` exercises actual SDK orchestration with
 injected clients, broad actor discovery, EC2/SSM unknown/terminal distinctions,
 scope, profile races and original history bounds. It runs in infrastructure CI.
+`python scripts/test-session-runtime-v2.py` exercises SDK CAS/tag/version checks,
+role and clock fencing, durable single-consumption across restarts, conflicts,
+lost-response recovery and superseding cleanup; actual SDK service models also
+validate the emitted request arguments. It runs in infrastructure CI. These
+injected-client tests are not an AWS apply or IAM-policy/live acceptance proof.

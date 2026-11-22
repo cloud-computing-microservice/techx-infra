@@ -69,18 +69,13 @@ def execution_reference(value, session):
     return reference(value, key=f"{PREFIX}executions/{session}.json")
 
 
-def validate_execution(value):
-    fields(value, {"schemaVersion", "executorBackend", "account", "region", "environment", "sessionId",
-                   "sourceRevisions", "approvedBudgetUsd", "startedAt", "cleanupStartAt", "deadline", "initialEpoch"})
-    if (type(value["schemaVersion"]) is not int or value["schemaVersion"] != 2
-            or value["executorBackend"] != "ec2-ssm" or value["account"] != ACCOUNT
-            or value["region"] != REGION or value["environment"] != "staging"):
-        raise ValueError("Invalid v2 backend or staging scope")
-    session_id(value["sessionId"])
-    fields(value["sourceRevisions"], SOURCES)
-    for sha in value["sourceRevisions"].values():
-        text(sha, r"[a-f0-9]{40}")
-    # Decimal wire text forbids booleans, NaN, infinity and float rounding.
+def window_reference(value, window_id):
+    text(window_id, r"window-gh-[1-9][0-9]{0,19}")
+    return reference(value, key=f"automation/v2/windows/{window_id}.json")
+
+
+def cost_window(value):
+    """Shared format/limit check; not an authorization or cost-accounting gate."""
     text(value["approvedBudgetUsd"], r"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?")
     try:
         budget = Decimal(value["approvedBudgetUsd"])
@@ -91,6 +86,23 @@ def validate_execution(value):
     start, cleanup, end = (timestamp(value[k]) for k in ("startedAt", "cleanupStartAt", "deadline"))
     if not start < cleanup < end or end - start > timedelta(hours=10) or end - cleanup < timedelta(hours=2):
         raise ValueError("Window exceeds ten hours or lacks the two-hour cleanup reserve")
+    return start, cleanup, end
+
+
+def validate_execution(value):
+    fields(value, {"schemaVersion", "executorBackend", "account", "region", "environment", "sessionId",
+                   "sourceRevisions", "approvedBudgetUsd", "startedAt", "cleanupStartAt", "deadline", "initialEpoch",
+                   "windowId", "authorizationReference"})
+    if (type(value["schemaVersion"]) is not int or value["schemaVersion"] != 2
+            or value["executorBackend"] != "ec2-ssm" or value["account"] != ACCOUNT
+            or value["region"] != REGION or value["environment"] != "staging"):
+        raise ValueError("Invalid v2 backend or staging scope")
+    session_id(value["sessionId"])
+    fields(value["sourceRevisions"], SOURCES)
+    for sha in value["sourceRevisions"].values():
+        text(sha, r"[a-f0-9]{40}")
+    window_reference(value["authorizationReference"], value["windowId"])
+    cost_window(value)
     if integer(value["initialEpoch"]) != 1:
         raise ValueError("New execution must start at epoch one")
     return deepcopy(value)
@@ -133,6 +145,38 @@ def decode_execution(body, ref, session):
     if record["sessionId"] != session:
         raise ValueError("Execution belongs to another session")
     return record
+
+
+def bind_authorized_window(value, body, ref, *, purpose):
+    """Bind a sub-execution to one protected, human-reviewed cloud window.
+
+    The trusted admission bridge must authenticate the real review, fetch the
+    exact object and account for aggregate migration/build/staging/recovery cost.
+    This parser cannot grant permission or allocate a second budget per phase.
+    Cleanup may read an expired window; runtime creation gates check live time.
+    """
+    window_reference(ref, value["windowId"])
+    if value["authorizationReference"] != ref:
+        raise ValueError("Execution changed its window authorization version")
+    grant = decode_object(body, ref, key=ref["key"])
+    fields(grant, {"schemaVersion", "windowId", "account", "region", "sourceRevisions", "approvedBudgetUsd",
+                   "startedAt", "cleanupStartAt", "deadline", "allowedPurposes", "reviewReference"})
+    if (type(grant["schemaVersion"]) is not int or grant["schemaVersion"] != 2 or grant["windowId"] != value["windowId"]
+            or grant["account"] != ACCOUNT or grant["region"] != REGION or grant["sourceRevisions"] != value["sourceRevisions"]
+            or grant["approvedBudgetUsd"] != value["approvedBudgetUsd"]):
+        raise ValueError("Authorization changed scope, frozen revisions or shared budget")
+    fields(grant["sourceRevisions"], SOURCES)
+    for sha in grant["sourceRevisions"].values(): text(sha, r"[a-f0-9]{40}")
+    start, cleanup, end = cost_window(grant)
+    sub_start, sub_cleanup, sub_end = cost_window(value)
+    allowed = grant["allowedPurposes"]
+    if (not isinstance(allowed, list) or not allowed or any(p not in ("legacy-migration", "staging") for p in allowed)
+            or len(set(allowed)) != len(allowed) or purpose not in ("legacy-migration", "staging") or purpose not in allowed):
+        raise ValueError("This operation is outside the approved window purpose")
+    if not start <= sub_start < sub_cleanup <= cleanup or sub_end > end:
+        raise ValueError("Execution extends the approved cloud window")
+    reference(grant["reviewReference"], key=f"automation/v2/windows/{grant['windowId']}/review.json")
+    return grant
 
 
 def validate_session(value, execution, ref):

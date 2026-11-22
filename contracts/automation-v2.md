@@ -18,6 +18,7 @@ and saved-plan approval are required separately.
 | `approvedBudgetUsd` | Decimal **string**, positive, at most two decimal places, maximum `60.00` |
 | `startedAt`, `cleanupStartAt`, `deadline` | Canonical UTC `YYYY-MM-DDTHH:MM:SSZ`; ordered; at most ten hours total and at least two hours reserved for cleanup |
 | `initialEpoch` | Integer `1`; subsequent fencing belongs to the mutable session |
+| `windowId`, `authorizationReference` | `window-gh-<runId>` and exact private version/hash at `automation/v2/windows/<windowId>.json` |
 
 The execution reference has exactly `bucket`, `key`, `versionId`, `sha256`.
 The bucket is `techx-automation-058114477594-us-east-1`; the key is
@@ -28,6 +29,15 @@ The private reader must fetch that exact S3 version. `decode_execution` hashes
 the original bytes before JSON parsing, bounds the payload and rejects duplicate
 keys. Successful parsing does not prove source CI, approval, current lease,
 cleanup readiness, or migration closure. Admission must verify each gate.
+
+`bind_authorized_window` binds an execution to its protected window record:
+account/region, three frozen revisions and shared budget must match; its time
+range cannot extend the parent grant and its purpose must be explicitly allowed.
+Migration and staging reference the same window ledger; they do not receive
+separate USD 60 allowances. R05/R06 must authenticate the actual human review and
+enforce aggregate build/control/migration/staging/recovery cost accounting.
+Reading an expired record is allowed for cleanup/audit; runtime creation gates
+must independently refuse expired/closed windows.
 
 The minimal mutable session envelope contains `schemaVersion`,
 `executorBackend`, `sessionId`, `executionReference`, `status`, `leaseEpoch`.
@@ -70,8 +80,7 @@ new command is sent. Worker observations include `launchedAt` and `publicCidr`;
 review/apply admission must compare the registered boot and network identity to
 reject stop/start reuse or an IP change.
 
-Migration/cutover artifact contracts still require implementation. The existing
-v1 workflows have not been switched to these v2 contracts.
+The existing v1 workflows have not been switched to these v2 contracts.
 Do not use a format-valid identity, service `Success` alone, or process exit code
 as authority to advance the lifecycle.
 
@@ -213,6 +222,56 @@ must be verified by the migration reader before calling it.
 lease or transition logic. Historical v1 workflows continue unchanged. The
 separate v2 mutation store and protected cutover are not implemented here.
 
+## Control-only migration and cutover
+
+`scripts/migration_v2.py` captures exact raw original session, execution, pointer
+and private-input object versions into a `LegacySnapshot`. It checks immutable
+scope, matching pointers/inputs and the original dispatch, and exports only a
+deep copy of provenance/metadata. It does not upgrade or rewrite the old record.
+All original private bytes are kept separately; normalized metadata is not a
+replacement for those original objects.
+
+A separate `MigrationExecution` has purpose `legacy-migration`, scope
+`control-only`, namespace `migration/control/<migrationId>/execution.json`,
+pinned configuration/bundle and the shared reviewed window reference. It is
+bound to the captured legacy snapshot. It cannot pass staging execution parsing
+or bypass the window's allowed-purpose restrictions. Its record is distinct from
+staging admission, allowing R02/R04 to arm a migration recovery owner before
+retiring v1 authority. Parsing alone grants no EC2 or EKS permission.
+
+`direct_denial_binding` verifies one exact CloudTrail service denial against the
+original dispatch token/environment, project, account/region, caller/issuer,
+request/event IDs and timestamps. Its classification is
+`EXACT_SERVICE_DENIAL_ONLY`, not proof that no build exists. Redacted token or
+environment data cannot satisfy this binding. R02 must additionally verify full
+call history, runtime actors and effective authority retirement.
+
+The canonical private manifest at `migration/control/<migrationId>/manifest.json`
+binds the exact control execution, snapshot, source revisions, authorization,
+review and explicit old-role/trigger retirement inventory. Its policy is either:
+
+- `REQUIRE_DIRECT_DENIAL`: eventual outcome `REJECTED_BEFORE_BUILD_CREATION` only
+  after the R02 verifier establishes the direct binding and all other evidence.
+- `RETIRE_UNKNOWN_DISPATCH`: eventual outcome
+  `UNKNOWN_DISPATCH_AUTHORITY_RETIRED`, under a separately reviewed retirement
+  path. It preserves the unresolved dispatch and cannot assert rejected creation.
+
+No force-complete/default fallback is supported. New v2 principals/triggers,
+other accounts/regions and broad arbitrary resources are rejected by the manifest
+scope checks. R02 must compare its inventory against complete actual service
+inventory and the reviewed saved control plan, not assume a format-valid list
+proves retirement or completeness.
+
+Closeout is a separate object at
+`migration/v1/<legacySessionId>/<URL-encodedExecutionVersion>/closeout.json`.
+It retains exact original refs, dispatch ID/phase, manifest and references to all
+seven private evidence families: call history, dispatch binding, authority
+retirement, actors, workload, recovery-owner health and worker termination.
+Neither branch creates a v1 completion marker or changes `CALLING` to `PREPARED`.
+`read_closeout` is strictly a wire parser: R02/R06 must verify every referenced
+fact, actual human review, all terminal actors, fresh zero inventory/state and
+effective policy retirement before publishing/consuming it as admission evidence.
+
 ## Verification
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
@@ -221,4 +280,7 @@ Run `python scripts/test-recovery-v2.py` for checkpoint and result regressions;
 it also runs in the existing verification workflow.
 `python scripts/test-approval-cleanup-v2.py` covers plan/review, same-worker apply,
 cleanup, terminal proof and finalizer misuse; it also runs in infrastructure CI.
+`python scripts/test-migration-v2.py` covers shared windows, original snapshots,
+control-only scope, redacted service evidence and explicit cutover branches.
+See [the R01 coverage map](automation-v2-coverage.md) for contract/runtime scope.
 Fixtures are synthetic offline data; they are not cloud execution evidence.

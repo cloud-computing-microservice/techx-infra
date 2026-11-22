@@ -161,6 +161,15 @@ class MigrationContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             bind_authorized_window(self.staging, self.grant_body, dict(self.grant_ref, versionId="another-version"), purpose="staging")
 
+    def test_caller_cannot_relabel_control_only_as_staging_or_change_account(self):
+        with self.assertRaisesRegex(ValueError, "actual execution scope"):
+            bind_authorized_window(self.control, self.grant_body, self.grant_ref, purpose="staging")
+        with self.assertRaisesRegex(ValueError, "actual execution scope"):
+            bind_authorized_window(self.staging, self.grant_body, self.grant_ref, purpose="legacy-migration")
+        for changes in (dict(account="111111111111"), dict(region="us-west-2"), dict(schemaVersion=True), dict(executorBackend="codebuild")):
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "scope/backend"):
+                bind_authorized_window(dict(self.staging, **changes), self.grant_body, self.grant_ref, purpose="staging")
+
     def test_direct_denial_binds_exact_token_environment_service_and_run(self):
         result = direct_denial_binding(self.event(), self.snapshot, now=self.now)
         self.assertEqual(result["classification"], "EXACT_SERVICE_DENIAL_ONLY")

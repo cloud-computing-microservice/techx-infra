@@ -155,6 +155,13 @@ def bind_authorized_window(value, body, ref, *, purpose):
     This parser cannot grant permission or allocate a second budget per phase.
     Cleanup may read an expired window; runtime creation gates check live time.
     """
+    if (value.get("account") != ACCOUNT or value.get("region") != REGION
+            or type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 2
+            or value.get("executorBackend") != "ec2-ssm"):
+        raise ValueError("Execution scope/backend differs from the approved window")
+    if (purpose == "staging" and (value.get("environment") != "staging" or value.get("purpose") is not None or value.get("scope") is not None)
+            or purpose == "legacy-migration" and (value.get("purpose") != "legacy-migration" or value.get("scope") != "control-only")):
+        raise ValueError("Caller purpose does not match the actual execution scope")
     window_reference(ref, value["windowId"])
     if value["authorizationReference"] != ref:
         raise ValueError("Execution changed its window authorization version")

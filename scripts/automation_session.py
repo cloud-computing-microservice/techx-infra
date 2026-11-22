@@ -32,6 +32,12 @@ def utc(value: str) -> datetime:
 
 
 def validate(record: dict):
+    # This module is the legacy mutation path. Never let a v2 envelope reach its
+    # CodeBuild-era lease, cleanup, rollback or completion predicates.
+    if (not isinstance(record, dict) or record.get("schemaVersion", 1) != 1
+            or type(record.get("schemaVersion", 1)) is not int
+            or record.get("executorBackend") not in (None, "codebuild")):
+        raise ValueError("Legacy session API requires a v1 record; v2 uses separate contracts")
     if record.get("account") != "058114477594" or record.get("region") != "us-east-1" or record.get("environment") != "staging":
         raise ValueError("Invalid staging scope")
     if record.get("status") not in TRANSITIONS:

@@ -69,7 +69,7 @@ class MutationConsumed(ValueError):
 class MutationUncertain(ValueError):
     def __init__(self, prepared):
         self.prepared = prepared
-        super().__init__("Session write outcome unknown; reconcile the same prepared mutation, never blindly retry")
+        super().__init__("Session mutation outcome unknown; recover the same claim/transition without retry")
 
 
 class WriteSuperseded(ValueError):
@@ -246,6 +246,14 @@ class SessionStore:
                 or response.get("ChecksumSHA256") != base64.b64encode(bytes.fromhex(sha256)).decode()):
             raise ValueError("Unverified write response")
 
+    @staticmethod
+    def _service_error(error):
+        response = getattr(error, "response", {})
+        metadata = response.get("ResponseMetadata", {}) if isinstance(response, dict) else {}
+        if (not isinstance(metadata.get("RequestId"), str) or not metadata["RequestId"]
+                or type(metadata.get("HTTPStatusCode")) is not int): return None, None
+        return response.get("Error", {}).get("Code"), metadata["HTTPStatusCode"]
+
     def _prepared(self, prepared):
         if not isinstance(prepared, PreparedMutation) or prepared._store is not self._token:
             raise ValueError("A same-store prepared mutation is required")
@@ -271,10 +279,8 @@ class SessionStore:
             response = self._put(self._claim_key(claim["mutationId"]), claim_body,
                                  session_tags(prepared._record, self._execution_ref), IfNoneMatch="*")
         except Exception as error:
-            response = getattr(error, "response", {})
-            code = response.get("Error", {}).get("Code") if isinstance(response, dict) else None
-            status = response.get("ResponseMetadata", {}).get("HTTPStatusCode") if isinstance(response, dict) else None
-            if (code, status) in (("PreconditionFailed", 412), ("ConditionalRequestConflict", 409)):
+            code, status = self._service_error(error)
+            if (code, status) == ("PreconditionFailed", 412):
                 prepared._state = "CONSUMED"
                 raise MutationConsumed("Durable mutation slot is consumed; recover/observe without another session write") from None
             raise MutationUncertain(prepared) from None
@@ -290,10 +296,8 @@ class SessionStore:
         try:
             response = self._put(self.key, prepared._body, session_tags(prepared._record, self._execution_ref), IfMatch=prepared._base._etag)
         except Exception as error:
-            response = getattr(error, "response", {})
-            code = response.get("Error", {}).get("Code") if isinstance(response, dict) else None
-            status = response.get("ResponseMetadata", {}).get("HTTPStatusCode") if isinstance(response, dict) else None
-            if (code, status) in (("PreconditionFailed", 412), ("ConditionalRequestConflict", 409)):
+            code, status = self._service_error(error)
+            if (code, status) == ("PreconditionFailed", 412):
                 prepared._state = "CONFLICT"
                 raise CASConflict("Conditional session write conflicted; reload without automatic retry") from None
             raise MutationUncertain(prepared) from None

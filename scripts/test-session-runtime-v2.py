@@ -85,10 +85,14 @@ class SessionRuntimeTests(unittest.TestCase):
                 self.assertEqual(params.get("IfNoneMatch"), "*")
                 if params["Key"] in self.objects: raise ServiceError("PreconditionFailed", 412)
                 if self.claim_mode == "timeout-before": raise TimeoutError()
+                if self.claim_mode == "conflict409": raise ServiceError("ConditionalRequestConflict", 409)
                 obj = self.publish(params["Key"], params["Body"], dict(parse_qsl(params["Tagging"])))
                 if self.claim_mode == "timeout-after": raise TimeoutError()
                 return dict(VersionId=obj["VersionId"], ETag=obj["ETag"], ServerSideEncryption="aws:kms", SSEKMSKeyId=KMS_KEY, ChecksumSHA256=params["ChecksumSHA256"])
             if self.put_mode == "conflict": raise ServiceError("PreconditionFailed", 412)
+            if self.put_mode == "conflict409": raise ServiceError("ConditionalRequestConflict", 409)
+            if self.put_mode == "conflict-without-metadata":
+                error = ServiceError("PreconditionFailed", 412); del error.response["ResponseMetadata"]["RequestId"]; raise error
             if self.put_mode == "timeout-before": raise TimeoutError("sensitive-transport-message")
             if self.objects[params["Key"]][-1]["ETag"] != params["IfMatch"]: raise ServiceError("PreconditionFailed", 412)
             obj = self.publish(params["Key"], params["Body"], dict(parse_qsl(params["Tagging"])))
@@ -370,6 +374,25 @@ class SessionRuntimeTests(unittest.TestCase):
         for service, operation, params in self.calls:
             shape = session.get_service_model(service).operation_model(names[operation]).input_shape
             validate_parameters(params, shape)
+
+    def test_409_claim_conflict_does_not_fabricate_consumed_slot(self):
+        store = self.store(); prepared = store.prepare(store.read(), "PROVISIONING"); self.claim_mode = "conflict409"
+        with self.assertRaises(MutationUncertain): store.commit(prepared)
+        self.assertEqual(prepared._state, "CLAIMING")
+        self.assertEqual(self.puts(), [])
+
+    def assert_uncertain_rejection(self, mode):
+        store = self.store(); prepared = store.prepare(store.read(), "PROVISIONING"); self.put_mode = mode
+        with self.assertRaises(MutationUncertain): store.commit(prepared)
+        self.assertIsNone(store.reconcile(prepared))
+        with self.assertRaises(ValueError): store.commit(prepared)
+        self.assertEqual(len(self.puts()), 1)
+
+    def test_409_session_conflict_remains_uncertain(self):
+        self.assert_uncertain_rejection("conflict409")
+
+    def test_rejection_without_request_metadata_remains_uncertain(self):
+        self.assert_uncertain_rejection("conflict-without-metadata")
 
 
 if __name__ == "__main__": unittest.main()

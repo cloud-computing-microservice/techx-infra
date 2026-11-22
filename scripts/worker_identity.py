@@ -150,6 +150,7 @@ def worker_identity(intent, instance, caller, execution, ref, epoch):
         raise ValueError("Worker public IPv4 must be globally routable")
     return dict(kind="ec2-worker", purpose=intent["purpose"], instanceId=instance_id,
                 executionReference=deepcopy(ref), launchEpoch=epoch, launchToken=intent["clientToken"], attempt=intent["attempt"],
+                configurationReference=deepcopy(intent["configurationReference"]),
                 launchedAt=launched.isoformat(), principalArn=arn, publicCidr=f"{address}/32")
 
 

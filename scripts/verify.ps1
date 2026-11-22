@@ -4,6 +4,8 @@ python (Join-Path $PSScriptRoot 'test-execution-v2.py')
 if ($LASTEXITCODE -ne 0) { throw 'V2 immutable execution, identity, SSM observation and legacy isolation contract tests failed.' }
 python (Join-Path $PSScriptRoot 'test-recovery-v2.py')
 if ($LASTEXITCODE -ne 0) { throw 'V2 launch recovery, immutable result and terminal SSM proof contract tests failed.' }
+python (Join-Path $PSScriptRoot 'test-approval-cleanup-v2.py')
+if ($LASTEXITCODE -ne 0) { throw 'V2 saved-plan, approval, workload zero and independent finalizer evidence contract tests failed.' }
 
 foreach ($path in @(
     '.gitignore', 'LICENSE', 'README.md',

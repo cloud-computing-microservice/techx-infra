@@ -70,8 +70,8 @@ new command is sent. Worker observations include `launchedAt` and `publicCidr`;
 review/apply admission must compare the registered boot and network identity to
 reject stop/start reuse or an IP change.
 
-Additional contracts are still needed for plan/review, provisional cleanup,
-finalizer proof and legacy migration.
+Migration/cutover artifact contracts still require implementation. The existing
+v1 workflows have not been switched to these v2 contracts.
 Do not use a format-valid identity, service `Success` alone, or process exit code
 as authority to advance the lifecycle.
 
@@ -112,6 +112,96 @@ must point to the task's private exact version at
 the operation-specific validator. Receipt parsing cannot replace fresh lease
 fencing, approval, business acceptance or cleanup completion checks.
 
+## Saved plan and human approval
+
+`scripts/plan_v2.py` validates a private request at
+`automation/v2/staging/reviews/<sessionId>/<stage>/<attempt>/request.json`.
+It binds execution/epoch, stage/attempt, saved plan version/hash, timestamps and
+the freshly regenerated runtime context:
+
+- Three admitted revisions, budget and cleanup/deadline.
+- Complete registered worker identity checksum, including VM boot/public `/32`
+  and configuration reference. A changed boot/IP requires replan/review.
+- Pinned backend/key/KMS, Terraform toolchain/config/provider-lock hashes.
+- Current state version/checksum, lineage and serial.
+
+The downloaded plan must match its exact reviewed S3 version, even if another
+version has identical bytes. Resource-action scanning, cost checks, live lease,
+readiness and single CAS consumption remain mandatory runtime gates.
+
+An approval at `automation/v2/staging/approvals/<sessionId>/<requestSha256>.json`
+binds the request's private version and independently verified GitHub history.
+It requires a human reviewer on the reviewed owner/repository IDs, infra SHA,
+first-attempt `staging-plan-review.yml` run and `staging-apply` environment.
+Rechecking history may advance its verification time; it cannot change stable
+reviewer/run/environment identity. Approval/request expiry is enforced before
+apply. These functions cannot create approvals or authenticate review JSON:
+R06 must collect real run/job/OIDC/API history, reject rejected/ambiguous reviews,
+and publish only through the scoped approval role.
+
+## Independent cleanup and finalization
+
+`scripts/cleanup_v2.py` separates provisional worker receipts from final evidence:
+
+1. `workload_zero` checks all 22 positively present empty inventory groups,
+   matching execution/epoch/state version, and exact raw state bytes with an
+   initialized lineage/serial and zero managed instances.
+2. `compute_gone` checks the complete protected roster and fresh service facts.
+   Unknown discovered instances, missing registered assets and unresolved
+   `CALLING` launches prevent completion. Bounds are one deployment, one probe
+   and up to three cleanup generations.
+3. Each worker requires its singleton DescribeInstances result, positive AWS
+   metadata and exact ownership/token. Provisional mode permits only the current
+   cleanup owner to run. Final mode requires every worker terminal, no attached
+   public IP/NIC/volume, and every registered volume/ENI absent.
+4. `InvalidInstanceID.NotFound` alone is insufficient. It requires an exact
+   registered private historical proof with a positive `terminated` response
+   for the same instance/token/execution. [AWS documents that NotFound can occur
+   while an instance still runs](https://docs.aws.amazon.com/ec2/latest/devguide/eventual-consistency.html).
+   R04 must persist these terminal proofs through the finalizer-only prefix and
+   use bounded service backoff. Unknown/missing proof stays incomplete.
+5. `validate_final` checks fresh independently collected facts after the
+   provisional receipt, live `DESTROYING` epoch, exact published fact versions
+   and the actual dedicated finalizer STS principal. Worker/manager identity
+   cannot seal completion. CAS sealing, protected DESTROYED/marker writes and
+   duplicate recovery are still R04 runtime duties.
+
+The collectors return `ValidatedFacts` objects. `as_dict()` exports a copy for
+private publication; deserializing that JSON cannot reconstruct a validated
+object accepted by `validate_final`. This is an in-process misuse guard, not
+authentication against arbitrary Python execution. The finalizer must query AWS
+independently: validating worker-supplied snapshots is not an independent read.
+
+Fresh facts have a five-minute limit and cannot predate the supplied fence or
+provisional timestamp. Each singleton API fact includes `requestedId`,
+`operation`, `observedAt`, raw `response` and positive AWS request metadata.
+One request ID cannot stand in for lookups of multiple resources. AccessDenied,
+throttling, incomplete metadata and partial results remain unknown. R04 must
+verify the fixed account/region and full fresh session discovery without state
+filters; these pure contracts cannot authenticate the provenance of JSON.
+
+Registry/observation/fact artifacts use canonical JSON (sorted keys, compact
+separators, finite numbers) and exact private S3 versions. Keys below
+`automation/v2/staging/`:
+
+| Artifact | Key |
+| --- | --- |
+| Worker registry | `workers/<sessionId>/registry.json` |
+| Inventory | `cleanup/<sessionId>/inventories/<snapshotId>.json` |
+| Positive terminal proof | `cleanup/<sessionId>/terminals/<instanceId>.json` |
+| Provisional observations/facts | `cleanup/<sessionId>/provisional-compute-observations/<epoch>.json`, `provisional-compute/<epoch>.json` |
+| Provisional receipt | `cleanup/<sessionId>/provisional/<epoch>.json` |
+| Final observations/facts | `cleanup/<sessionId>/compute-observations/<epoch>.json`, `compute/<epoch>.json` |
+| Final workload facts | `cleanup/<sessionId>/workload/<epoch>.json` |
+| Final receipt | `cleanup/<sessionId>/final/<epoch>.json` |
+
+Registry rows bind purpose/attempt, launch token/phase, InstanceId, original
+volume/ENI IDs and nullable exact `terminalReference`. `PREPARED` cannot invent
+compute or terminal proof. Final fact references retain registry, observations,
+inventory and state provenance. R05 must restrict terminal/final evidence writes
+to the independent finalizer; provisional worker evidence cannot grant final
+publication or marker permissions.
+
 ## Legacy isolation
 
 `read_legacy` parses a bounded snapshot through the existing v1 validator and
@@ -129,4 +219,6 @@ Run `python scripts/test-execution-v2.py` from the infra repository. The same
 suite runs in `scripts/verify.ps1` and the existing infrastructure CI workflow.
 Run `python scripts/test-recovery-v2.py` for checkpoint and result regressions;
 it also runs in the existing verification workflow.
+`python scripts/test-approval-cleanup-v2.py` covers plan/review, same-worker apply,
+cleanup, terminal proof and finalizer misuse; it also runs in infrastructure CI.
 Fixtures are synthetic offline data; they are not cloud execution evidence.

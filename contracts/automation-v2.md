@@ -57,6 +57,19 @@ passing JSON from a workflow payload is **not** authentication.
   document checksum enforcement at SendCommand, terminal invocation and durable
   result verification remain required in the runtime implementation.
 
+Task/handle operation and stage are bound separately (for example,
+`plan/foundation` versus `plan/edge`). Only the reviewed lifecycle pairs are
+accepted; plan/apply attempts are positive bounded integers and all other tasks
+require attempt one. A new plan attempt requires a separately admitted immutable
+task; this contract never allows resending an uncertain consumed task.
+
+Worker `launchEpoch` records its original registration. It is distinct from a
+task's `leaseEpoch`, so the warm cleanup worker can survive a later cleanup fence.
+The live CAS registry must authorize that fence and worker generation before a
+new command is sent. Worker observations include `launchedAt` and `publicCidr`;
+review/apply admission must compare the registered boot and network identity to
+reject stop/start reuse or an IP change.
+
 Additional contracts are still needed for launch phase recovery, plan/review,
 durable stage results, provisional cleanup, finalizer proof and legacy migration.
 Do not use a format-valid identity, service `Success` alone, or process exit code

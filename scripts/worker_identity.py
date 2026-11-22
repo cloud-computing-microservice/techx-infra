@@ -20,6 +20,11 @@ ENVIRONMENTS = {"staging-lifecycle.yml": {"staging-start", "staging-lifecycle"},
                 "staging-acceptance.yml": {"staging-acceptance"}, "staging-destroy.yml": {"staging-destroy"},
                 "staging-plan-review.yml": {"staging-plan-read", "staging-apply"}}
 PURPOSES = {"deployment", "cleanup", "probe"}
+OPERATIONS = {("prepare", "foundation"), ("plan", "foundation"), ("apply", "foundation"),
+              ("bootstrap", "gitops"), ("promote", "chart"), ("plan", "edge"), ("apply", "edge"),
+              ("activate", "exposure"), ("verify", "private"), ("verify", "active"), ("verify", "rollback"),
+              ("verify", "public"), ("release", "active"), ("rollback", "prepare"), ("rollback", "rollout"),
+              ("cleanup", "all")}
 
 
 def launch_token(intent):
@@ -147,8 +152,8 @@ def validate_handle(handle, task, worker, *, command, now):
     dispatcher owns CAS consumption and receipt persistence, not this validator.
     """
     fields(task, {"schemaVersion", "taskId", "sessionId", "executionReference", "leaseEpoch", "instanceId",
-                  "purpose", "operation", "attempt", "documentName", "documentVersion", "documentSha256", "createdAt", "expiresAt"})
-    fields(handle, {"schemaVersion", "taskId", "executionReference", "leaseEpoch", "instanceId", "operation", "attempt",
+                  "purpose", "operation", "stage", "attempt", "documentName", "documentVersion", "documentSha256", "createdAt", "expiresAt"})
+    fields(handle, {"schemaVersion", "taskId", "executionReference", "leaseEpoch", "instanceId", "operation", "stage", "attempt",
                     "documentName", "documentVersion", "documentSha256", "commandId"})
     if (type(task["schemaVersion"]) is not int or task["schemaVersion"] != 2
             or type(handle["schemaVersion"]) is not int or handle["schemaVersion"] != 2):
@@ -157,10 +162,11 @@ def validate_handle(handle, task, worker, *, command, now):
     text(task["taskId"], r"[a-f0-9]{32}")
     text(task["instanceId"], r"i-[a-f0-9]{17}")
     integer(task["leaseEpoch"])
-    integer(task["attempt"], maximum=1)
-    if task["purpose"] not in PURPOSES or task["operation"] not in {"plan", "apply", "verify", "release", "rollback", "cleanup"}:
+    integer(task["attempt"], maximum=999999 if task["operation"] in ("plan", "apply") else 1)
+    if task["purpose"] not in PURPOSES or (task["operation"], task["stage"]) not in OPERATIONS:
         raise ValueError("Unknown typed task operation")
-    if (task["purpose"] == "cleanup") != (task["operation"] == "cleanup") or task["purpose"] == "probe" and task["operation"] != "verify":
+    if ((task["purpose"] == "cleanup") != (task["operation"] == "cleanup")
+            or (task["purpose"] == "probe") != ((task["operation"], task["stage"]) == ("verify", "public"))):
         raise ValueError("Task operation is outside worker purpose")
     if task["documentName"] != f"techx-automation-v2-{task['purpose']}-task":
         raise ValueError("Unexpected SSM document")

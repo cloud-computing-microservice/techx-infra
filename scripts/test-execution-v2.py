@@ -53,7 +53,7 @@ class V2Contracts(unittest.TestCase):
         self.worker_caller = dict(Account=ACCOUNT, Arn=f"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-v2-deployment-executor/{self.instance['InstanceId']}")
         self.task = dict(schemaVersion=2, taskId="6" * 32, sessionId=self.execution["sessionId"],
                          executionReference=deepcopy(self.ref), leaseEpoch=1, instanceId=self.instance["InstanceId"],
-                         purpose="deployment", operation="plan", attempt=1, documentName="techx-automation-v2-deployment-task",
+                         purpose="deployment", operation="plan", stage="foundation", attempt=1, documentName="techx-automation-v2-deployment-task",
                          documentVersion="3", documentSha256="7" * 64, createdAt="2026-11-22T01:00:00Z", expiresAt="2026-11-22T01:30:00Z")
         self.handle = {k: deepcopy(v) for k, v in self.task.items() if k not in {"sessionId", "purpose", "createdAt", "expiresAt"}}
         self.handle["commandId"] = "12345678-1234-1234-1234-123456789abc"
@@ -209,7 +209,7 @@ class V2Contracts(unittest.TestCase):
             with self.subTest(field=key), self.assertRaises(ValueError):
                 validate_handle(self.handle, self.task, dict(self.worker(), **{key: value}), command=self.command, now=self.now)
         for key, value in [("documentName", "AWS-RunShellScript"), ("documentVersion", "$Latest"),
-                           ("operation", "cleanup"), ("purpose", "probe"), ("attempt", True),
+                           ("operation", "cleanup"), ("stage", "arbitrary-shell"), ("purpose", "probe"), ("attempt", True),
                            ("expiresAt", "2026-11-22T01:46:00Z"), ("expiresAt", "2026-11-22T00:59:00Z")]:
             task = dict(self.task, **{key: value})
             handle = dict(self.handle, **({key: value} if key in self.handle else {}))

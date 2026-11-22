@@ -9,7 +9,7 @@ import hashlib
 import ipaddress
 import json
 
-from execution_v2 import ACCOUNT, REGION, execution_reference, fields, integer, text, timestamp, validate_execution
+from execution_v2 import ACCOUNT, REGION, PREFIX, execution_reference, fields, integer, reference, text, timestamp, validate_execution
 
 ORG = "cloud-computing-microservice"
 REPO = f"{ORG}/techx-infra"
@@ -69,22 +69,14 @@ def manager_identity(context, claims, caller, execution):
     return dict(kind="github-manager", **deepcopy(context), principalArn=arn)
 
 
-def worker_identity(intent, instance, caller, execution, ref, epoch):
-    """Bind a trusted DescribeInstances/STS response to the admitted launch intent.
-
-    Positive observation is required; an EC2-looking ARN alone is insufficient.
-    The lifecycle launcher separately validates intent against pinned config and
-    CAS before RunInstances. `epoch` is the registered launch epoch, not a new
-    task lease. A warm cleanup worker survives the cleanup fence; authorization
-    of its later task epoch belongs to the live CAS registry. This function
-    cannot authorize arbitrary config or prove a resumed VM is the same boot.
-    """
+def validate_launch_intent(intent, execution, ref, epoch):
+    """Validate immutable intent only; pinned configuration authorization is separate."""
     validate_execution(execution)
     execution_reference(ref, execution["sessionId"])
     integer(epoch)
     fields(intent, {"schemaVersion", "executionReference", "leaseEpoch", "purpose", "attempt", "clientToken",
                     "createdAt", "launchTemplateId", "launchTemplateVersion", "imageId", "instanceProfileArn",
-                    "subnetId", "securityGroupId"})
+                    "subnetId", "securityGroupId", "configurationReference"})
     if (type(intent["schemaVersion"]) is not int or intent["schemaVersion"] != 2
             or intent["executionReference"] != ref or type(intent["leaseEpoch"]) is not int
             or intent["leaseEpoch"] != epoch or intent["purpose"] not in PURPOSES):
@@ -101,6 +93,23 @@ def worker_identity(intent, instance, caller, execution, ref, epoch):
     profile = f"arn:aws:iam::{ACCOUNT}:instance-profile/techx-automation-v2-{intent['purpose']}-executor"
     if intent["instanceProfileArn"] != profile:
         raise ValueError("Unexpected v2 worker profile")
+    timestamp(intent["createdAt"])
+    reference(intent["configurationReference"], key=f"{PREFIX}config/{intent['purpose']}.json")
+    return deepcopy(intent)
+
+
+def worker_identity(intent, instance, caller, execution, ref, epoch):
+    """Bind a trusted DescribeInstances/STS response to the admitted launch intent.
+
+    Positive observation is required; an EC2-looking ARN alone is insufficient.
+    The lifecycle launcher separately validates intent against pinned config and
+    CAS before RunInstances. `epoch` is the registered launch epoch, not a new
+    task lease. A warm cleanup worker survives the cleanup fence; authorization
+    of its later task epoch belongs to the live CAS registry. This function
+    cannot authorize arbitrary config or prove a resumed VM is the same boot.
+    """
+    validate_launch_intent(intent, execution, ref, epoch)
+    profile = intent["instanceProfileArn"]
     if not isinstance(instance, dict):
         raise ValueError("Positive EC2 observation required")
     instance_id = text(instance.get("InstanceId"), r"i-[a-f0-9]{17}")
@@ -140,7 +149,7 @@ def worker_identity(intent, instance, caller, execution, ref, epoch):
     if address.version != 4 or not address.is_global:
         raise ValueError("Worker public IPv4 must be globally routable")
     return dict(kind="ec2-worker", purpose=intent["purpose"], instanceId=instance_id,
-                executionReference=deepcopy(ref), launchEpoch=epoch, attempt=intent["attempt"],
+                executionReference=deepcopy(ref), launchEpoch=epoch, launchToken=intent["clientToken"], attempt=intent["attempt"],
                 launchedAt=launched.isoformat(), principalArn=arn, publicCidr=f"{address}/32")
 
 

@@ -329,6 +329,37 @@ Output always says NOT_VERIFIED, actorDrain=NOT_OBSERVED and is ineligible for
 attestation. Independent live verification, reviewed mutation, complete actor
 inventory/drain and recovery-owner/terminal proof remain required by R02.
 
+### R02 actor observation collector
+
+```powershell
+python scripts/legacy_actors.py --profile default `
+  --session-id staging-gh-42628903617 `
+  --expected-execution-reference C:\private\execution-reference.json `
+  --private-output C:\private\techx-evidence
+```
+
+It binds original session/execution/pointer/input bytes and rechecks versions,
+then reads original-role instance profiles, all returned regional EC2 instance
+metadata, SSM managed nodes and paginated command/invocation history from the
+original execution time, plus both legacy CodeBuild project histories. Candidate
+discovery includes actual legacy role/profile relationships even without a
+session tag or expected profile name, the original session tag, shared staging
+workload and automation instances without v2 identity. Explicit v2 automation
+identity is excluded unless another actual legacy binding still applies.
+
+Stopped EC2 is nonterminal. Recreated profiles, unknown states, access failures,
+missing lists, changing role/profile rosters and SSM history races fail collection.
+TechX commands targeting absent instances remain unresolved; nonterminal commands
+or invocations whose ownership is unscoped remain visible in separate counters.
+Raw account-wide metadata and command parameters stay private outside Git.
+
+Every result remains actorDrain=NOT_VERIFIED and attestationEligible=false. EC2
+and SSM history expire; empty current listings or offline managed nodes do not
+prove historical terminal state. Lambda/GitHub drain, complete original actor
+roster, independently verified retirement and migration recovery ownership still
+need runtime integration. This CLI is read-only and cannot stop actors or publish
+closeout. It adds no operator upload or force-complete route.
+
 ## Verification
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
@@ -346,3 +377,6 @@ chain, pagination, private provenance, races, service failures and non-attesting
 assessment boundary. It also runs in infrastructure CI.
 `python scripts/test-legacy-authority.py` checks SDK policy/trigger collection,
 scope, pagination, policy and role races, and conservative deny observations.
+`python scripts/test-legacy-actors.py` exercises actual SDK orchestration with
+injected clients, broad actor discovery, EC2/SSM unknown/terminal distinctions,
+scope, profile races and original history bounds. It runs in infrastructure CI.

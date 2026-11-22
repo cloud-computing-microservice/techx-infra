@@ -199,6 +199,19 @@ class CollectorTests(unittest.TestCase):
         self.assertIn(b"HIDDEN_DUE_TO_SECURITY_REASONS", private)
         self.assertNotIn("HIDDEN_DUE_TO_SECURITY_REASONS", json.dumps(result.report))
 
+    def test_identical_cloudtrail_replay_is_deduplicated_with_raw_pages_retained(self):
+        event = self.fixture.event()
+        self.override = lambda s, o, p: dict(Events=[dict(CloudTrailEvent=json.dumps(event))] * 2) if s == "cloudtrail" else None
+        trail = self.collector.cloudtrail(self.fixture.snapshot, datetime(2026, 11, 9, tzinfo=timezone.utc), self.fixture.now)
+        self.assertEqual(len(trail["events"]), 1)
+        self.assertEqual(len(trail["directDenialBindings"]), 1)
+
+    def test_conflicting_cloudtrail_replay_is_incomplete(self):
+        event = self.fixture.event(); other = deepcopy(event); other["requestID"] = "different-request"
+        self.override = lambda s, o, p: dict(Events=[dict(CloudTrailEvent=json.dumps(e)) for e in (event, other)]) if s == "cloudtrail" else None
+        with self.assertRaisesRegex(IncompleteAudit, "CONFLICTING_TRAIL_EVENT"):
+            self.collector.cloudtrail(self.fixture.snapshot, datetime(2026, 11, 9, tzinfo=timezone.utc), self.fixture.now)
+
     def test_sdk_error_is_retained_but_public_reason_is_sanitized(self):
         class Failure(Exception):
             response = dict(Error=dict(Code="AccessDenied", Message="sensitive-marker"))

@@ -249,7 +249,7 @@ class LegacyCollector:
         return collected
 
     def cloudtrail(self, snapshot, start, end):
-        events, matches, seen = [], [], set()
+        events, matches, seen = [], [], {}
         params = dict(LookupAttributes=[dict(AttributeKey="EventName", AttributeValue="StartBuild")], StartTime=start, EndTime=end, MaxResults=50)
         for page in self.pages("cloudtrail", "lookup_events", params, "Events", input_token="NextToken", output_token="NextToken"):
             for row in page:
@@ -257,8 +257,12 @@ class LegacyCollector:
                 request = event.get("requestParameters") or {}
                 if request.get("projectName") not in PROJECTS: continue
                 event_id = event.get("eventID")
-                if not isinstance(event_id, str) or event_id in seen: raise IncompleteAudit("INVALID_OR_DUPLICATE_TRAIL_EVENT")
-                seen.add(event_id); events.append(event)
+                if not isinstance(event_id, str) or not event_id: raise IncompleteAudit("INVALID_TRAIL_EVENT_ID")
+                digest = hashlib.sha256(encoded(event)).hexdigest()
+                if event_id in seen:
+                    if seen[event_id] != digest: raise IncompleteAudit("CONFLICTING_TRAIL_EVENT")
+                    continue  # LookupEvents may repeat the same event across pages; raw pages remain journaled.
+                seen[event_id] = digest; events.append(event)
                 try:
                     matches.append(direct_denial_binding(event, snapshot, now=end))
                 except ValueError:

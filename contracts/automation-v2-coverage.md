@@ -39,7 +39,12 @@ The table above records the R01 boundary. Subsequent SDK modules add the
 `session_runtime_v2` CAS store, `manager_bridge_v2` owned STS/GitHub verification,
 `manager_handoff_v2` independent server verification and `worker_runtime_v2`
 worker-owned IMDSv2/STS/EC2 boot identity with private create-once registration.
+`worker_registry_v2` adds the actual SDK rich roster, durable mutation claims,
+monotonic launch-call consumption and independent registration/service reads.
+Cleanup now requires that rich roster; the original R01 minimal snapshot shape
+cannot be used as current runtime evidence. This source change upgrades no live data.
 Their injected SDK tests run in `scripts/verify.ps1`; the main contract documents
 each remaining integration/IAM boundary. These modules do not complete R02/R03,
-grant admission or establish live AWS acceptance. Worker registry/lease/typed
-SSM dispatch, cleanup supervision/finalization and workflow cutover remain open.
+grant admission or establish live AWS acceptance. Actual admitted resource launch,
+worker lease/typed SSM dispatch, cleanup supervision/finalization and workflow
+cutover remain open; source roster code is not the whole R03/R04 milestone.

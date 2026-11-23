@@ -115,9 +115,14 @@ class CleanupContracts(unittest.TestCase):
         self.epoch = 2
         self.request_no = 0
         self.cleanup_id = "i-" + "2" * 17
-        self.registry = dict(schemaVersion=2, executionReference=deepcopy(f.ref), leaseEpoch=2, launches=[])
+        self.registry = dict(schemaVersion=2, executionReference=deepcopy(f.ref), leaseEpoch=2, runtimeRevision=4,lastMutationId="a"*32,launches=[])
         for index, purpose, instance_id in [(1, "deployment", f.instance["InstanceId"]), (2, "cleanup", self.cleanup_id)]:
             self.registry["launches"].append(dict(purpose=purpose, attempt=1, phase="OBSERVED", launchToken=str(index) * 64,
+                                                launchEpoch=1,
+                                                intentReference=dict(bucket=BUCKET,key=f"{PREFIX}launches/{f.execution['sessionId']}/{purpose}/1/intent.json",versionId="intent-version",sha256="a"*64),
+                                                checkpoint=dict(schemaVersion=2,launchToken=str(index)*64,phase="OBSERVED",callStartedAt="2026-11-22T01:00:00Z",
+                                                                instanceId=instance_id,observedAt="2026-11-22T01:00:10Z",workerIdentitySha256="b"*64),
+                                                registrationReference=dict(bucket=BUCKET,key=f"{PREFIX}workers/{f.execution['sessionId']}/registrations/AROA{'A'*17}:{instance_id}.json",versionId="registration-version",sha256="c"*64),
                                                 instanceId=instance_id, volumeIds=["vol-" + str(index) * 17], networkInterfaceIds=["eni-" + str(index) * 17], terminalReference=None))
         self.observations = dict(schemaVersion=2, executionReference=deepcopy(f.ref), leaseEpoch=2, observedAt="2026-11-22T01:01:00Z",
                                  discoveredInstanceIds=[f.instance["InstanceId"], self.cleanup_id], instances={}, volumes={}, networkInterfaces={}, terminalProofs={})
@@ -211,6 +216,8 @@ class CleanupContracts(unittest.TestCase):
     def test_calling_missing_roster_and_unknown_discovery_block_finalization(self):
         for registry in [dict(self.registry, launches=[]), dict(self.registry, leaseEpoch=1)]:
             with self.subTest(registry=registry), self.assertRaises(ValueError): self.compute(registry=registry)
+        bare = {k:v for k,v in self.registry.items() if k not in {"runtimeRevision","lastMutationId"}}
+        with self.assertRaises(ValueError): self.compute(registry=bare)
         for phase in ("CALLING", "OFF"):
             registry = deepcopy(self.registry); registry["launches"][0]["phase"] = phase
             with self.subTest(phase=phase), self.assertRaises(ValueError): self.compute(registry=registry)

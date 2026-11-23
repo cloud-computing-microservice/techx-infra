@@ -544,6 +544,60 @@ registry slots, authorized configuration, admission and launch reconciliation;
 R03 task/lease dispatch and R04 supervision must consume verified registrations.
 The runtime is not wired into an AMI or live workflow by this source change.
 
+### R03 durable worker registry
+
+`worker_registry_v2.WorkerRegistry` reads/writes the canonical private
+`workers/<sessionId>/registry.json` through the owned SessionStore SDK transport.
+The runtime roster now requires `runtimeRevision` and `lastMutationId` alongside
+schema/execution/epoch/launches. Every row retains its exact `intentReference`,
+original `launchEpoch`, checkpoint and nullable `registrationReference`, plus
+instance/original asset/terminal fields. The cleanup contract requires this rich
+roster too: bare four-field R01 fixture snapshots cannot substitute for it.
+This code never upgrades a stored roster. Incompatible stored data fails closed
+and needs separately reviewed handling before cutover; v1 remains isolated.
+
+Initial reservation requires positive NoSuchKey **and** a complete empty object
+version/delete-marker history. Access errors, truncated history and a lost head
+with prior versions are not bootstrap permission. Reservation loads the exact
+intent version, validates the actual launcher role and receiver-verified manager
+handoff, and fixes purpose/attempt/epoch. Source reservation supports only the
+first slot per purpose. The global contract bounds one deployment, one probe
+and three cleanup slots; R04 must add the separately authorized replacement path
+with positive prior-generation terminal proof and budget/supervision guards.
+
+Every mutation claims one protected `worker-mutations/<sessionId>/<id>.json`
+before one If-Match/If-None-Match registry write. Semantic IDs bind the original
+base version and target transition, excluding observation/call clock changes;
+a restarted process cannot mint another CALLING claim merely by changing time.
+Both writes require positive checksum/KMS/version metadata, and the head/body/
+tags are read back. A lost response, 409 or superseding fence stays uncertain.
+`recover(id)` validates the original base and monotonic transition and only
+observes the current head. It cannot produce a fresh launch acknowledgement.
+
+The monotonic phases remain PREPARED -> CALLING -> OBSERVED, with no rewind,
+generation removal or silent rebinding. `FreshCalling.take()` is a one-shot,
+same-process storage acknowledgement with live job/epoch/head rechecks. It
+explicitly does **not** establish admission, pinned configuration authorization
+or permission to RunInstances. R05/R06 and the actual launcher still must bind
+approved source/configuration, reviewed migration, cleanup readiness and budget
+before the resource call. This module never calls RunInstances or SendCommand.
+
+Observation reads the private exact boot registration, actual IAM instance
+profile membership/role unique ID, and singleton owned EC2 state. It checks the
+STS UserId-key binding, original launch interval, metadata boundary, current
+service identity and complete original EBS/ENI IDs. The registered full boot
+identity digest is pinned in the observed checkpoint. This proves registration
+and service observation, not a current agent heartbeat, live task lease or
+business acceptance. IAM prefix/immutable protections must be enforced by R05;
+operator-supplied JSON is not a substitute for these owned reads.
+
+Observation can reconcile a partial launch after a cleanup fence without
+GitHub. The cleanup launcher can separately align the roster to the actual
+strictly newer DESTROYING epoch while preserving every row. Neither operation
+grants a new deployment call or transfers an expired worker lease. Unresolved
+CALLING entries keep completion closed. R04 still owns supervision, terminal
+proof attachment, bounded replacement and finalizer-only completion writes.
+
 ## Verification
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
@@ -580,3 +634,8 @@ These tests do not invoke a live Lambda or establish cloud acceptance.
 boot/IP/time/role/epoch drift, create-once registration, lost response handling,
 warm cleanup identity and IMDSv2 protocol failures. Actual SDK models validate
 EC2/S3 request shapes; injected tests do not prove a live worker/AMI/IAM gate.
+`python scripts/test-worker-registry-v2.py` covers owned SDK CAS/history/intent
+reads, cross-process single consumption, lost responses, cancellation/fencing,
+no source JSON authority, profile/boot/asset observation and rich-roster recovery.
+It runs in infrastructure CI. These tests do not establish live launch/admission
+or replace the R03 typed lease/SSM and R04/R05/R06 integration gates.

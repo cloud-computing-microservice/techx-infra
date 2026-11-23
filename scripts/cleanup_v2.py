@@ -14,6 +14,7 @@ import json
 from execution_v2 import (ACCOUNT, PREFIX, REGION, decode_object, execution_reference, fields, integer,
                           reference, text, timestamp, validate_execution, validate_session)
 from recovery_v2 import checksum
+from worker_registry_v2 import ROW, validate_registry
 
 INVENTORY_FIELDS = set(json.loads(Path(__file__).parents[1].joinpath("contracts/inventory-fields.json").read_text()))
 MAX_AGE = timedelta(minutes=5)
@@ -143,7 +144,7 @@ def compute_gone(registry, registry_ref, observations, observations_ref, executi
     integer(epoch)
     if type(final) is not bool:
         raise ValueError("Collector mode must be a fixed internal boolean")
-    fields(registry, {"schemaVersion", "executionReference", "leaseEpoch", "launches"})
+    validate_registry(registry, execution, execution_ref)
     reference(registry_ref, key=f"{PREFIX}workers/{execution['sessionId']}/registry.json")
     if registry_ref["sha256"] != checksum(registry):
         raise ValueError("Registry differs from its exact canonical private version")
@@ -163,7 +164,7 @@ def compute_gone(registry, registry_ref, observations, observations_ref, executi
         raise ValueError("Bounded complete worker roster required")
     known, slots, tokens, volumes, interfaces = {}, set(), set(), set(), set()
     for launch in launches:
-        fields(launch, {"purpose", "attempt", "phase", "launchToken", "instanceId", "volumeIds", "networkInterfaceIds", "terminalReference"})
+        fields(launch, ROW)
         if launch["purpose"] not in ("deployment", "cleanup", "probe"):
             raise ValueError("Unknown worker purpose")
         integer(launch["attempt"], maximum=3 if launch["purpose"] == "cleanup" else 1)

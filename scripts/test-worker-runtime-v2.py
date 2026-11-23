@@ -28,6 +28,8 @@ class WorkerTests(unittest.TestCase):
         self.instance["Tags"] = [dict(Key=k,Value=v) for k,v in dict(Project="TechX",Environment="automation",Role="deployment-executor",
             SessionId=self.aws.execution["sessionId"],ExecutionSha256=self.aws.ref["sha256"],LeaseEpoch="1").items()]
         self.aws.principal = f"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-v2-deployment-executor/{self.instance['InstanceId']}"
+        self.principal_id = "AROA" + "A"*17 + ":" + self.instance["InstanceId"]
+        self.aws.override = lambda op,p: dict(Account=ACCOUNT,Arn=self.aws.principal,UserId=self.principal_id) if op == "get_caller_identity" else None
         self.identity_boot = "12345678-1234-1234-1234-123456789abc"
         self.metadata = SimpleNamespace(instance_id=lambda:self.instance["InstanceId"])
         self.ec2_calls = []
@@ -93,6 +95,12 @@ class WorkerTests(unittest.TestCase):
     def test_imds_instance_and_actual_sts_principal_must_match(self):
         self.aws.principal = self.aws.principal.replace(self.instance["InstanceId"], "i-" + "6"*17)
         with self.assertRaises(WorkerRejected): self.runtime().verify()
+
+    def test_registration_path_uses_actual_instance_sts_user_id(self):
+        runtime = self.runtime(); result = runtime.register(runtime.verify())
+        self.assertTrue(result["registrationReference"]["key"].endswith(f"/registrations/{self.principal_id}.json"))
+        self.principal_id = self.principal_id.replace(self.instance["InstanceId"],"i-"+"6"*17)
+        with self.assertRaises(WorkerRejected): runtime.verify()
 
     def test_manager_credentials_cannot_construct_worker_runtime(self):
         self.aws.store("manager")

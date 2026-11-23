@@ -525,7 +525,7 @@ identity retains its original launch epoch after a cleanup fence/deadline; this
 does not grant a task lease or permit an unbounded replacement.
 
 Registration writes one canonical private object at
-`workers/<sessionId>/registrations/<instanceId>.json` using If-None-Match,
+`workers/<sessionId>/registrations/<stsUserId>.json` using If-None-Match,
 expected bucket owner, KMS, checksum and exact version/tag read-back. It binds
 execution and intent references to the worker identity including boot ID.
 An existing identical registration is reconciled without overwrite; a different
@@ -534,7 +534,10 @@ old registration. Unknown writes remain unknown and are not retried by the SDK.
 This metadata publication is not RunInstances, a registry slot allocation,
 SSM dispatch or a business-success receipt.
 
-R05 must restrict registration writes to that instance's role/session path and
+The STS UserId must be an actual role unique ID plus the IMDS instance session
+suffix. This full value allows R05 to restrict the object ARN with
+`${aws:userid}`; IAM cannot extract just an instance-id substring from that
+variable. R05 must restrict registration writes to that instance's role/session path and
 protect original versions against overwrite/copy/retag/delete. Source checks
 are not proof of deployed IAM. The launcher must still own bounded durable
 registry slots, authorized configuration, admission and launch reconciliation;

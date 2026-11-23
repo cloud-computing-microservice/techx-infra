@@ -113,6 +113,7 @@ class WorkerRuntime:
                 or len(rows[0]["Instances"]) != 1 or rows[0]["Instances"][0].get("InstanceId") != instance_id):
             raise WorkerRejected("EXACT_OWNED_INSTANCE_REQUIRED")
         caller = self._clients["sts"].get_caller_identity(); positive(caller)
+        principal_id = text(caller.get("UserId"), rf"AROA[A-Z0-9]{{17}}:{instance_id}")
         instance = rows[0]["Instances"][0]
         options = instance.get("MetadataOptions", {})
         if options.get("HttpEndpoint") != "enabled" or type(options.get("HttpPutResponseHopLimit")) is not int or options["HttpPutResponseHopLimit"] != 1:
@@ -129,7 +130,7 @@ class WorkerRuntime:
             raise WorkerRejected("WORKER_DEPLOYMENT_FENCED")
         if self._boot() != before_boot or self._metadata.instance_id() != instance_id:
             raise WorkerRejected("WORKER_CHANGED_DURING_VERIFICATION")
-        return dict(identity, bootId=before_boot)
+        return dict(identity, bootId=before_boot, principalId=principal_id)
 
     def verify(self):
         try: return LiveWorker(self, self._identity(), _seal=_SEAL)
@@ -141,7 +142,10 @@ class WorkerRuntime:
             raise WorkerRejected("SAME_RUNTIME_LIVE_WORKER_REQUIRED")
         identity = worker.require_current()
         sid = self._store.execution["sessionId"]
-        key = f"{PREFIX}workers/{sid}/registrations/{identity['instanceId']}.json"
+        # The full STS UserId can be enforced in an IAM resource ARN using
+        # ${aws:userid}; an isolated instance-id substring cannot be extracted
+        # from that policy variable by IAM.
+        key = f"{PREFIX}workers/{sid}/registrations/{identity['principalId']}.json"
         value = dict(schemaVersion=2, executionReference=self._store.execution_reference,
                      intentReference=deepcopy(self._intent_ref), workerIdentity=identity)
         body = encoded(value); digest = hashlib.sha256(body).hexdigest()

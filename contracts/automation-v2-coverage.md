@@ -32,3 +32,14 @@ stored outside the repository; no v1 state or authority was mutated.
 Before R09 source freeze, repeat the **integration** audit against actual v2
 entrypoints, IAM and helper pins. These pure contracts intentionally do not prove
 the complete end-to-end call graph has migrated away from CodeBuild yet.
+
+## Runtime source increments after R01
+
+The table above records the R01 boundary. Subsequent SDK modules add the
+`session_runtime_v2` CAS store, `manager_bridge_v2` owned STS/GitHub verification,
+`manager_handoff_v2` independent server verification and `worker_runtime_v2`
+worker-owned IMDSv2/STS/EC2 boot identity with private create-once registration.
+Their injected SDK tests run in `scripts/verify.ps1`; the main contract documents
+each remaining integration/IAM boundary. These modules do not complete R02/R03,
+grant admission or establish live AWS acceptance. Worker registry/lease/typed
+SSM dispatch, cleanup supervision/finalization and workflow cutover remain open.

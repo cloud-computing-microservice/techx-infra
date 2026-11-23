@@ -506,6 +506,44 @@ not prove persistence, resource creation, completion, reviewed migration or
 cleanup readiness. This source module remains unwired until downstream durable
 admission/lease/worker guards and effective IAM are implemented and verified.
 
+### R03 worker-owned boot identity and private registration
+
+`worker_runtime_v2.WorkerRuntime` owns regional STS/S3/EC2 clients and fixed
+IMDSv2 reads. It loads the exact immutable intent from the purpose/attempt slot
+selected by its actual instance-role principal. It checks singleton account-owned
+DescribeInstances, the instance-specific STS session, pinned AMI/profile/template/
+network/tags/launch token and running state through `worker_identity`. Metadata
+supplies the local InstanceId using a fresh PUT token and authenticated GET;
+there is no IMDSv1 fallback, proxy, redirect or credential-metadata endpoint.
+See [the AWS IMDSv2 protocol](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html).
+
+Linux boot ID is read from `/proc/sys/kernel/random/boot_id` before and after
+service reads; metadata InstanceId is checked again too. `LiveWorker` retains the
+original boot, service LaunchTime and public `/32`. Revalidation rejects a reboot,
+stop/start, IP drift, foreign role or stale deployment epoch. Warm cleanup
+identity retains its original launch epoch after a cleanup fence/deadline; this
+does not grant a task lease or permit an unbounded replacement.
+
+Registration writes one canonical private object at
+`workers/<sessionId>/registrations/<stsUserId>.json` using If-None-Match,
+expected bucket owner, KMS, checksum and exact version/tag read-back. It binds
+execution and intent references to the worker identity including boot ID.
+An existing identical registration is reconciled without overwrite; a different
+boot/intent is consumed and requires cleanup/replanning, never replacing the
+old registration. Unknown writes remain unknown and are not retried by the SDK.
+This metadata publication is not RunInstances, a registry slot allocation,
+SSM dispatch or a business-success receipt.
+
+The STS UserId must be an actual role unique ID plus the IMDS instance session
+suffix. This full value allows R05 to restrict the object ARN with
+`${aws:userid}`; IAM cannot extract just an instance-id substring from that
+variable. R05 must restrict registration writes to that instance's role/session path and
+protect original versions against overwrite/copy/retag/delete. Source checks
+are not proof of deployed IAM. The launcher must still own bounded durable
+registry slots, authorized configuration, admission and launch reconciliation;
+R03 task/lease dispatch and R04 supervision must consume verified registrations.
+The runtime is not wired into an AMI or live workflow by this source change.
+
 ## Verification
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
@@ -538,3 +576,7 @@ transport and actual SDK factories/request shapes. It runs in infrastructure CI.
 independent read-only exchange, purpose/epoch/time/job fencing, dedicated cleanup
 ingress, bounded synchronous SDK transport and uncertain-response handling.
 These tests do not invoke a live Lambda or establish cloud acceptance.
+`python scripts/test-worker-runtime-v2.py` checks worker-owned service reads,
+boot/IP/time/role/epoch drift, create-once registration, lost response handling,
+warm cleanup identity and IMDSv2 protocol failures. Actual SDK models validate
+EC2/S3 request shapes; injected tests do not prove a live worker/AMI/IAM gate.

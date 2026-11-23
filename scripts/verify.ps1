@@ -24,6 +24,8 @@ python (Join-Path $PSScriptRoot 'test-worker-runtime-v2.py')
 if ($LASTEXITCODE -ne 0) { throw 'V2 worker-owned identity and registration verification failed.' }
 python (Join-Path $PSScriptRoot 'test-worker-registry-v2.py')
 if ($LASTEXITCODE -ne 0) { throw 'V2 durable worker registry verification failed.' }
+python (Join-Path $PSScriptRoot 'test-task-dispatch-v2.py')
+if ($LASTEXITCODE -ne 0) { throw 'V2 durable typed task dispatch verification failed.' }
 
 foreach ($path in @(
     '.gitignore', 'LICENSE', 'README.md',

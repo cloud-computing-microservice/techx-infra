@@ -277,10 +277,10 @@ class WorkerRegistry:
             if guard() != epoch: raise ValueError("Cleanup fence advanced during registry write")
         return self._prepare(base,record,fixed_guard)
 
-    def _registered(self,row,registration_ref):
+    def _registered(self,row,registration_ref,*,read_only=False):
         """Own service reads, never an event's EC2/STS response dictionary."""
         self._session._caller()
-        if self._session._role not in {"lifecycle-launcher","cleanup-launcher"} or self._session._role == "lifecycle-launcher" and row["purpose"] == "cleanup":
+        if not read_only and (self._session._role not in {"lifecycle-launcher","cleanup-launcher"} or self._session._role == "lifecycle-launcher" and row["purpose"] == "cleanup"):
             raise ValueError("Actual launcher role cannot register this worker")
         for service,endpoint in (("ec2",f"https://ec2.{REGION}.amazonaws.com"),("iam","https://iam.amazonaws.com")):
             client = self._session.clients[service]
@@ -348,6 +348,22 @@ class WorkerRegistry:
         current = self._session.read().as_dict()
         if current["leaseEpoch"] < row["launchEpoch"]: raise ValueError("Observed launch is ahead of current session fence")
         return identity,sorted(volumes),sorted(interfaces),current["leaseEpoch"]
+
+    def registered_worker(self,purpose,attempt=1):
+        """Owned read-only binding, not a sender-supplied worker identity."""
+        snapshot = self.read()
+        if snapshot._record is None: raise ValueError("No worker roster")
+        rows = [r for r in snapshot.as_dict()["launches"] if (r["purpose"],r["attempt"]) == (purpose,attempt)]
+        if len(rows) != 1 or rows[0]["phase"] != "OBSERVED": raise ValueError("Positive registered worker required")
+        row = rows[0]
+        def guard():
+            self._same_head(snapshot)
+            identity,volumes,interfaces,epoch = self._registered(row,row["registrationReference"],read_only=True)
+            if checksum(identity) != row["checkpoint"]["workerIdentitySha256"] or volumes != row["volumeIds"] or interfaces != row["networkInterfaceIds"]:
+                raise ValueError("Registered worker boot or original assets changed")
+            return dict(workerIdentity=identity,registrationReference=row["registrationReference"],registryReference=snapshot.reference,
+                        configurationReference=identity["configurationReference"],leaseEpoch=epoch)
+        return RegisteredWorker(guard,_seal=_SEAL)
 
     def observe(self,base,purpose,attempt,registration_ref):
         record = self._base(base)
@@ -448,3 +464,15 @@ class WorkerRegistry:
         self._session._tags(ref,registry_tags(record,self._session.execution_reference))
         current = self.read()
         return current if current.reference is not None and current.reference["sha256"] == checksum(record) else None
+
+
+class RegisteredWorker:
+    __slots__ = ("_guard","_value")
+    def __init__(self,guard,*,_seal=None):
+        if _seal is not _SEAL: raise ValueError("Use owned registry reader")
+        self._guard,self._value = guard,deepcopy(guard())
+    def as_dict(self): return deepcopy(self._value)
+    def require_current(self):
+        actual = self._guard()
+        if actual != self._value: raise ValueError("Worker binding changed; reacquire from actual services")
+        return deepcopy(actual)

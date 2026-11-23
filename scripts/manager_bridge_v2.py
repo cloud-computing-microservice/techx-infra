@@ -31,10 +31,12 @@ BINDINGS = {("staging-lifecycle.yml", "start"):"staging-start",
             ("staging-destroy.yml", "cleanup"):"staging-destroy",
             ("staging-plan-review.yml", "preview"):"staging-plan-read",
             ("staging-plan-review.yml", "approve"):"staging-apply"}
-SERVICES = {"s3", "sts", "ssm", "lambda", "ec2"}
+SERVICES = {"s3", "sts", "ssm", "lambda", "ec2", "iam"}
+SERVICE_ENDPOINTS = {s:("https://iam.amazonaws.com" if s == "iam" else f"https://{s}.{REGION}.amazonaws.com") for s in SERVICES}
 S3_READ_ACTIONS = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging", "s3:GetObjectVersionTagging"]
 READ_ACTIONS = ["sts:GetCallerIdentity", *S3_READ_ACTIONS,
-                "ssm:ListCommands", "ssm:ListCommandInvocations", "ssm:GetCommandInvocation", "ssm:DescribeDocument", "ec2:DescribeInstances"]
+                "ssm:ListCommands", "ssm:ListCommandInvocations", "ssm:GetCommandInvocation", "ssm:DescribeDocument",
+                "ssm:DescribeInstanceInformation", "ec2:DescribeInstances", "iam:GetInstanceProfile", "s3:ListBucketVersions"]
 WRITE_ACTIONS = ["s3:PutObject", "s3:PutObjectTagging", "ssm:SendCommand"]
 # Managers invoke authenticated ingress only. Autonomous/internal launchers
 # must not accept unauthenticated manager-shaped JSON on the same IAM route.
@@ -157,7 +159,7 @@ def credential_clients(credentials):
     session = boto3.Session(aws_access_key_id=credentials["AccessKeyId"], aws_secret_access_key=credentials["SecretAccessKey"],
                             aws_session_token=credentials["SessionToken"], region_name=REGION)
     config = Config(retries={"total_max_attempts":1}, connect_timeout=5, read_timeout=20)
-    return {s:session.client(s, region_name=REGION, endpoint_url=f"https://{s}.{REGION}.amazonaws.com", config=config) for s in SERVICES}
+    return {s:session.client(s, region_name=REGION, endpoint_url=SERVICE_ENDPOINTS[s], config=config) for s in SERVICES}
 
 
 def github_context(reader, claims, workflow, job, *, now, expected_job_id=None):
@@ -280,7 +282,7 @@ class ManagerBridge:
             clients = self._factory(credentials)
             for service in SERVICES:
                 client = clients[service]
-                if (client.meta.endpoint_url != f"https://{service}.{REGION}.amazonaws.com" or client.meta.region_name != REGION
+                if (client.meta.endpoint_url != SERVICE_ENDPOINTS[service] or client.meta.region_name != REGION
                         or client.meta.config.retries.get("total_max_attempts") != 1):
                     raise AuthenticationFailed("UNTRUSTED_SCOPED_AWS_CLIENT")
             caller = clients["sts"].get_caller_identity(); positive(caller)

@@ -292,5 +292,12 @@ class DispatchTests(unittest.TestCase):
         self.document_change = dict(PlatformTypes=["MacOS","Linux"])
         self.assertIsInstance(self.prepare(),PreparedDispatch)
 
+    def test_boolean_private_input_attempt_is_not_integer_attempt_one(self):
+        raw = dict(schemaVersion=2,executionReference=self.aws.ref,operation="plan",stage="foundation",attempt=True,parameters={})
+        obj = self.aws.publish(self.input_key,encoded(raw))
+        self.input_ref = dict(bucket=BUCKET,key=self.input_key,versionId=obj["VersionId"],sha256=checksum(raw))
+        with self.assertRaisesRegex(ValueError,"Private typed stage input mismatch"): self.prepare()
+        self.assertEqual(self.send_calls,[])
+
 
 if __name__ == "__main__": unittest.main()

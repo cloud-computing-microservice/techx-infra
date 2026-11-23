@@ -242,7 +242,7 @@ class TaskRuntime:
         raw,_,_ = self._store._object(input_key,expected=input_reference)
         inputs = decode_object(raw,input_reference,key=input_key); fields(inputs,{"schemaVersion","executionReference","operation","stage","attempt","parameters"})
         if (type(inputs["schemaVersion"]) is not int or inputs["schemaVersion"] != 2 or inputs["executionReference"] != self._store.execution_reference
-                or (inputs["operation"],inputs["stage"],inputs["attempt"]) != (operation,stage,attempt) or not isinstance(inputs["parameters"],dict)):
+                or type(inputs["attempt"]) is not int or (inputs["operation"],inputs["stage"],inputs["attempt"]) != (operation,stage,attempt) or not isinstance(inputs["parameters"],dict)):
             raise ValueError("Private typed stage input mismatch")
         now = self._clock(); expires = min(now+timedelta(minutes=45),manager._job_deadline,timestamp(self._store.execution["cleanupStartAt"]))
         if expires-now < timedelta(seconds=60): raise ValueError("Insufficient bounded job/window time for dispatch")
@@ -274,6 +274,78 @@ class TaskRuntime:
             if raw != body or ref["versionId"] != response["VersionId"] or etag != response["ETag"]: raise ValueError("Metadata write superseded")
             self._store._tags(ref,tags); return ref
         except Exception: raise DispatchUnknown(tid) from None
+
+    def _change_existing_lease(self,base,record,guard,tid,*,completion_recovery=False):
+        """Private CAS transport; caller supplies a typed actor/service guard."""
+        if base[0] is None: raise ValueError("An existing task slot is required")
+        if (record["taskReference"] != base[0]["taskReference"] or record["purpose"] != base[0]["purpose"]
+                or record["leaseEpoch"] != base[0]["leaseEpoch"] or record["executionReference"] != base[0]["executionReference"]
+                or record["workerRegistrationReference"] != base[0]["workerRegistrationReference"]
+                or record["workerIdentitySha256"] != base[0]["workerIdentitySha256"]):
+            raise ValueError("Lease generation/task binding is immutable")
+        if (base[0]["phase"],record["phase"]) not in {("DISPATCHING","OWNED"),("OWNED","FINISHED")}:
+            raise ValueError("Lease phase cannot rewind, skip or be reacquired")
+        if record["phase"] == "OWNED": text(record["ownerNonce"],r"[a-f0-9]{32}")
+        elif record["ownerNonce"] != base[0]["ownerNonce"]: raise ValueError("Finishing must retain original owner nonce")
+        if completion_recovery and (self._store._role != "manager" or record["phase"] != "FINISHED"):
+            raise ValueError("Independent manager terminal/result proof is required for completion repair")
+        record = deepcopy(record); record["revision"] = base[0]["revision"]+1
+        kind = "service-finalize" if completion_recovery else "worker-transition"
+        record["mutationId"] = checksum(dict(base=base[1],task=record["taskReference"],phase=record["phase"],result=record["resultReference"],kind=kind))[:32]
+        guard()
+        if self._read_lease(record["purpose"])[1:] != base[1:]: raise CASConflict("Task lease changed before claim")
+        claim = dict(schemaVersion=2,baseLeaseReference=base[1],intendedRecord=record,claimNonce=uuid.uuid4().hex,principalArn=self._store._principal,kind=kind)
+        key = f"{PREFIX}task-mutations/{self._store.execution['sessionId']}/{record['mutationId']}.json"
+        try: self._immutable(key,claim,lease_tags(record),tid)
+        except MutationConsumed:
+            if not completion_recovery: raise
+            # This is not task replay or an ownership grant: independent fresh
+            # terminal+receipt proof permits only the ORIGINAL FINISHED CAS.
+            # Its If-Match old-OWNED ETag can succeed at most once, even if a
+            # prior response/request is delayed. Changed task/epoch/head stops it.
+            raw,ref,_ = self._store._object(key)
+            original = decode_object(raw,ref,key=key)
+            fields(original,{"schemaVersion","baseLeaseReference","intendedRecord","claimNonce","principalArn","kind"})
+            if (type(original["schemaVersion"]) is not int or original["schemaVersion"] != 2 or original["baseLeaseReference"] != base[1]
+                    or original["intendedRecord"] != record or original["kind"] != "service-finalize"):
+                raise ValueError("Original terminal-completion claim mismatch")
+            text(original["claimNonce"],r"[a-f0-9]{32}")
+            text(original["principalArn"],rf"arn:aws:sts::{ACCOUNT}:assumed-role/techx-automation-v2-manager/techx-v2-[1-9][0-9]{{0,19}}-1")
+            self._store._tags(ref,lease_tags(record))
+        guard()
+        if self._read_lease(record["purpose"])[1:] != base[1:]: raise CASConflict("Task lease changed after claim")
+        try:
+            response = self._store._put(self._lease_key(record["purpose"]),encoded(record),lease_tags(record),IfMatch=base[2])
+            self._store._write_response(response,checksum(record)); accepted = self._read_lease(record["purpose"])
+            if accepted[1]["versionId"] != response["VersionId"] or accepted[0] != record or accepted[2] != response["ETag"]:
+                raise ValueError("Lease transition superseded")
+        except Exception: raise DispatchUnknown(tid) from None
+        guard()
+        return accepted
+
+    def reconcile_finished(self,manager,purpose):
+        """Recover a lost worker FINISHED acknowledgement, never run its task."""
+        self._manager(manager)
+        base = self._read_lease(purpose)
+        if base[0] is None: raise ValueError("No original worker lease")
+        if base[0]["phase"] not in {"OWNED","FINISHED"}: raise ValueError("Manager cannot manufacture worker ownership")
+        result = self.successful_result(base[0]["taskReference"])
+        if result is None: return None
+        if base[0]["phase"] == "FINISHED":
+            if base[0]["resultReference"] != result["resultReference"]: raise ValueError("Original result reference mismatch")
+            return dict(leaseReference=base[1],resultReference=result["resultReference"],businessAcceptance="NOT_ESTABLISHED")
+        record = dict(base[0],phase="FINISHED",resultReference=result["resultReference"])
+        envelope = self._read_task(base[0]["taskReference"])
+        def guard():
+            # Repair metadata under a fresh current manager/window, not the
+            # original task's already-consumed dispatch/execution deadline.
+            self._manager(manager)
+            if self._store.read().as_dict()["leaseEpoch"] != envelope["task"]["leaseEpoch"]:
+                raise ValueError("Original completed task was fenced")
+            checked = self.successful_result(base[0]["taskReference"])
+            if checked is None or checked["resultReference"] != result["resultReference"]: raise ValueError("Durable service/result proof changed")
+        accepted = self._change_existing_lease(base,record,guard,envelope["task"]["taskId"],completion_recovery=True)
+        return dict(leaseReference=accepted[1],resultReference=result["resultReference"],businessAcceptance="NOT_ESTABLISHED")
 
     def dispatch(self,prepared):
         if not isinstance(prepared,PreparedDispatch) or prepared._runtime is not self or prepared._used: raise ValueError("Same-runtime fresh prepared task required")

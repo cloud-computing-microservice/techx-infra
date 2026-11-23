@@ -407,7 +407,7 @@ prefixes, and constrain copy/retag/delete/version-mutation routes. S3 tags are
 mutable and are not a signature; existing-object tag conditions cannot prevent
 PutObject overwrites. See [AWS tag policy documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/tagging-and-policies.html)
 and [tagging permissions](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectTagging.html).
-The SDK role check is necessary but does not implement the remaining R03
+The SDK role check is necessary but does not itself implement the R03
 OIDC/STS/GitHub run/job bridge or complete worker identity/launch binding. A CAS
 acknowledgement proves storage state only, never reviewed business acceptance.
 Typed SSM orchestration, lease ownership and R04/R06 readiness/finalization guards
@@ -456,11 +456,55 @@ revoked by a GitHub cancellation. Cleanup must remain independent of GitHub.
 `as_dict()` is diagnostic only, not a signed remote credential. A lifecycle
 launcher **must not authorize from that serialized dictionary**: its receiver
 needs its own trusted service/token/caller verification and live fencing. Worker
-registration, leases, typed SSM dispatch/result handling and the server-side
-handoff are still R03/R04 work; human review, migration and readiness remain R06.
+registration, leases and typed SSM dispatch/result handling are still R03/R04
+work; human review, migration and readiness remain R06.
 Current v1 workflows are not wired to this bridge and no cloud admission is
 enabled by these source changes. The live read-only HTTP probe establishes API
 transport only; synthetic SDK tests do not prove live STS/OIDC or effective IAM.
+
+### R03 authenticated server handoff
+
+`manager_handoff_v2` separates manager-facing ingress from autonomous internal
+launchers. The only manager invocation targets are
+`techx-automation-v2-manager-lifecycle` and
+`techx-automation-v2-manager-cleanup-request`. R05 must provision these fixed
+functions/roles and deny the manager direct invocation of internal launchers.
+An event claiming to come from Scheduler or containing a caller ARN is not
+trusted authentication. The receiver checks its own actual STS execution role
+and Lambda invocation context, then independently verifies the fresh raw JWT
+with `ManagerBridge.verify()` and its own GitHub/S3 readers. This path performs
+one read-only STS exchange and returns `VerifiedManager`, without operational
+client/store methods. Sender diagnostics and request hashes are not credentials.
+
+The SDK invocation is synchronous `RequestResponse`, with `LogType=None`, no
+`ClientContext` and SDK total attempts one. The fresh token is in the bounded
+sensitive Payload only, never in public receipts, error strings, request IDs,
+artifact storage or an async delivery queue. Botocore's Invoke model marks
+Payload sensitive; that metadata is not a universal guarantee against custom
+logging. R05/R06 packaging must disable SDK debug/request-body/event logging and
+tracing middleware that captures the envelope. Do not put the token in
+ClientContext: [AWS documents that field as logged by CloudTrail when data events
+are enabled](https://docs.aws.amazon.com/lambda/latest/api/API_Invoke.html).
+No Function URL or unauthenticated public ingress is introduced by this design.
+
+The receiver checks exact execution/intent references, operation/job/purpose,
+current epoch and live job again at consumption. Launch operations close at the
+mutation deadline; cleanup requests can remain authenticated after it. Historical
+epochs are observation-only. Observation of every worker purpose uses the cleanup/read-only ingress
+so observation credentials retain access after lifecycle mutation closes. A
+launch operation cannot use that route, except the separately scoped cleanup arm.
+An invocation timeout or mismatched response stays
+unknown; the same packet cannot be sent twice in process. Across processes the
+request ID stays stable for the same operation/intent, but **this transport does
+not implement durable consumption**. The R03 registry/lease/launch or task claim
+must reconcile the same durable request before any resource API call. A new JWT
+or Lambda invocation ID never grants permission to replay a resource mutation.
+
+`VerifiedHandoff` is an in-process authenticated identity, not an admission or
+launch permit. Its acknowledgement says only `OBSERVATION_REQUIRED`; it does
+not prove persistence, resource creation, completion, reviewed migration or
+cleanup readiness. This source module remains unwired until downstream durable
+admission/lease/worker guards and effective IAM are implemented and verified.
 
 ## Verification
 
@@ -490,3 +534,7 @@ injected-client tests are not an AWS apply or IAM-policy/live acceptance proof.
 `python scripts/test-manager-bridge-v2.py` checks both exchanges, read-only
 bootstrap, source/run/job identity, time/cancellation guards, secrets, owned HTTP
 transport and actual SDK factories/request shapes. It runs in infrastructure CI.
+`python scripts/test-manager-handoff-v2.py` covers sender/receiver verification,
+independent read-only exchange, purpose/epoch/time/job fencing, dedicated cleanup
+ingress, bounded synchronous SDK transport and uncertain-response handling.
+These tests do not invoke a live Lambda or establish cloud acceptance.

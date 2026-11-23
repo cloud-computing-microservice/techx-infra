@@ -36,8 +36,10 @@ S3_READ_ACTIONS = ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectTagging",
 READ_ACTIONS = ["sts:GetCallerIdentity", *S3_READ_ACTIONS,
                 "ssm:ListCommands", "ssm:ListCommandInvocations", "ssm:GetCommandInvocation", "ssm:DescribeDocument", "ec2:DescribeInstances"]
 WRITE_ACTIONS = ["s3:PutObject", "s3:PutObjectTagging", "ssm:SendCommand"]
-LIFECYCLE = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:techx-automation-v2-lifecycle-launcher"
-CLEANUP = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:techx-automation-v2-cleanup-launcher"
+# Managers invoke authenticated ingress only. Autonomous/internal launchers
+# must not accept unauthenticated manager-shaped JSON on the same IAM route.
+LIFECYCLE = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:techx-automation-v2-manager-lifecycle"
+CLEANUP = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:techx-automation-v2-manager-cleanup-request"
 _SEAL = object()
 
 
@@ -196,7 +198,8 @@ def github_context(reader, claims, workflow, job, *, now, expected_job_id=None):
                 environment=BINDINGS[(workflow, job)], headSha=claims["sha"]), selected["id"], started + timedelta(minutes=45)
 
 
-class AuthenticatedManager:
+class VerifiedManager:
+    """Read-only credential verifier; delegated admission is not an SDK capability."""
     __slots__ = ("_identity", "_store", "_expiry", "_clients", "_reader", "_claims", "_workflow", "_job", "_job_id", "_clock", "_observe_only", "_job_deadline")
 
     def __init__(self, identity, store, expiry, clients, reader, claims, workflow, job, job_id, clock, observe_only, *, job_deadline=None, _seal=None):
@@ -211,12 +214,10 @@ class AuthenticatedManager:
         return dict(identity=deepcopy(self._identity), credentialExpiresAt=wire_time(self._expiry), observeOnly=self._observe_only)
 
     @property
-    def session_store(self): return _ManagerStoreView(self)
+    def execution(self): return self._store.execution
 
-    def client(self, service):
-        if service not in SERVICES: raise AuthenticationFailed("UNSUPPORTED_MANAGER_SERVICE")
-        self.require_current()
-        return self._clients[service]
+    @property
+    def execution_reference(self): return self._store.execution_reference
 
     def require_current(self, *, mutation=False):
         try:
@@ -234,6 +235,18 @@ class AuthenticatedManager:
             return observed
         except AuthenticationFailed: raise
         except Exception: raise AuthenticationFailed("MANAGER_REVALIDATION_FAILED") from None
+
+
+class AuthenticatedManager(VerifiedManager):
+    __slots__ = ()
+
+    @property
+    def session_store(self): return _ManagerStoreView(self)
+
+    def client(self, service):
+        if service not in SERVICES: raise AuthenticationFailed("UNSUPPORTED_MANAGER_SERVICE")
+        self.require_current()
+        return self._clients[service]
 
 
 class ManagerBridge:
@@ -277,13 +290,14 @@ class ManagerBridge:
         except AuthenticationFailed: raise
         except Exception: raise AuthenticationFailed("OIDC_EXCHANGE_FAILED") from None
 
-    def authenticate(self, token, execution_ref, *, workflow, job):
+    def verify(self, token, execution_ref, *, workflow, job):
+        """Receiver path: validate identity using read-only credentials only."""
         try:
             claims = token_claims(token, workflow, job, self._clock())
             sid = execution_ref.get("key", "").removeprefix("automation/v2/staging/executions/").removesuffix(".json")
             execution_reference(execution_ref, sid)
             # Never issue operational credentials from unverified job/source data.
-            bootstrap, _ = self._exchange(token, claims, bootstrap_policy())
+            bootstrap, bootstrap_expiry = self._exchange(token, claims, bootstrap_policy())
             initial = SessionStore(bootstrap, execution_ref, clock=self._clock)
             context, job_id, job_deadline = github_context(self._reader, claims, workflow, job, now=self._clock())
             caller = bootstrap["sts"].get_caller_identity(); positive(caller)
@@ -292,11 +306,24 @@ class ManagerBridge:
             observe_only = (workflow in ("staging-destroy.yml", "staging-orchestrate.yml", "staging-plan-review.yml")
                             or not timestamp(initial.execution["startedAt"]) <= now < timestamp(initial.execution["cleanupStartAt"]))
             token_claims(token, workflow, job, now)  # No stale token reuse after slow context reads.
-            clients, expiry = self._exchange(token, claims, operation_policy(initial.execution, observe_only=observe_only, job_deadline=job_deadline))
+            # This path never issues operational credentials to the receiver.
+            result = VerifiedManager(identity, initial, bootstrap_expiry, bootstrap, self._reader, claims,
+                                     workflow, job, job_id, self._clock, observe_only, job_deadline=job_deadline, _seal=_SEAL)
+            result.require_current()
+            return result
+        except AuthenticationFailed: raise
+        except Exception: raise AuthenticationFailed("MANAGER_AUTHENTICATION_FAILED") from None
+
+    def authenticate(self, token, execution_ref, *, workflow, job):
+        try:
+            verified = self.verify(token, execution_ref, workflow=workflow, job=job)
+            claims = token_claims(token, workflow, job, self._clock())
+            clients, expiry = self._exchange(token, claims, operation_policy(verified.execution, observe_only=verified._observe_only,
+                                                                           job_deadline=verified._job_deadline))
             store = SessionStore(clients, execution_ref, clock=self._clock)
-            if store.execution != initial.execution: raise AuthenticationFailed("EXECUTION_CHANGED_DURING_AUTHENTICATION")
-            result = AuthenticatedManager(identity, store, expiry, clients, self._reader, claims, workflow, job, job_id, self._clock, observe_only,
-                                          job_deadline=job_deadline, _seal=_SEAL)
+            if store.execution != verified.execution: raise AuthenticationFailed("EXECUTION_CHANGED_DURING_AUTHENTICATION")
+            result = AuthenticatedManager(verified._identity, store, expiry, clients, self._reader, claims, workflow, job, verified._job_id,
+                                          self._clock, verified._observe_only, job_deadline=verified._job_deadline, _seal=_SEAL)
             result.require_current()
             return result
         except AuthenticationFailed: raise

@@ -18,6 +18,8 @@ python (Join-Path $PSScriptRoot 'test-session-runtime-v2.py')
 if ($LASTEXITCODE -ne 0) { throw 'V2 authenticated session CAS runtime verification failed.' }
 python (Join-Path $PSScriptRoot 'test-manager-bridge-v2.py')
 if ($LASTEXITCODE -ne 0) { throw 'V2 manager OIDC/STS/GitHub bridge verification failed.' }
+python (Join-Path $PSScriptRoot 'test-manager-handoff-v2.py')
+if ($LASTEXITCODE -ne 0) { throw 'V2 server manager handoff verification failed.' }
 
 foreach ($path in @(
     '.gitignore', 'LICENSE', 'README.md',

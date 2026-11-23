@@ -354,10 +354,13 @@ class WorkerRegistry:
         snapshot = self.read()
         if snapshot._record is None: raise ValueError("No worker roster")
         rows = [r for r in snapshot.as_dict()["launches"] if (r["purpose"],r["attempt"]) == (purpose,attempt)]
-        if len(rows) != 1 or rows[0]["phase"] != "OBSERVED": raise ValueError("Positive registered worker required")
+        if len(rows) != 1 or rows[0]["phase"] != "OBSERVED" or rows[0]["terminalReference"] is not None:
+            raise ValueError("Positive nonterminal registered worker required")
         row = rows[0]
         def guard():
-            self._same_head(snapshot)
+            current = self.read()
+            current_rows = [] if current._record is None else [r for r in current.as_dict()["launches"] if (r["purpose"],r["attempt"]) == (purpose,attempt)]
+            if current_rows != [row]: raise ValueError("Registered worker row changed")
             identity,volumes,interfaces,epoch = self._registered(row,row["registrationReference"],read_only=True)
             if checksum(identity) != row["checkpoint"]["workerIdentitySha256"] or volumes != row["volumeIds"] or interfaces != row["networkInterfaceIds"]:
                 raise ValueError("Registered worker boot or original assets changed")

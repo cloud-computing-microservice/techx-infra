@@ -654,10 +654,62 @@ and enforce actor-specific task/lease/result prefixes, conditional writes,
 writer tags and immutable versions. The SDK registry's registered-worker reader
 is read-only and does not relax launcher mutation roles.
 
-Still open: worker-owned DISPATCHING -> OWNED -> FINISHED lease CAS and actual
+Still open: actual
 task loader/subprocess/receipt integration, current heartbeat/supervision,
 operation approvals, effective IAM and workflow/AMI wiring. This source module
 does not supply these missing components, enable cloud flags or close R03/G1.
+
+### R03 worker task ownership and receipt
+
+`worker_task_v2.WorkerTaskRuntime` consumes only a typed `LiveWorker` obtained by
+worker-owned IMDSv2/STS/EC2/boot verification. It binds the current DISPATCHING
+slot, exact task/registration/boot, live session epoch/window and independently
+observed unique SSM command plus `runTask` invocation InProgress. The runtime's
+own STS role/UserId must match the same actual instance identity; sender JSON
+or a command handle from an event cannot acquire ownership.
+
+Before OWNED, a durable semantic claim is published and one If-Match lease CAS
+must be positively acknowledged/read back. Random process nonce and clock do
+not change the claim ID. `ActiveTaskLease` is created only by that fresh process;
+an unknown/recovered OWNED write never grants another process execution. Expiry,
+restart or job cancellation does not free the slot. Active ownership rechecks
+own boot/role, original row/registration, task deadline, session epoch and exact
+lease head and in-progress invocation. The task expiry bounds worker execution
+as well as dispatch; observation of a consumed task remains valid afterwards.
+R07 must actually supervise/stop the subprocess with these checks and a local
+deadline; R04 independently fences/terminates a failed or unreachable worker.
+
+`input_parameters(active)` reads only the task's original private input version
+and hash, checks the operation/attempt scope and revalidates ownership before
+and after the SDK read. A newer object head cannot replace admitted parameters.
+The loader still must validate the operation-specific parameter schema and
+actual approval; this method returns private data, not a command or stage grant.
+
+Finish loads an exact private task-evidence envelope (schema, execution, TaskId,
+operation/stage/attempt and payload), publishes the R01 receipt with UTC precise
+timestamps and worker-principal/boot tags, then CASes OWNED -> FINISHED retaining
+the original nonce/task/fence. The evidence binding is not its operation-specific
+business validation. The manager still waits for actual terminal SSM Success
+and that exact receipt before another task; FINISHED alone never seals READY.
+The finished/uncertain local context cannot execute or publish another result.
+
+If the worker receipt is durable but FINISHED acknowledgement is lost,
+`TaskRuntime.reconcile_finished` uses a fresh authenticated manager in an open
+session/window, actual terminal service success and original private receipt.
+It cannot manufacture OWNED, cross a newer cleanup epoch or rerun the task.
+Completion metadata has a separate service-finalize claim from the worker's
+transition. After rechecking the independent proof, a lost completion ACK can
+only repeat the **original** FINISHED If-Match CAS against the exact old OWNED
+version/ETag and unchanged target. That CAS can succeed once; a competing write
+or changed task/head/fence stops it. The original claim/body/tags/principal are
+validated before recovery. This exception is for proven terminal metadata only:
+unknown OWNED, RunInstances and SendCommand remain non-replayable. Metadata
+repair may occur after the original task deadline; it grants no fresh execution.
+
+Worker lease, result and evidence writer permissions/tag/conditional-write
+separation remain R05 effective-IAM requirements. These are SDK source modules,
+not a deployed loader/AMI, heartbeat/process monitor, approved operation handler,
+cloud acceptance or closure of R03/R04. No stored data is upgraded by the change.
 
 ## Verification
 
@@ -704,3 +756,8 @@ or replace the R03 typed lease/SSM and R04/R05/R06 integration gates.
 private exact task/worker binding, one occupied slot, unknown SendCommand/handle/
 lease outcomes, cancellation/fencing, no expiry takeover and service-plus-receipt
 sequencing. Injected service data is not live worker ownership or AWS acceptance.
+`python scripts/test-worker-task-v2.py` checks the composed manager -> SSM ->
+actual worker verification -> OWNED -> private receipt -> FINISHED -> service
+validation path with injected SDKs, plus lost CAS/receipt finality, restart,
+expiry, cancellation/fence, wrong actor/boot/evidence, UTC precision and strictly
+bounded terminal metadata repair. It does not run Terraform or prove live IAM.

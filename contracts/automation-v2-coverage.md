@@ -54,3 +54,10 @@ same-command read-only recovery and service/private-result sequencing. Source
 worker lease acquisition/execution/result production and operation-specific
 admission remain separate unfinished integration work; this manager path is not
 an end-to-end deployment, READY acceptance or proof of deployed IAM.
+
+`worker_task_v2` adds owned SDK worker lease acquisition, process-local active
+guards, exact private evidence/receipt publication and FINISHED CAS; the manager
+can repair proven terminal metadata without replaying ownership or commands.
+The composed offline tests exercise both actors, but actual typed loader,
+subprocess/deadline supervision, operation approvals/business validation and
+workflow/AMI/IAM/live gates are still required before calling R03 integrated.

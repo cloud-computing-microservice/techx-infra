@@ -61,3 +61,11 @@ can repair proven terminal metadata without replaying ownership or commands.
 The composed offline tests exercise both actors, but actual typed loader,
 subprocess/deadline supervision, operation approvals/business validation and
 workflow/AMI/IAM/live gates are still required before calling R03 integrated.
+
+`worker_process_v2` supplies a one-shot real POSIX process-group supervisor:
+owned reads before/during/after the child, bounded asynchronous guard reads,
+fixed monotonic task/cleanup deadline, private exclusive logs, and group-wide
+TERM/KILL even when the leader has exited. Real child-process tests use injected
+SDK leases on Ubuntu; this is not an installed loader/AMI or a protected stage
+adapter. Admission, actual Terraform wiring, detached-process/host-loss recovery,
+independent VM termination and effective IAM remain required R03/R04–R08 work.

@@ -7,6 +7,7 @@ with ActiveTaskLease.require_current. R04/R07 integrate that actual process path
 from copy import deepcopy
 from datetime import timezone
 import uuid
+import threading
 
 from execution_v2 import PREFIX, decode_object, fields, reference, text, timestamp
 from recovery_v2 import checksum, service_time
@@ -19,12 +20,14 @@ _SEAL = object()
 
 class ActiveTaskLease:
     """Only a fresh positive worker CAS can construct this process-local owner."""
-    __slots__ = ("_runtime","_worker","_binding","_observed","_lease","_started_at","_finishing","_done")
+    __slots__ = ("_runtime","_worker","_binding","_observed","_lease","_started_at","_finishing","_done","_process_consumed","_process_lock")
     def __init__(self,runtime,worker,binding,observed,lease,*,_seal=None):
         if _seal is not _SEAL: raise ValueError("Fresh same-process worker lease acknowledgement required")
         self._runtime,self._worker,self._binding,self._observed,self._lease = runtime,worker,binding,observed,lease
         self._started_at = runtime._tasks._clock().astimezone(timezone.utc).isoformat().replace("+00:00","Z")
         self._finishing,self._done = False,False
+        self._process_consumed = False
+        self._process_lock = threading.Lock()
     def as_dict(self):
         return dict(leaseReference=deepcopy(self._lease[1]),taskReference=deepcopy(self._observed._task_ref),
                     handle=deepcopy(self._observed._handle),workerIdentitySha256=checksum(self._worker.as_dict()),businessAcceptance="NOT_ESTABLISHED")

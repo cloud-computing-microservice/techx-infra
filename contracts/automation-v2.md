@@ -711,6 +711,33 @@ separation remain R05 effective-IAM requirements. These are SDK source modules,
 not a deployed loader/AMI, heartbeat/process monitor, approved operation handler,
 cloud acceptance or closure of R03/R04. No stored data is upgraded by the change.
 
+## Bounded worker subprocess supervision (source increment)
+
+`scripts/worker_process_v2.py` accepts only a same-process `ActiveTaskLease` and
+one trusted adapter-supplied absolute argv/cwd with explicit environment; it has
+no CLI, task-payload command mapping, shell or retry. All wrappers sharing the
+lease consume one process attempt under the same lock. A daemon reader checks
+actual lease/identity/SSM ownership before launch, periodically during execution
+and again after process exit. SDK read failure/timeout rejects success. The
+supervisor's monotonic deadline is fixed before the first network check and
+bounded by the task expiry and cleanup start, so a blocked SDK or frozen/backward
+wall clock cannot extend it. An original slow check cannot revive an expired
+observation. No unbounded thread join blocks process termination.
+
+The child has a new POSIX process group, closed inherited FDs, no stdin and an
+exclusive mode-0600 private log. Rejection TERM/KILLs the original entire group,
+including descendants that ignore TERM after the leader exits; grace ends no
+later than the local deadline. Nonzero exit or descendants remaining after zero
+leader exit rejects success. An OS-level kill/wait cannot prove EC2 termination;
+R04 must still fence and terminate the original VM before replacement. Deliberate
+daemon/session escape or a killed supervisor/host needs that independent path.
+
+The helper returns physical process status only, never a receipt or READY. It is
+not yet wired to a fixed loader/AMI, operation approval, Terraform adapters or
+workflow; those integrations and independent cleanup remain open. The POSIX tests
+run real local child processes with composed injected-SDK lease checks, not live
+AWS credentials or workload execution.
+
 ## Verification
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
@@ -761,3 +788,8 @@ actual worker verification -> OWNED -> private receipt -> FINISHED -> service
 validation path with injected SDKs, plus lost CAS/receipt finality, restart,
 expiry, cancellation/fence, wrong actor/boot/evidence, UTC precision and strictly
 bounded terminal metadata repair. It does not run Terraform or prove live IAM.
+`python scripts/test-worker-process-v2.py` checks real POSIX child termination,
+TERM-ignoring descendants, initial/mid-run SDK hangs, boot loss, deadline despite
+frozen wall time, post-exit ownership, private logs and shared one-shot attempts.
+POSIX tests are skipped on Windows and run on Ubuntu CI; sender/interval tests
+run on both platforms. This is not loader/AMI/business-stage acceptance.

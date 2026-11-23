@@ -355,5 +355,24 @@ class RegistryTests(unittest.TestCase):
             with self.assertRaises(ValueError): self.registry.read()
         self.assertEqual(self.puts(),[])
 
+    def test_read_binding_keeps_original_row_provenance_across_unrelated_revision(self):
+        self.calling(); ref = self.registration()
+        observed = self.registry.commit(self.registry.observe(self.registry.read(),"deployment",1,ref))
+        reader = self.registry.registered_worker("deployment"); original = reader.as_dict()
+        value = observed.as_dict(); value.update(runtimeRevision=value["runtimeRevision"]+1,lastMutationId="f"*32)
+        self.aws.publish(self.key,encoded(value),registry_tags(value,self.aws.ref))
+        self.assertEqual(reader.require_current(),original)
+
+    def test_terminal_proof_overrides_stale_running_service_observation(self):
+        self.calling(); ref = self.registration()
+        observed = self.registry.commit(self.registry.observe(self.registry.read(),"deployment",1,ref))
+        reader = self.registry.registered_worker("deployment")
+        value = observed.as_dict(); value["launches"][0]["terminalReference"] = dict(bucket=BUCKET,
+            key=f"{PREFIX}cleanup/{self.aws.execution['sessionId']}/terminals/{self.instance['InstanceId']}.json",versionId="terminal-version",sha256="e"*64)
+        value.update(runtimeRevision=value["runtimeRevision"]+1,lastMutationId="f"*32)
+        self.aws.publish(self.key,encoded(value),registry_tags(value,self.aws.ref))
+        with self.assertRaises(ValueError): reader.require_current()
+        with self.assertRaises(ValueError): self.registry.registered_worker("deployment")
+
 
 if __name__ == "__main__": unittest.main()

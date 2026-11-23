@@ -599,6 +599,66 @@ grants a new deployment call or transfers an expired worker lease. Unresolved
 CALLING entries keep completion closed. R04 still owns supervision, terminal
 proof attachment, bounded replacement and finalizer-only completion writes.
 
+### R03 manager typed task dispatch
+
+`task_dispatch_v2.TaskRuntime` implements manager-side physical task serialization
+and the actual fixed SSM SendCommand/observation call chain. Preparation accepts
+only `AuthenticatedManager`, reads a registered worker through the owned SDK
+registry, and checks immutable private input/configuration versions. The input
+envelope is schema/execution/operation/stage/attempt/parameters; operation-specific
+parameter validation and approval remain R06/R07 duties. The configuration
+consumer requires a `document` object with exact name/numeric version/SHA256;
+R05 must publish/review the full configuration, AMI and Linux loader document.
+
+Only deployment/probe tasks are dispatched here. Initial foundation-plan jobs
+can prepare/plan foundation; continuation jobs handle later deployment stages,
+and the public acceptance job handles the probe. Cleanup remains autonomous.
+The task ID binds execution/epoch, operation/attempt, exact input/configuration/
+registration versions and boot identity, excluding transient job IDs/clocks.
+Task contents include the actual manager principal ID for protected writer tags;
+serialized identity alone is never accepted as authentication.
+
+Before one SendCommand, the manager publishes a create-once task, a durable
+semantic lease mutation claim and one conditional per-purpose DISPATCHING slot
+at `leases/<sessionId>/<purpose>.json`. Version/tag/body metadata and live job,
+worker, current epoch and slot head are rechecked. Lost writes consume the
+prepared request; recreated processes observe rather than resend. A lost lease
+head with version/delete-marker history cannot become an idle worker. A slot
+in DISPATCHING/OWNED stays occupied after deadline expiry. A later task requires
+FINISHED **and** independently observed terminal SSM success plus the exact
+private worker result. Manager code never invents worker ownership/completion.
+
+SSM dispatch targets one instance and the configured document version/hash,
+passing only TaskId; SDK retries and CloudWatch output are disabled. Owned reads
+check the current SSM agent and actual account-owned Command document with only
+the TaskId parameter. Its supported platforms must include Linux; platform
+metadata is a compatibility list, not an ordered single-value identity (see
+[AWS DocumentDescription](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DocumentDescription.html)).
+No arbitrary shell, instance, output destination, default document version or
+event-supplied service result enters SendCommand.
+
+The exact command handle is published privately. Timeout, malformed response
+or lost handle publication stays uncertain; observation paginates owned SSM
+ListCommands and matches the same TaskId, comment, instance, document/version
+and dispatch interval. Zero matches is unknown, multiple matches is an error,
+and neither grants resend. Observation is read-only after job cancellation.
+`successful_result` independently reads service invocation and private tagged
+receipt, validates the R01 handle/boot/timestamp/result contract and explicitly
+returns businessAcceptance NOT_ESTABLISHED. Operation-specific evidence must
+still be verified before state advancement or READY.
+
+Manager operational sessions add only read permissions for instance-profile,
+SSM-agent and object-version-history checks, with a fixed global IAM endpoint;
+bootstrap stays read-only S3/STS. R05 must constrain these permissions/resources
+and enforce actor-specific task/lease/result prefixes, conditional writes,
+writer tags and immutable versions. The SDK registry's registered-worker reader
+is read-only and does not relax launcher mutation roles.
+
+Still open: worker-owned DISPATCHING -> OWNED -> FINISHED lease CAS and actual
+task loader/subprocess/receipt integration, current heartbeat/supervision,
+operation approvals, effective IAM and workflow/AMI wiring. This source module
+does not supply these missing components, enable cloud flags or close R03/G1.
+
 ## Verification
 
 Run `python scripts/test-execution-v2.py` from the infra repository. The same
@@ -640,3 +700,7 @@ reads, cross-process single consumption, lost responses, cancellation/fencing,
 no source JSON authority, profile/boot/asset observation and rich-roster recovery.
 It runs in infrastructure CI. These tests do not establish live launch/admission
 or replace the R03 typed lease/SSM and R04/R05/R06 integration gates.
+`python scripts/test-task-dispatch-v2.py` checks fixed SDK request shapes,
+private exact task/worker binding, one occupied slot, unknown SendCommand/handle/
+lease outcomes, cancellation/fencing, no expiry takeover and service-plus-receipt
+sequencing. Injected service data is not live worker ownership or AWS acceptance.

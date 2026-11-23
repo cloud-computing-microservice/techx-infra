@@ -48,3 +48,9 @@ each remaining integration/IAM boundary. These modules do not complete R02/R03,
 grant admission or establish live AWS acceptance. Actual admitted resource launch,
 worker lease/typed SSM dispatch, cleanup supervision/finalization and workflow
 cutover remain open; source roster code is not the whole R03/R04 milestone.
+
+`task_dispatch_v2` adds manager-side SDK task/slot publication, fixed SendCommand,
+same-command read-only recovery and service/private-result sequencing. Source
+worker lease acquisition/execution/result production and operation-specific
+admission remain separate unfinished integration work; this manager path is not
+an end-to-end deployment, READY acceptance or proof of deployed IAM.

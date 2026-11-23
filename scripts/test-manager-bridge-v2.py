@@ -12,7 +12,7 @@ from unittest.mock import patch
 from botocore import UNSIGNED
 from manager_bridge_v2 import (AUDIENCE, ISSUER, REPO, ROLE, SERVICES, AuthenticatedManager, AuthenticationFailed,
                               GitHubRunReader, ManagerBridge, bootstrap_policy, operation_policy)
-from manager_bridge_v2 import credential_clients, unsigned_sts
+from manager_bridge_v2 import SERVICE_ENDPOINTS, credential_clients, unsigned_sts
 from session_runtime_v2 import ENDPOINTS, encoded
 from recovery_v2 import wire_time
 
@@ -82,7 +82,7 @@ class BridgeTests(unittest.TestCase):
         self.factories.append(deepcopy(credentials))
         clients = dict(self.aws.clients)
         for service in SERVICES - set(clients):
-            clients[service] = SimpleNamespace(meta=SimpleNamespace(endpoint_url=f"https://{service}.us-east-1.amazonaws.com", region_name="us-east-1",
+            clients[service] = SimpleNamespace(meta=SimpleNamespace(endpoint_url=SERVICE_ENDPOINTS[service], region_name="us-east-1",
                                                                    config=SimpleNamespace(retries={"total_max_attempts":1})))
         if self.factory_change: self.factory_change(clients)
         return clients
@@ -282,7 +282,7 @@ class BridgeTests(unittest.TestCase):
             frozen = client._request_signer._credentials.get_frozen_credentials()
             self.assertEqual(frozen.access_key, credentials["AccessKeyId"])
             self.assertEqual(frozen.token, credentials["SessionToken"])
-            self.assertEqual(client.meta.endpoint_url, f"https://{service}.us-east-1.amazonaws.com")
+            self.assertEqual(client.meta.endpoint_url, SERVICE_ENDPOINTS[service])
             self.assertEqual(client.meta.config.retries["total_max_attempts"], 1)
 
     def test_token_expires_during_context_reads_before_operational_exchange(self):

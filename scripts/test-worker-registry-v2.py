@@ -27,7 +27,7 @@ class RegistryTests(unittest.TestCase):
         self.h = HandoffHelpers["HandoffTests"](); self.h.setUp()
         self.aws = self.h.f.aws
         self.key = f"{PREFIX}workers/{self.aws.execution['sessionId']}/registry.json"
-        self.mode = "success"; self.after_claim = None; self.read_failure = None
+        self.mode = "success"; self.after_claim = None; self.read_failure = None; self.history_override = None
         self.launcher_role = "lifecycle-launcher"
         self.principal_id = "AROA"+"A"*17
         f = ContractHelpers["V2Contracts"](); f.setUp()
@@ -62,6 +62,7 @@ class RegistryTests(unittest.TestCase):
             def get_object_tagging(inner,**params): return original.get_object_tagging(**params)
             def list_object_versions(inner,**params):
                 outer.aws.calls.append(("s3","list_object_versions",params))
+                if outer.history_override is not None: return deepcopy(outer.history_override)
                 return dict(IsTruncated=False,Versions=[dict(Key=outer.key,VersionId=obj["VersionId"]) for obj in outer.aws.objects.get(outer.key,[])],
                             ResponseMetadata=dict(HTTPStatusCode=200,RequestId="registry-history"))
             def put_object(inner,**params):
@@ -346,6 +347,13 @@ class RegistryTests(unittest.TestCase):
         ack = self.registry.fresh_calling(self.registry.begin(self.registry.read(),"cleanup",self.handoff))
         self.assertEqual(ack.take()["purpose"],"cleanup")
         self.assertEqual(self.registry.read().as_dict()["launches"][0]["phase"],"CALLING")
+
+    def test_partial_or_malformed_history_is_not_bootstrap_permission(self):
+        positive = dict(IsTruncated=False,ResponseMetadata=dict(HTTPStatusCode=200,RequestId="history-request"))
+        for changed in (dict(IsTruncated=True),dict(NextKeyMarker="more"),dict(Versions=None),dict(ResponseMetadata={})):
+            self.history_override = dict(positive,**changed)
+            with self.assertRaises(ValueError): self.registry.read()
+        self.assertEqual(self.puts(),[])
 
 
 if __name__ == "__main__": unittest.main()

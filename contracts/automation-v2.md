@@ -220,7 +220,8 @@ must be verified by the migration reader before calling it.
 
 `automation_session.validate` rejects v2 schema/backend values before any v1
 lease or transition logic. Historical v1 workflows continue unchanged. The
-separate v2 mutation store and protected cutover are not implemented here.
+legacy readers do not implement v2 mutation or protected cutover; the separate
+runtime stores are documented below and cutover integration remains open.
 
 ## Control-only migration and cutover
 
@@ -456,7 +457,7 @@ revoked by a GitHub cancellation. Cleanup must remain independent of GitHub.
 `as_dict()` is diagnostic only, not a signed remote credential. A lifecycle
 launcher **must not authorize from that serialized dictionary**: its receiver
 needs its own trusted service/token/caller verification and live fencing. Worker
-registration, leases and typed SSM dispatch/result handling are still R03/R04
+registry/lease orchestration and typed SSM dispatch/result handling are still R03/R04
 work; human review, migration and readiness remain R06.
 Current v1 workflows are not wired to this bridge and no cloud admission is
 enabled by these source changes. The live read-only HTTP probe establishes API
@@ -539,7 +540,7 @@ suffix. This full value allows R05 to restrict the object ARN with
 `${aws:userid}`; IAM cannot extract just an instance-id substring from that
 variable. R05 must restrict registration writes to that instance's role/session path and
 protect original versions against overwrite/copy/retag/delete. Source checks
-are not proof of deployed IAM. The launcher must still own bounded durable
+are not proof of deployed IAM. Launcher integration must consume bounded durable
 registry slots, authorized configuration, admission and launch reconciliation;
 R03 task/lease dispatch and R04 supervision must consume verified registrations.
 The runtime is not wired into an AMI or live workflow by this source change.

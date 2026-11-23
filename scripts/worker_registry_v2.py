@@ -148,7 +148,9 @@ class WorkerRegistry:
                 history = self._session.clients["s3"].list_object_versions(Bucket=self._session.execution_reference["bucket"],
                     Prefix=self.key,MaxKeys=100,ExpectedBucketOwner=ACCOUNT)
                 positive(history)
-                if (history.get("IsTruncated") is not False or history.get("Versions",[]) or history.get("DeleteMarkers",[])):
+                if (history.get("IsTruncated") is not False or history.get("NextKeyMarker") or history.get("NextVersionIdMarker")
+                        or not isinstance(history.get("Versions",[]),list) or not isinstance(history.get("DeleteMarkers",[]),list)
+                        or history.get("Versions",[]) or history.get("DeleteMarkers",[])):
                     raise ValueError("Absent registry has history or incomplete listing; never recreate a lost roster")
                 return RegistryObservation(self._token,None,None,None,_seal=_SEAL)
             raise

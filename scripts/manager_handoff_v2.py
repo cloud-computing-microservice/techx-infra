@@ -16,7 +16,7 @@ from session_runtime_v2 import encoded, positive
 REQUEST_FIELDS = {"requestId", "executionReference", "leaseEpoch", "operation", "intentReference", "workflow", "job"}
 MUTATIONS = {"launch-deployment", "launch-probe", "arm-cleanup"}
 OPERATIONS = MUTATIONS | {"request-cleanup", "observe"}
-LIFECYCLE_OPS = {"launch-deployment", "launch-probe", "observe"}
+LIFECYCLE_OPS = {"launch-deployment", "launch-probe"}
 CLEANUP_OPS = {"arm-cleanup", "request-cleanup", "observe"}
 SOURCES = {"launch-deployment":{("staging-lifecycle.yml", "foundation-plan"), ("staging-continue.yml", "continue")},
            "launch-probe":{("staging-acceptance.yml", "public"), ("staging-continue.yml", "continue")},
@@ -147,9 +147,6 @@ class ServerManagerHandoff:
             request = validate_request(event["request"])
             if request["operation"] not in (LIFECYCLE_OPS if self._arn == LIFECYCLE else CLEANUP_OPS):
                 raise HandoffRejected("WRONG_HANDOFF_RECEIVER")
-            if request["operation"] == "observe" and request["intentReference"] is not None:
-                cleanup_intent = "/cleanup/" in request["intentReference"]["key"]
-                if cleanup_intent != (self._arn == CLEANUP): raise HandoffRejected("WRONG_OBSERVATION_RECEIVER")
             verified = self._bridge.verify(event["oidcToken"], request["executionReference"], workflow=request["workflow"], job=request["job"])
             result = VerifiedHandoff(verified, request, self._guard, context.aws_request_id, _seal=_SEAL)
             result.require_current()
@@ -174,7 +171,9 @@ def invoke_handoff(manager, packet):
     # A fresh token must remain valid after slow caller checks too.
     envelope = strict_json(packet._payload)
     token_claims(envelope["oidcToken"], request["workflow"], request["job"], manager._clock())
-    target = CLEANUP if request["operation"] in {"arm-cleanup", "request-cleanup"} or request["operation"] == "observe" and request["intentReference"] and "/cleanup/" in request["intentReference"]["key"] else LIFECYCLE
+    # Observation always uses the cleanup/read-only ingress, which remains
+    # permitted after the lifecycle mutation window closes.
+    target = CLEANUP if request["operation"] in {"arm-cleanup", "request-cleanup", "observe"} else LIFECYCLE
     client = manager.client("lambda")
     if (client.meta.endpoint_url != f"https://lambda.{REGION}.amazonaws.com" or client.meta.region_name != REGION
             or client.meta.config.retries.get("total_max_attempts") != 1): raise HandoffRejected("FIXED_NO_RETRY_LAMBDA_CLIENT_REQUIRED")

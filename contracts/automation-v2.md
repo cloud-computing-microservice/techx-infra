@@ -490,7 +490,10 @@ No Function URL or unauthenticated public ingress is introduced by this design.
 The receiver checks exact execution/intent references, operation/job/purpose,
 current epoch and live job again at consumption. Launch operations close at the
 mutation deadline; cleanup requests can remain authenticated after it. Historical
-epochs are observation-only. An invocation timeout or mismatched response stays
+epochs are observation-only. Observation of every worker purpose uses the cleanup/read-only ingress
+so observation credentials retain access after lifecycle mutation closes. A
+launch operation cannot use that route, except the separately scoped cleanup arm.
+An invocation timeout or mismatched response stays
 unknown; the same packet cannot be sent twice in process. Across processes the
 request ID stays stable for the same operation/intent, but **this transport does
 not implement durable consumption**. The R03 registry/lease/launch or task claim

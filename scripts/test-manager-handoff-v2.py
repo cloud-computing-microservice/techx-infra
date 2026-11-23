@@ -101,7 +101,8 @@ class HandoffTests(unittest.TestCase):
     def test_observation_can_keep_original_epoch_after_fencing(self):
         self.f.aws.publish_session(dict(self.f.aws.record, status="DESTROYING", leaseEpoch=2, runtimeRevision=2, lastMutationId="f"*32))
         packet = build_handoff(self.manager, self.f.token, operation="observe", intent_reference=self.intent, observe_epoch=1)
-        result = self.receiver.verify(self.event(packet), self.context)
+        receiver = ServerManagerHandoff(self.f.bridge, ReceiverSTS(CLEANUP), function_arn=CLEANUP)
+        result = receiver.verify(self.event(packet), SimpleNamespace(invoked_function_arn=CLEANUP, aws_request_id="observation-invocation"))
         self.assertEqual(result.require_current().as_dict()["leaseEpoch"], 2)
         self.assertEqual(result.as_dict()["request"]["leaseEpoch"], 1)
 
@@ -167,6 +168,16 @@ class HandoffTests(unittest.TestCase):
         receiver = ServerManagerHandoff(self.f.bridge, ReceiverSTS(CLEANUP), function_arn=CLEANUP)
         result = receiver.verify(self.event(packet), SimpleNamespace(invoked_function_arn=CLEANUP, aws_request_id="cleanup-invocation"))
         self.assertEqual(result.as_dict()["request"]["operation"], "request-cleanup")
+
+    def test_read_only_observer_uses_cleanup_ingress_for_deployment_intent(self):
+        self.switch_job("staging-orchestrate.yml", "observe")
+        self.assertTrue(self.manager.as_dict()["observeOnly"])
+        self.receiver = ServerManagerHandoff(self.f.bridge, ReceiverSTS(CLEANUP), function_arn=CLEANUP)
+        self.context = SimpleNamespace(invoked_function_arn=CLEANUP, aws_request_id="observation-invocation")
+        calls = self.transport()
+        packet = build_handoff(self.manager, self.f.token, operation="observe", intent_reference=self.intent)
+        self.assertEqual(invoke_handoff(self.manager, packet)["status"], "OBSERVATION_REQUIRED")
+        self.assertEqual(calls[0]["FunctionName"], CLEANUP)
 
     def test_expired_handoff_token_is_rejected_before_remote_exchange(self):
         event = self.event(); before = len(self.f.exchanges)
